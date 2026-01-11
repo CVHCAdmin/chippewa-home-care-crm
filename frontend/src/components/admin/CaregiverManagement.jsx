@@ -1,10 +1,12 @@
 // src/components/admin/CaregiverManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { getCaregivers, convertToAdmin } from '../../config';
+import AddCaregiverModal from './AddCaregiverModal';
 
 const CaregiverManagement = ({ token }) => {
   const [caregivers, setCaregivers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
     loadCaregivers();
@@ -35,15 +37,21 @@ const CaregiverManagement = ({ token }) => {
 
   return (
     <div>
-      <h2 style={{ fontSize: '1.8rem', fontFamily: 'var(--font-display)', marginBottom: '2rem' }}>
-        👔 Caregiver Management
-      </h2>
+      <div className="page-header">
+        <h2>👔 Caregiver Management</h2>
+        <button 
+          className="btn btn-primary"
+          onClick={() => setShowModal(true)}
+        >
+          ➕ Add Caregiver
+        </button>
+      </div>
 
       {loading ? (
         <div className="loading"><div className="spinner"></div></div>
       ) : caregivers.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center' }}>
-          <p style={{ color: 'var(--color-text-light)' }}>No caregivers yet.</p>
+        <div className="card card-centered">
+          <p>No caregivers yet.</p>
         </div>
       ) : (
         <table className="table">
@@ -84,8 +92,13 @@ const CaregiverManagement = ({ token }) => {
           </tbody>
         </table>
       )}
+      <AddCaregiverModal 
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        onSuccess={loadCaregivers}
+        token={token}
+      />
     </div>
   );
 };
-
 export default CaregiverManagement;

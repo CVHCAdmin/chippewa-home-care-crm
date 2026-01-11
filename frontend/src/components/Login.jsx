@@ -71,7 +71,7 @@ const Login = ({ onLogin }) => {
           </button>
         </form>
 
-        <p style={{ marginTop: '2rem', fontSize: '0.85rem', color: 'var(--color-text-light)', textAlign: 'center' }}>
+        <p className="login-footer">
           HIPAA-compliant system. Authorized personnel only.
         </p>
       </div>

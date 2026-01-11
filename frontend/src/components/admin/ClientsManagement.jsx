@@ -59,8 +59,8 @@ const ClientsManagement = ({ token }) => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h2 style={{ fontSize: '1.8rem', fontFamily: 'var(--font-display)' }}>👥 Clients</h2>
+      <div className="page-header">
+        <h2>👥 Clients</h2>
         <button 
           className="btn btn-primary"
           onClick={() => setShowForm(!showForm)}
@@ -70,10 +70,10 @@ const ClientsManagement = ({ token }) => {
       </div>
 
       {showForm && (
-        <div className="card" style={{ marginBottom: '2rem', background: 'var(--color-teal-light)' }}>
-          <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>New Client Onboarding</h3>
+        <div className="card card-form">
+          <h3>New Client Onboarding</h3>
           <form onSubmit={handleSubmit}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
+            <div className="form-grid">
               <div className="form-group">
                 <label>First Name *</label>
                 <input
@@ -144,7 +144,7 @@ const ClientsManagement = ({ token }) => {
               </div>
             </div>
 
-            <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem' }}>
+            <div className="form-actions">
               <button type="submit" className="btn btn-primary">Add Client</button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
             </div>
@@ -155,8 +155,8 @@ const ClientsManagement = ({ token }) => {
       {loading ? (
         <div className="loading"><div className="spinner"></div></div>
       ) : clients.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center' }}>
-          <p style={{ color: 'var(--color-text-light)' }}>No clients yet. Create one to get started.</p>
+        <div className="card card-centered">
+          <p>No clients yet. Create one to get started.</p>
         </div>
       ) : (
         <table className="table">

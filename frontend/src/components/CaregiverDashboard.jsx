@@ -107,16 +107,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const renderHomePage = () => (
     <>
       {/* Current Location Status */}
-      <div className="card" style={{ marginBottom: '2rem', background: 'var(--color-teal-light)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h3 style={{ color: 'var(--color-teal-dark)' }}>📍 Location Status</h3>
-          <div style={{ 
-            width: '12px', 
-            height: '12px', 
-            borderRadius: '50%', 
-            background: location ? '#28a745' : '#dc3545',
-            display: 'inline-block'
-          }}></div>
+      <div className="card card-info">
+        <div className="card-header-status">
+          <h3>📍 Location Status</h3>
+          <div className={`status-indicator ${location ? 'active' : 'inactive'}`}></div>
         </div>
         {location ? (
           <p>
@@ -126,21 +120,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             Accuracy: ±{location.accuracy.toFixed(0)}m
           </p>
         ) : (
-          <p style={{ color: '#dc3545' }}>🔴 GPS Location not available. Enable location services.</p>
+          <p className="text-error">🔴 GPS Location not available. Enable location services.</p>
         )}
       </div>
 
       {/* Time Tracking Section */}
       {!activeSession ? (
-        <div className="card" style={{ marginBottom: '2rem' }}>
-          <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>⏱️ Clock In</h3>
+        <div className="card card-action">
+          <h3>⏱️ Clock In</h3>
           
           <div className="form-group">
             <label>Select Client *</label>
             <select
               value={selectedClient}
               onChange={(e) => setSelectedClient(e.target.value)}
-              style={{ fontSize: '1.1rem' }}
             >
               <option value="">Choose a client...</option>
               <option value="client-1">John Doe</option>
@@ -150,24 +143,22 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           </div>
 
           <button 
-            className="btn btn-primary btn-block"
+            className="btn btn-primary btn-block btn-large"
             onClick={handleClockIn}
-            style={{ padding: '1rem', fontSize: '1.1rem', marginTop: '1rem' }}
           >
             🟢 CLOCK IN
           </button>
         </div>
       ) : (
-        <div className="card" style={{ marginBottom: '2rem', background: '#fff3cd' }}>
-          <h3 style={{ marginBottom: '1rem', color: '#856404' }}>⏰ Currently Clocked In</h3>
-          <p style={{ marginBottom: '1rem' }}>
+        <div className="card card-warning">
+          <h3>⏰ Currently Clocked In</h3>
+          <p>
             <strong>Started at:</strong> {new Date(activeSession.start_time).toLocaleTimeString()}<br/>
             <strong>Client ID:</strong> {activeSession.client_id}
           </p>
           <button 
-            className="btn btn-danger btn-block"
+            className="btn btn-danger btn-block btn-large"
             onClick={handleClockOut}
-            style={{ padding: '1rem', fontSize: '1.1rem' }}
           >
             🔴 CLOCK OUT
           </button>
@@ -176,9 +167,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
       {/* Today's Schedule */}
       <div className="card">
-        <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>📅 Today's Schedule</h3>
+        <h3>📅 Today's Schedule</h3>
         {schedules.length === 0 ? (
-          <p style={{ color: 'var(--color-text-light)' }}>No scheduled shifts for today.</p>
+          <p>No scheduled shifts for today.</p>
         ) : (
           <table className="table">
             <thead>
@@ -205,31 +196,31 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const renderSettingsPage = () => (
     <div className="card">
-      <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>⚙️ Notification Settings</h3>
+      <h3>⚙️ Notification Settings</h3>
       
-      <form style={{ maxWidth: '600px' }}>
+      <form className="settings-form">
         <div className="form-group">
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <input type="checkbox" defaultChecked style={{ width: '20px', height: '20px', cursor: 'pointer' }} />
+          <label className="checkbox-label">
+            <input type="checkbox" defaultChecked className="form-checkbox" />
             <span>Email Notifications</span>
           </label>
         </div>
 
         <div className="form-group">
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <input type="checkbox" defaultChecked style={{ width: '20px', height: '20px', cursor: 'pointer' }} />
+          <label className="checkbox-label">
+            <input type="checkbox" defaultChecked className="form-checkbox" />
             <span>Push Notifications</span>
           </label>
         </div>
 
         <div className="form-group">
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <input type="checkbox" defaultChecked style={{ width: '20px', height: '20px', cursor: 'pointer' }} />
+          <label className="checkbox-label">
+            <input type="checkbox" defaultChecked className="form-checkbox" />
             <span>Schedule Alerts</span>
           </label>
         </div>
 
-        <button className="btn btn-primary" style={{ marginTop: '2rem' }}>
+        <button className="btn btn-primary btn-top-margin">
           Save Settings
         </button>
       </form>

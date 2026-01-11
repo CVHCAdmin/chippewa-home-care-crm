@@ -40,16 +40,16 @@ const DashboardOverview = ({ summary, token }) => {
         </div>
         <div className="stat-card">
           <h3>Pending Invoices</h3>
-          <div className="value" style={{ color: '#dc3545' }}>
+          <div className="value value-danger">
             ${summary?.pendingInvoices?.amount?.toFixed(2) || '0.00'}
           </div>
-          <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
+          <p className="stat-subtext">
             {summary?.pendingInvoices?.count || 0} invoices
           </p>
         </div>
         <div className="stat-card">
           <h3>This Month Revenue</h3>
-          <div className="value" style={{ color: '#28a745' }}>
+          <div className="value value-success">
             ${summary?.thisMonthRevenue?.toFixed(2) || '0.00'}
           </div>
         </div>
@@ -60,7 +60,7 @@ const DashboardOverview = ({ summary, token }) => {
         <div className="card-title">🏥 Referral Sources Performance</div>
         
         {referrals.length === 0 ? (
-          <p style={{ textAlign: 'center', color: 'var(--color-text-light)' }}>No referral data yet</p>
+          <p className="card-empty-state">No referral data yet</p>
         ) : (
           <table className="table">
             <thead>
@@ -94,7 +94,7 @@ const DashboardOverview = ({ summary, token }) => {
         <div className="card-title">👔 Caregiver Hours & Performance</div>
         
         {caregiverHours.length === 0 ? (
-          <p style={{ textAlign: 'center', color: 'var(--color-text-light)' }}>No caregiver data yet</p>
+          <p className="card-empty-state">No caregiver data yet</p>
         ) : (
           <table className="table">
             <thead>
@@ -114,7 +114,7 @@ const DashboardOverview = ({ summary, token }) => {
                   <td>
                     {cg.avg_satisfaction ? (
                       <>
-                        <span style={{ color: '#FFB800' }}>★</span> {cg.avg_satisfaction.toFixed(1)}
+                        <span className="star-icon">★</span> {cg.avg_satisfaction.toFixed(1)}
                       </>
                     ) : (
                       'N/A'
@@ -130,7 +130,7 @@ const DashboardOverview = ({ summary, token }) => {
       {/* Quick Actions */}
       <div className="card">
         <div className="card-title">⚡ Quick Actions</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+        <div className="quick-actions-grid">
           <button className="btn btn-primary">
             ➕ Add New Client
           </button>

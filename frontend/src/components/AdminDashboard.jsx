@@ -1,4 +1,4 @@
-// src/components/AdminDashboard.jsx
+// src/components/AdminDashboard.jsx - Updated with proper mobile sidebar handling
 import React, { useState, useEffect } from 'react';
 import { getDashboardSummary } from '../config';
 import DashboardOverview from './admin/DashboardOverview';
@@ -12,9 +12,31 @@ const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     loadDashboard();
+  }, []);
+
+  // Close sidebar on page click (mobile)
+  useEffect(() => {
+    if (window.innerWidth <= 768) {
+      setSidebarOpen(false);
+    }
+  }, [currentPage]);
+
+  // Handle window resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth > 768) {
+        setSidebarOpen(true);
+      } else {
+        setSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   const loadDashboard = async () => {
@@ -25,6 +47,13 @@ const AdminDashboard = ({ user, token, onLogout }) => {
       console.error('Failed to load dashboard:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePageClick = (page) => {
+    setCurrentPage(page);
+    if (window.innerWidth <= 768) {
+      setSidebarOpen(false);
     }
   };
 
@@ -47,64 +76,77 @@ const AdminDashboard = ({ user, token, onLogout }) => {
     }
   };
 
+  const handleLogoutClick = () => {
+    setSidebarOpen(false);
+    onLogout();
+  };
+
   return (
-    <div style={{ display: 'flex', height: '100vh' }}>
+    <div style={{ display: 'flex' }}>
+      {/* Sidebar Overlay for mobile */}
+      {sidebarOpen && window.innerWidth <= 768 && (
+        <div
+          className="sidebar-overlay active"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <div className="sidebar">
+      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-logo">
           📋 CVHC CRM
         </div>
         <ul className="sidebar-nav">
           <li>
-            <a 
+            <a
               href="#dashboard"
               className={currentPage === 'dashboard' ? 'active' : ''}
-              onClick={() => setCurrentPage('dashboard')}
+              onClick={() => handlePageClick('dashboard')}
             >
               📊 Dashboard
             </a>
           </li>
           <li>
-            <a 
+            <a
               href="#referrals"
               className={currentPage === 'referrals' ? 'active' : ''}
-              onClick={() => setCurrentPage('referrals')}
+              onClick={() => handlePageClick('referrals')}
             >
               🏥 Referral Sources
             </a>
           </li>
           <li>
-            <a 
+            <a
               href="#clients"
               className={currentPage === 'clients' ? 'active' : ''}
-              onClick={() => setCurrentPage('clients')}
+              onClick={() => handlePageClick('clients')}
             >
               👥 Clients
             </a>
           </li>
           <li>
-            <a 
+            <a
               href="#caregivers"
               className={currentPage === 'caregivers' ? 'active' : ''}
-              onClick={() => setCurrentPage('caregivers')}
+              onClick={() => handlePageClick('caregivers')}
             >
               👔 Caregivers
             </a>
           </li>
           <li>
-            <a 
+            <a
               href="#billing"
               className={currentPage === 'billing' ? 'active' : ''}
-              onClick={() => setCurrentPage('billing')}
+              onClick={() => handlePageClick('billing')}
             >
               💰 Billing
             </a>
           </li>
           <li>
-            <a 
+            <a
               href="#schedules"
               className={currentPage === 'schedules' ? 'active' : ''}
-              onClick={() => setCurrentPage('schedules')}
+              onClick={() => handlePageClick('schedules')}
             >
               📅 Schedules
             </a>
@@ -114,7 +156,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         <div className="sidebar-user">
           <div className="sidebar-user-name">{user.name}</div>
           <div className="sidebar-user-role">Administrator</div>
-          <button className="btn-logout" onClick={onLogout}>
+          <button className="btn-logout" onClick={handleLogoutClick}>
             Logout
           </button>
         </div>
@@ -123,8 +165,17 @@ const AdminDashboard = ({ user, token, onLogout }) => {
       {/* Main Content */}
       <div className="main-content">
         <div className="header">
-          <h1>Chippewa Valley Home Care</h1>
-          <p>HIPAA-Compliant CRM & Operations Management</p>
+          <div>
+            <h1>Chippewa Valley Home Care</h1>
+            <p>HIPAA-Compliant CRM & Operations Management</p>
+          </div>
+          <button
+            className="hamburger-btn"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            title="Menu"
+          >
+            ☰
+          </button>
         </div>
 
         <div className="container">

@@ -1,5 +1,5 @@
 // src/config.js - Updated for Vite
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://chippewa-home-care-api.onrender.com';
 
 // src/utils/api.js
 export const apiCall = async (endpoint, options = {}, token) => {

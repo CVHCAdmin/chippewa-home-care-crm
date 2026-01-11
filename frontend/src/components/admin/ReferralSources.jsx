@@ -57,8 +57,8 @@ const ReferralSources = ({ token }) => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h2 style={{ fontSize: '1.8rem', fontFamily: 'var(--font-display)' }}>🏥 Referral Sources</h2>
+      <div className="page-header">
+        <h2>🏥 Referral Sources</h2>
         <button 
           className="btn btn-primary"
           onClick={() => setShowForm(!showForm)}
@@ -68,10 +68,10 @@ const ReferralSources = ({ token }) => {
       </div>
 
       {showForm && (
-        <div className="card" style={{ marginBottom: '2rem', background: 'var(--color-teal-light)' }}>
-          <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>Add New Referral Source</h3>
+        <div className="card card-form">
+          <h3>Add New Referral Source</h3>
           <form onSubmit={handleSubmit}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
+            <div className="form-grid">
               <div className="form-group">
                 <label>Organization Name *</label>
                 <input
@@ -135,7 +135,7 @@ const ReferralSources = ({ token }) => {
               </div>
             </div>
 
-            <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem' }}>
+            <div className="form-actions">
               <button type="submit" className="btn btn-primary">Save Referral Source</button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
             </div>
@@ -146,15 +146,15 @@ const ReferralSources = ({ token }) => {
       {loading ? (
         <div className="loading"><div className="spinner"></div></div>
       ) : sources.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center' }}>
-          <p style={{ color: 'var(--color-text-light)' }}>No referral sources yet. Create one to get started.</p>
+        <div className="card card-centered">
+          <p>No referral sources yet. Create one to get started.</p>
         </div>
       ) : (
         <div className="grid">
           {sources.map(source => (
             <div key={source.id} className="card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1rem' }}>
-                <h4 style={{ fontSize: '1.2rem', color: 'var(--color-teal-dark)' }}>{source.name}</h4>
+              <div className="source-card-header">
+                <h4>{source.name}</h4>
                 <span className="badge badge-info">{source.type}</span>
               </div>
 
@@ -163,7 +163,7 @@ const ReferralSources = ({ token }) => {
               {source.email && <p><strong>Email:</strong> <a href={`mailto:${source.email}`}>{source.email}</a></p>}
               {source.city && <p><strong>Location:</strong> {source.city}, {source.state}</p>}
 
-              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #f0f0f0' }}>
+              <div className="source-card-footer">
                 <p><strong>{source.referral_count || 0} referrals</strong></p>
               </div>
             </div>

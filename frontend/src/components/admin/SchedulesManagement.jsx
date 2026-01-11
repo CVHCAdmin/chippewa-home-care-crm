@@ -70,19 +70,17 @@ const SchedulesManagement = ({ token }) => {
 
   return (
     <div>
-      <h2 style={{ fontSize: '1.8rem', fontFamily: 'var(--font-display)', marginBottom: '2rem' }}>
-        📅 Caregiver Schedules
-      </h2>
+      <h2>📅 Caregiver Schedules</h2>
 
       {/* Caregiver Selection */}
-      <div className="card" style={{ marginBottom: '2rem' }}>
-        <label style={{ fontWeight: '600', marginBottom: '1rem', display: 'block' }}>
+      <div className="card schedule-selection">
+        <label className="schedule-label">
           Select Caregiver to View/Edit Schedule:
         </label>
         <select
           value={selectedCaregiverId}
           onChange={(e) => handleCaregiverSelect(e.target.value)}
-          style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #ddd', marginBottom: '1rem' }}
+          className="schedule-select"
         >
           <option value="">Select a caregiver...</option>
           {caregivers.map(cg => (
@@ -104,10 +102,10 @@ const SchedulesManagement = ({ token }) => {
 
       {/* Add Schedule Form */}
       {showForm && selectedCaregiverId && (
-        <div className="card" style={{ marginBottom: '2rem', background: 'var(--color-teal-light)' }}>
-          <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>Add Schedule</h3>
+        <div className="card card-form">
+          <h3>Add Schedule</h3>
           <form onSubmit={handleSubmit}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
+            <div className="form-grid">
               <div className="form-group">
                 <label>Recurring Schedule (Day of Week)</label>
                 <select
@@ -164,7 +162,7 @@ const SchedulesManagement = ({ token }) => {
               </div>
             </div>
 
-            <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem' }}>
+            <div className="form-actions">
               <button type="submit" className="btn btn-primary">Create Schedule</button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
             </div>
@@ -175,10 +173,10 @@ const SchedulesManagement = ({ token }) => {
       {/* Schedules List */}
       {selectedCaregiverId && (
         <div className="card">
-          <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>Current Schedules</h3>
+          <h3>Current Schedules</h3>
           
           {schedules.length === 0 ? (
-            <p style={{ color: 'var(--color-text-light)', textAlign: 'center' }}>No schedules yet for this caregiver.</p>
+            <p className="card-empty-state">No schedules yet for this caregiver.</p>
           ) : (
             <table className="table">
               <thead>

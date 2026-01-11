@@ -78,9 +78,9 @@ const BillingDashboard = ({ token }) => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h2 style={{ fontSize: '1.8rem', fontFamily: 'var(--font-display)' }}>💰 Billing & Invoicing</h2>
-        <div style={{ display: 'flex', gap: '1rem' }}>
+      <div className="page-header">
+        <h2>💰 Billing & Invoicing</h2>
+        <div className="button-group">
           <button 
             className="btn btn-primary"
             onClick={() => setShowGenerateForm(!showGenerateForm)}
@@ -97,13 +97,13 @@ const BillingDashboard = ({ token }) => {
       <div className="grid">
         <div className="stat-card">
           <h3>Pending Invoices</h3>
-          <div className="value" style={{ color: '#dc3545' }}>
+          <div className="value value-danger">
             ${pendingTotal.toFixed(2)}
           </div>
         </div>
         <div className="stat-card">
           <h3>Paid This Month</h3>
-          <div className="value" style={{ color: '#28a745' }}>
+          <div className="value value-success">
             ${paidTotal.toFixed(2)}
           </div>
         </div>
@@ -114,10 +114,10 @@ const BillingDashboard = ({ token }) => {
       </div>
 
       {showGenerateForm && (
-        <div className="card" style={{ marginBottom: '2rem', background: 'var(--color-teal-light)' }}>
-          <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-teal-dark)' }}>Generate New Invoice</h3>
+        <div className="card card-form">
+          <h3>Generate New Invoice</h3>
           <form onSubmit={handleGenerateInvoice}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
+            <div className="form-grid">
               <div className="form-group">
                 <label>Client *</label>
                 <select
@@ -155,7 +155,7 @@ const BillingDashboard = ({ token }) => {
               </div>
             </div>
 
-            <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem' }}>
+            <div className="form-actions">
               <button type="submit" className="btn btn-primary">Generate Invoice</button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowGenerateForm(false)}>Cancel</button>
             </div>
@@ -167,8 +167,8 @@ const BillingDashboard = ({ token }) => {
       {loading ? (
         <div className="loading"><div className="spinner"></div></div>
       ) : invoices.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center' }}>
-          <p style={{ color: 'var(--color-text-light)' }}>No invoices yet. Generate one to get started.</p>
+        <div className="card card-centered">
+          <p>No invoices yet. Generate one to get started.</p>
         </div>
       ) : (
         <table className="table">
