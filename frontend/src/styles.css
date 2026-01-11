@@ -139,9 +139,9 @@ body {
 /* Main Content */
 .main-content {
     flex: 1;
+    margin-left: 280px;
     overflow-y: auto;
     background: var(--color-gray);
-    width: 100%;
 }
 
 .header {
