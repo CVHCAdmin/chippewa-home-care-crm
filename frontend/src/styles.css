@@ -142,6 +142,7 @@ body {
     margin-left: 280px;
     overflow-y: auto;
     background: var(--color-gray);
+    width: 100%;  /* ADD THIS LINE */
 }
 
 .header {
