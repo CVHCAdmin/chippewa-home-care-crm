@@ -7,6 +7,7 @@ import ClientsManagement from './admin/ClientsManagement';
 import CaregiverManagement from './admin/CaregiverManagement';
 import BillingDashboard from './admin/BillingDashboard';
 import SchedulesManagement from './admin/SchedulesManagement';
+import ClientOnboarding from './admin/ClientOnboarding';
 
 const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -71,6 +72,8 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         return <BillingDashboard token={token} />;
       case 'schedules':
         return <SchedulesManagement token={token} />;
+      case 'onboarding':
+        return <ClientOnboarding token={token} />;
       default:
         return <DashboardOverview summary={summary} token={token} />;
     }
@@ -122,6 +125,15 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               onClick={() => handlePageClick('clients')}
             >
               👥 Clients
+            </a>
+          </li>
+          <li>
+            <a
+              href="#onboarding"
+              className={currentPage === 'onboarding' ? 'active' : ''}
+              onClick={() => handlePageClick('onboarding')}
+            >
+              📋 Onboarding
             </a>
           </li>
           <li>
