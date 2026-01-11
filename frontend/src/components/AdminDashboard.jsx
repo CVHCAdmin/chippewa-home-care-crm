@@ -8,9 +8,15 @@ import CaregiverManagement from './admin/CaregiverManagement';
 import BillingDashboard from './admin/BillingDashboard';
 import SchedulesManagement from './admin/SchedulesManagement';
 import ClientOnboarding from './admin/ClientOnboarding';
+import PerformanceRatings from './admin/PerformanceRatings';
+import AbsenceManagement from './admin/AbsenceManagement';
+import ScheduleCalendar from './admin/ScheduleCalendar';
+import ApplicationsDashboard from './admin/ApplicationsDashboard';
+import CaregiverProfile from './admin/CaregiverProfile';
 
 const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
+  const [selectedCaregiverId, setSelectedCaregiverId] = useState(null);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -65,13 +71,32 @@ const AdminDashboard = ({ user, token, onLogout }) => {
       case 'clients':
         return <ClientsManagement token={token} />;
       case 'caregivers':
-        return <CaregiverManagement token={token} />;
+        return <CaregiverManagement token={token} onViewProfile={(id) => {
+          setSelectedCaregiverId(id);
+          setCurrentPage('caregiver-profile');
+        }} />;
       case 'billing':
         return <BillingDashboard token={token} />;
       case 'schedules':
         return <SchedulesManagement token={token} />;
       case 'onboarding':
         return <ClientOnboarding token={token} />;
+      case 'performance':
+        return <PerformanceRatings token={token} />;
+      case 'absences':
+        return <AbsenceManagement token={token} />;
+      case 'calendar':
+        return <ScheduleCalendar token={token} />;
+      case 'applications':
+        return <ApplicationsDashboard token={token} />;
+      case 'caregiver-profile':
+        return selectedCaregiverId ? (
+          <CaregiverProfile 
+            caregiverId={selectedCaregiverId} 
+            token={token} 
+            onBack={() => setSelectedCaregiverId(null)}
+          />
+        ) : null;
       default:
         return <DashboardOverview summary={summary} token={token} />;
     }
@@ -134,6 +159,42 @@ const AdminDashboard = ({ user, token, onLogout }) => {
           </li>
           <li>
             <a
+              href="#performance"
+              className={currentPage === 'performance' ? 'active' : ''}
+              onClick={() => handlePageClick('performance')}
+            >
+              Performance
+            </a>
+          </li>
+          <li>
+            <a
+              href="#absences"
+              className={currentPage === 'absences' ? 'active' : ''}
+              onClick={() => handlePageClick('absences')}
+            >
+              Absences
+            </a>
+          </li>
+          <li>
+            <a
+              href="#calendar"
+              className={currentPage === 'calendar' ? 'active' : ''}
+              onClick={() => handlePageClick('calendar')}
+            >
+              Schedule Calendar
+            </a>
+          </li>
+          <li>
+            <a
+              href="#applications"
+              className={currentPage === 'applications' ? 'active' : ''}
+              onClick={() => handlePageClick('applications')}
+            >
+              Job Applications
+            </a>
+          </li>
+          <li>
+            <a
               href="#caregivers"
               className={currentPage === 'caregivers' ? 'active' : ''}
               onClick={() => handlePageClick('caregivers')}
@@ -181,7 +242,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
             onClick={() => setSidebarOpen(!sidebarOpen)}
             title="Menu"
           >
-            ☰
+            Menu
           </button>
         </div>
 
