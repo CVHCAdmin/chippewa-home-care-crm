@@ -1113,3 +1113,31 @@ tbody tr:last-child td {
     background-color: white;
   }
 }
+
+/* ===== TIME TRACKING STYLES ===== */
+
+.time-display {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--primary);
+  font-family: 'Courier New', monospace;
+}
+
+.success-message {
+  color: #28a745;
+  background-color: #d4edda;
+  border: 1px solid #c3e6cb;
+  border-radius: 4px;
+  padding: 12px;
+  margin-top: 1rem;
+  text-align: center;
+}
+
+.card-warning p {
+  line-height: 1.8;
+}
+
+.card-warning small {
+  color: #666;
+  font-size: 0.85rem;
+}
