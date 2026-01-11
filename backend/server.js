@@ -128,6 +128,33 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+app.post('/api/auth/register-caregiver', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { email, password, firstName, lastName, phone } = req.body;
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = uuidv4();
+
+    // Set current user for audit trigger
+    await pool.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
+
+    const result = await pool.query(
+      `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role)
+       VALUES ($1, $2, $3, $4, $5, $6, 'caregiver')
+       RETURNING id, email, first_name, last_name, role`,
+      [userId, email, hashedPassword, firstName, lastName, phone]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Caregiver registration error:', error);
+    if (error.code === '23505') { // Unique constraint violation
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+    res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
 app.post('/api/auth/register-admin', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { email, password, firstName, lastName, phone } = req.body;

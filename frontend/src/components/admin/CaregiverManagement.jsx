@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { getCaregivers, convertToAdmin } from '../../config';
 import AddCaregiverModal from './AddCaregiverModal';
 
-const CaregiverManagement = ({ token }) => {
+const CaregiverManagement = ({ token, onViewProfile })=> {
   const [caregivers, setCaregivers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -78,14 +78,22 @@ const CaregiverManagement = ({ token }) => {
                   </span>
                 </td>
                 <td>
-                  {caregiver.role !== 'admin' && (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button 
                       className="btn btn-sm btn-primary"
-                      onClick={() => handlePromoteToAdmin(caregiver.id)}
+                      onClick={() => onViewProfile && onViewProfile(caregiver.id)}
                     >
-                      Make Admin
+                      View Profile
                     </button>
-                  )}
+                    {caregiver.role !== 'admin' && (
+                      <button 
+                        className="btn btn-sm btn-primary"
+                        onClick={() => handlePromoteToAdmin(caregiver.id)}
+                      >
+                        Make Admin
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
