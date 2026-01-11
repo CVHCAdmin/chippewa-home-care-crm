@@ -1,4 +1,4 @@
-// src/components/AdminDashboard.jsx - Updated with proper mobile sidebar handling
+// src/components/AdminDashboard.jsx
 import React, { useState, useEffect } from 'react';
 import { getDashboardSummary } from '../config';
 import DashboardOverview from './admin/DashboardOverview';
@@ -19,14 +19,12 @@ const AdminDashboard = ({ user, token, onLogout }) => {
     loadDashboard();
   }, []);
 
-  // Close sidebar on page click (mobile)
   useEffect(() => {
     if (window.innerWidth <= 768) {
       setSidebarOpen(false);
     }
   }, [currentPage]);
 
-  // Handle window resize
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth > 768) {
@@ -86,7 +84,6 @@ const AdminDashboard = ({ user, token, onLogout }) => {
 
   return (
     <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-      {/* Sidebar Overlay for mobile */}
       {sidebarOpen && window.innerWidth <= 768 && (
         <div
           className="sidebar-overlay active"
@@ -94,10 +91,9 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         />
       )}
 
-      {/* Sidebar */}
       <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-logo">
-          ðŸ"‹ CVHC CRM
+          CVHC CRM
         </div>
         <ul className="sidebar-nav">
           <li>
@@ -106,7 +102,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'dashboard' ? 'active' : ''}
               onClick={() => handlePageClick('dashboard')}
             >
-              ðŸ"Š Dashboard
+              Dashboard
             </a>
           </li>
           <li>
@@ -115,7 +111,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'referrals' ? 'active' : ''}
               onClick={() => handlePageClick('referrals')}
             >
-              ðŸ¥ Referral Sources
+              Referral Sources
             </a>
           </li>
           <li>
@@ -124,7 +120,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'clients' ? 'active' : ''}
               onClick={() => handlePageClick('clients')}
             >
-              ðŸ'¥ Clients
+              Clients
             </a>
           </li>
           <li>
@@ -133,7 +129,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'onboarding' ? 'active' : ''}
               onClick={() => handlePageClick('onboarding')}
             >
-              ðŸ"‹ Onboarding
+              Onboarding
             </a>
           </li>
           <li>
@@ -142,7 +138,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'caregivers' ? 'active' : ''}
               onClick={() => handlePageClick('caregivers')}
             >
-              ðŸ'" Caregivers
+              Caregivers
             </a>
           </li>
           <li>
@@ -151,7 +147,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'billing' ? 'active' : ''}
               onClick={() => handlePageClick('billing')}
             >
-              ðŸ'° Billing
+              Billing
             </a>
           </li>
           <li>
@@ -160,7 +156,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'schedules' ? 'active' : ''}
               onClick={() => handlePageClick('schedules')}
             >
-              ðŸ"… Schedules
+              Schedules
             </a>
           </li>
         </ul>
@@ -174,7 +170,6 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="main-content">
         <div className="header">
           <div>
@@ -186,7 +181,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
             onClick={() => setSidebarOpen(!sidebarOpen)}
             title="Menu"
           >
-            â˜°
+            ☰
           </button>
         </div>
 
