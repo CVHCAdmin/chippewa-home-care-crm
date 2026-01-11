@@ -135,14 +135,15 @@ app.post('/api/auth/register-admin', verifyToken, requireAdmin, async (req, res)
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = uuidv4();
 
+    // Set current user for audit trigger
+    await pool.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
+
     const result = await pool.query(
       `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role)
        VALUES ($1, $2, $3, $4, $5, $6, 'admin')
        RETURNING id, email, first_name, last_name, role`,
       [userId, email, hashedPassword, firstName, lastName, phone]
     );
-
-    await auditLog(req.user.id, 'CREATE', 'users', userId, null, result.rows[0]);
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
