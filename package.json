@@ -1,0 +1,25 @@
+{
+  "name": "chippewa-home-care-crm",
+  "version": "1.0.0",
+  "description": "HIPAA-Compliant Home Care Management System",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "seed-payrates": "node src/scripts/seedDatabase.js"
+  },
+  "dependencies": {
+    "cors": "2.8.5",
+    "date-fns": "2.30.0",
+    "dotenv": "16.0.3",
+    "express": "4.18.2",
+    "json2csv": "5.0.7",
+    "jsonwebtoken": "8.5.1",
+    "mongoose": "7.0.0",
+    "papaparse": "5.4.1",
+    "pdfkit": "0.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "2.0.22"
+  }
+}
