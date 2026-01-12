@@ -1542,20 +1542,23 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
       `SELECT 
         (SELECT COUNT(*) FROM clients WHERE is_active = true) as active_clients,
         (SELECT COUNT(*) FROM users WHERE role = 'caregiver') as total_caregivers,
-        (SELECT SUM(total) FROM invoices WHERE payment_status = 'paid') as total_revenue,
-        (SELECT SUM(net_pay) FROM payroll WHERE status = 'paid') as total_payroll_paid,
-        (SELECT SUM(total) FROM invoices WHERE payment_status = 'pending') as pending_revenue,
-        (SELECT SUM(amount) FROM expenses) as total_expenses,
+        COALESCE((SELECT SUM(total) FROM invoices WHERE payment_status = 'paid'), 0) as total_revenue,
+        COALESCE((SELECT SUM(net_pay) FROM payroll WHERE status = 'paid'), 0) as total_payroll_paid,
+        COALESCE((SELECT SUM(total) FROM invoices WHERE payment_status = 'pending'), 0) as pending_revenue,
+        COALESCE((SELECT SUM(amount) FROM expenses), 0) as total_expenses,
         (SELECT COUNT(*) FROM schedules WHERE is_active = true) as active_schedules,
-        (SELECT AVG(NULLIF((billing_period_end::date - billing_period_start::date), 0)) FROM invoices) as avg_billing_period_days,
-        ((SELECT SUM(total) FROM invoices WHERE payment_status = 'paid') - (SELECT SUM(net_pay) FROM payroll WHERE status = 'paid') - COALESCE((SELECT SUM(amount) FROM expenses), 0)) as net_profit
+        COALESCE((SELECT AVG(NULLIF((billing_period_end::date - billing_period_start::date), 0)) FROM invoices), 0) as avg_billing_period_days,
+        COALESCE((SELECT SUM(total) FROM invoices WHERE payment_status = 'paid'), 0) - COALESCE((SELECT SUM(net_pay) FROM payroll WHERE status = 'paid'), 0) - COALESCE((SELECT SUM(amount) FROM expenses), 0) as net_profit,
+        COALESCE((SELECT SUM(CAST(hours_worked AS DECIMAL)) FROM time_entries), 0) as total_hours,
+        (SELECT COUNT(*) FROM schedules WHERE status = 'completed') as completed_shifts,
+        COALESCE((SELECT AVG(CAST(rating AS DECIMAL)) FROM performance_reviews WHERE overall_assessment = 'excellent'), 0) as avg_satisfaction
       `
     );
 
     const monthlyTrendResult = await pool.query(
       `SELECT 
         DATE_TRUNC('month', i.created_at)::DATE as month,
-        SUM(i.total) as revenue,
+        COALESCE(SUM(i.total), 0) as revenue,
         COALESCE((SELECT SUM(amount) FROM expenses WHERE DATE_TRUNC('month', expense_date) = DATE_TRUNC('month', i.created_at)), 0) as expenses,
         COUNT(*) as invoice_count
        FROM invoices i
@@ -1580,8 +1583,8 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
       `SELECT 
         u.id,
         u.first_name || ' ' || u.last_name as caregiver_name,
-        SUM(pli.gross_amount) as total_earned,
-        SUM(pli.total_hours) as total_hours
+        COALESCE(SUM(pli.gross_amount), 0) as total_earned,
+        COALESCE(SUM(pli.total_hours), 0) as total_hours
        FROM payroll_line_items pli
        JOIN users u ON pli.caregiver_id = u.id
        GROUP BY u.id, u.first_name, u.last_name
@@ -1600,6 +1603,7 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
     );
 
     res.json({
+      success: true,
       summary: summaryResult.rows[0],
       monthlyTrend: monthlyTrendResult.rows,
       topClients: topClientsResult.rows,
