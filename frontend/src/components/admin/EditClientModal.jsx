@@ -1,7 +1,11 @@
 // src/components/admin/EditClientModal.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
-
+const formatDateForInput = (dateString) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+};
 const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
   const [formData, setFormData] = useState({
     firstName: '',
@@ -37,7 +41,7 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
       setFormData({
         firstName: client.first_name || '',
         lastName: client.last_name || '',
-        dateOfBirth: client.date_of_birth || '',
+        dateOfBirth: formatDateForInput(client.date_of_birth),
         gender: client.gender || '',
         phone: client.phone || '',
         email: client.email || '',
