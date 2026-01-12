@@ -1094,6 +1094,252 @@ app.get('/api/service-pricing/margins', verifyToken, requireAdmin, async (req, r
   }
 });
 
+// ---- PAYROLL PROCESSING ----
+
+// POST /api/payroll/run - Generate payroll for a period
+app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { payPeriodStart, payPeriodEnd } = req.body;
+
+    if (!payPeriodStart || !payPeriodEnd) {
+      return res.status(400).json({ error: 'payPeriodStart and payPeriodEnd are required' });
+    }
+
+    const payrollId = uuidv4();
+    const payrollNumber = `PR-${Date.now()}`;
+
+    // Get all time entries for the period
+    const timeEntriesResult = await pool.query(
+      `SELECT te.*, u.first_name, u.last_name, cr.base_hourly_rate
+       FROM time_entries te
+       JOIN users u ON te.caregiver_id = u.id
+       LEFT JOIN caregiver_rates cr ON te.caregiver_id = cr.caregiver_id
+       WHERE te.clock_in >= $1 AND te.clock_in <= $2
+       AND te.hours_worked > 0
+       ORDER BY te.caregiver_id`,
+      [payPeriodStart, payPeriodEnd]
+    );
+
+    // Group by caregiver and calculate totals
+    const caregiverPayroll = {};
+    let totalGrossPay = 0;
+
+    for (const entry of timeEntriesResult.rows) {
+      if (!caregiverPayroll[entry.caregiver_id]) {
+        caregiverPayroll[entry.caregiver_id] = {
+          caregiverId: entry.caregiver_id,
+          caregiverName: `${entry.first_name} ${entry.last_name}`,
+          totalHours: 0,
+          hourlyRate: entry.base_hourly_rate || 18.50,
+          grossPay: 0,
+          lineItems: []
+        };
+      }
+
+      caregiverPayroll[entry.caregiver_id].totalHours += parseFloat(entry.hours_worked);
+      caregiverPayroll[entry.caregiver_id].lineItems.push({
+        timeEntryId: entry.id,
+        date: entry.clock_in,
+        hours: entry.hours_worked,
+        rate: entry.base_hourly_rate || 18.50
+      });
+    }
+
+    // Calculate gross pay and create line items
+    const lineItems = [];
+    for (const caregiverId in caregiverPayroll) {
+      const payData = caregiverPayroll[caregiverId];
+      payData.grossPay = (payData.totalHours * payData.hourlyRate).toFixed(2);
+      totalGrossPay += parseFloat(payData.grossPay);
+
+      // Create line item for this caregiver
+      lineItems.push({
+        caregiverId: caregiverId,
+        description: `Hours: ${payData.totalHours.toFixed(2)} × $${payData.hourlyRate.toFixed(2)}/hr`,
+        totalHours: payData.totalHours.toFixed(2),
+        hourlyRate: payData.hourlyRate,
+        grossAmount: payData.grossPay
+      });
+    }
+
+    // Calculate taxes and deductions (standard FICA: 7.65%)
+    const taxRate = 0.0765;
+    const totalTaxes = (totalGrossPay * taxRate).toFixed(2);
+    const totalNetPay = (totalGrossPay - parseFloat(totalTaxes)).toFixed(2);
+
+    // Create payroll record
+    const payrollResult = await pool.query(
+      `INSERT INTO payroll (id, payroll_number, pay_period_start, pay_period_end, total_hours, gross_pay, taxes, net_pay, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [payrollId, payrollNumber, payPeriodStart, payPeriodEnd, 
+       Object.values(caregiverPayroll).reduce((sum, p) => sum + p.totalHours, 0).toFixed(2),
+       totalGrossPay, totalTaxes, totalNetPay, 'pending']
+    );
+
+    // Create line items for each caregiver
+    for (const item of lineItems) {
+      await pool.query(
+        `INSERT INTO payroll_line_items (payroll_id, caregiver_id, description, total_hours, hourly_rate, gross_amount)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [payrollId, item.caregiverId, item.description, item.totalHours, item.hourlyRate, item.grossAmount]
+      );
+    }
+
+    await auditLog(req.user.id, 'CREATE', 'payroll', payrollId, null, payrollResult.rows[0]);
+    res.status(201).json({
+      ...payrollResult.rows[0],
+      lineItems: lineItems,
+      caregiverCount: lineItems.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/payroll - List all payrolls
+app.get('/api/payroll', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM payroll ORDER BY pay_period_end DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/payroll/:payrollId - Get payroll details with line items
+app.get('/api/payroll/:payrollId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const payrollResult = await pool.query(
+      `SELECT * FROM payroll WHERE id = $1`,
+      [req.params.payrollId]
+    );
+
+    if (payrollResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Payroll not found' });
+    }
+
+    const lineItemsResult = await pool.query(
+      `SELECT pli.*, u.first_name, u.last_name
+       FROM payroll_line_items pli
+       JOIN users u ON pli.caregiver_id = u.id
+       WHERE pli.payroll_id = $1
+       ORDER BY u.first_name, u.last_name`,
+      [req.params.payrollId]
+    );
+
+    res.json({
+      ...payrollResult.rows[0],
+      lineItems: lineItemsResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/payroll/:payrollId/status - Update payroll status
+app.patch('/api/payroll/:payrollId/status', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { status, processedDate, paymentMethod } = req.body;
+
+    if (!status) {
+      return res.status(400).json({ error: 'status is required' });
+    }
+
+    const result = await pool.query(
+      `UPDATE payroll SET 
+        status = $1,
+        processed_date = CASE WHEN $1 = 'processed' THEN COALESCE($2, NOW()) ELSE processed_date END,
+        payment_method = COALESCE($3, payment_method),
+        updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [status, processedDate, paymentMethod, req.params.payrollId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Payroll not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'payroll', req.params.payrollId, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/payroll/caregiver/:caregiverId - Get caregiver payroll history
+app.get('/api/payroll/caregiver/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT pli.*, p.payroll_number, p.pay_period_start, p.pay_period_end, p.status
+       FROM payroll_line_items pli
+       JOIN payroll p ON pli.payroll_id = p.id
+       WHERE pli.caregiver_id = $1
+       ORDER BY p.pay_period_end DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/payroll/summary - Payroll overview and reports
+app.get('/api/payroll/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        COUNT(DISTINCT id) as total_payrolls,
+        COUNT(DISTINCT CASE WHEN status = 'pending' THEN id END) as pending_payrolls,
+        COUNT(DISTINCT CASE WHEN status = 'processed' THEN id END) as processed_payrolls,
+        COUNT(DISTINCT CASE WHEN status = 'paid' THEN id END) as paid_payrolls,
+        SUM(gross_pay) as total_gross_pay,
+        SUM(taxes) as total_taxes,
+        SUM(net_pay) as total_net_pay,
+        AVG(total_hours) as average_hours_per_payroll,
+        MAX(pay_period_end) as latest_payroll_date
+       FROM payroll`
+    );
+
+    const caregiverResult = await pool.query(
+      `SELECT 
+        u.id,
+        u.first_name,
+        u.last_name,
+        COUNT(pli.id) as payroll_count,
+        SUM(pli.total_hours) as total_hours_paid,
+        SUM(pli.gross_amount) as total_earned
+       FROM users u
+       LEFT JOIN payroll_line_items pli ON u.id = pli.caregiver_id
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY total_earned DESC NULLS LAST`
+    );
+
+    res.json({
+      summary: result.rows[0],
+      caregiverStats: caregiverResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/payroll-periods - List distinct pay periods
+app.get('/api/payroll-periods', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT pay_period_start, pay_period_end FROM payroll ORDER BY pay_period_end DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // NOTIFICATIONS
 app.post('/api/notifications/subscribe', verifyToken, async (req, res) => {
   try {
