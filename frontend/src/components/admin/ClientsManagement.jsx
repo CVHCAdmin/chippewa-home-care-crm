@@ -38,27 +38,42 @@ const ClientsManagement = ({ token }) => {
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await createClient(formData, token);
-      setFormData({
-        firstName: '',
-        lastName: '',
-        dateOfBirth: '',
-        phone: '',
-        email: '',
-        address: '',
-        city: '',
-        state: 'WI',
-        zip: '',
-        serviceType: 'personal_care'
-      });
-      setShowForm(false);
-      loadClients();
-    } catch (error) {
-      alert('Failed to create client: ' + error.message);
-    }
-  };
+  e.preventDefault();
+  try {
+    // Clean up empty fields - convert empty strings to null for optional fields
+    const cleanedData = {
+      firstName: formData.firstName,
+      lastName: formData.lastName,
+      serviceType: formData.serviceType,
+      // Optional fields - only send if not empty
+      dateOfBirth: formData.dateOfBirth || null,
+      phone: formData.phone || null,
+      email: formData.email || null,
+      address: formData.address || null,
+      city: formData.city || null,
+      state: formData.state || null,
+      zip: formData.zip || null,
+    };
+
+    await createClient(cleanedData, token);
+    setFormData({
+      firstName: '',
+      lastName: '',
+      dateOfBirth: '',
+      phone: '',
+      email: '',
+      address: '',
+      city: '',
+      state: 'WI',
+      zip: '',
+      serviceType: 'personal_care'
+    });
+    setShowForm(false);
+    loadClients();
+  } catch (error) {
+    alert('Failed to create client: ' + error.message);
+  }
+};
 
   const handleViewClient = (client) => {
     setSelectedClient(client);
