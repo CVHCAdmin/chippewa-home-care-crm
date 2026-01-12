@@ -32,28 +32,13 @@ const auditLogger = (pool) => {
         if (req.method !== 'GET' && res.statusCode < 400) {
           const auditData = extractAuditData(req, res, requestBody, responseBody);
           
-          // Save to database
-          await saveAuditLog(pool, auditData);
-        }
-        // Log failed operations too (for security)
-        else if (req.method !== 'GET' && res.statusCode >= 400) {
-          const auditData = extractAuditData(req, res, requestBody, responseBody);
-          auditData.flags = JSON.stringify(['access_denied']);
-          await saveAuditLog(pool, auditData);
-        }
-        // Log failed logins
-        else if (req.path.includes('/login') && res.statusCode >= 400) {
-          await saveAuditLog(pool, {
-            user_id: null,
-            action: 'failed_login',
-            table_name: 'users',
-            record_id: 'login-attempt',
-            old_data: JSON.stringify({}),
-            new_data: JSON.stringify({ email: req.body?.email || 'unknown' })
-          });
+          // Only save if we have valid data
+          if (auditData && auditData.user_id) {
+            await saveAuditLog(pool, auditData);
+          }
         }
       } catch (error) {
-        console.error('Error logging audit:', error);
+        console.error('Error in audit logging:', error.message);
         // Don't throw - audit logging shouldn't break the app
       }
     });
@@ -67,12 +52,17 @@ const auditLogger = (pool) => {
  */
 async function saveAuditLog(pool, auditData) {
   try {
+    // Only log if we have a valid user_id (UUID)
+    if (!auditData.user_id) {
+      return; // Skip logging
+    }
+
     await pool.query(
       `INSERT INTO audit_logs (user_id, action, table_name, record_id, old_data, new_data, timestamp)
        VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
       [
-        auditData.user_id || null,
-        auditData.action || 'unknown',
+        auditData.user_id,
+        auditData.action || 'update',
         auditData.table_name || 'unknown',
         auditData.record_id || 'unknown',
         auditData.old_data || '{}',
@@ -80,7 +70,8 @@ async function saveAuditLog(pool, auditData) {
       ]
     );
   } catch (error) {
-    console.error('Audit log database error:', error);
+    console.error('Audit log database error:', error.message);
+    // Silently fail - don't interrupt the response
   }
 }
 
@@ -88,10 +79,15 @@ async function saveAuditLog(pool, auditData) {
  * Extract audit data from request/response
  */
 function extractAuditData(req, res, requestBody, responseBody) {
+  // Only log if user is authenticated
+  if (!req.user?.id) {
+    return null;
+  }
+
   const entityInfo = extractEntityInfo(req);
 
   return {
-    user_id: req.user?.id || null,
+    user_id: req.user.id,
     action: mapMethodToAction(req.method),
     table_name: entityInfo.entityType,
     record_id: entityInfo.entityId,
@@ -110,7 +106,7 @@ function mapMethodToAction(method) {
     'PATCH': 'update',
     'DELETE': 'delete'
   };
-  return map[method] || 'unknown';
+  return map[method] || 'update';
 }
 
 /**
