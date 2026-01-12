@@ -2475,6 +2475,359 @@ app.get('/api/applications/summary', verifyToken, requireAdmin, async (req, res)
   }
 });
 
+// ---- CARE PLANS ----
+
+// GET /api/care-plans - Get all care plans
+app.get('/api/care-plans', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT cp.*, c.first_name || ' ' || c.last_name as client_name
+       FROM care_plans cp
+       JOIN clients c ON cp.client_id = c.id
+       ORDER BY cp.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/care-plans/:clientId - Get care plans for specific client
+app.get('/api/care-plans/:clientId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM care_plans 
+       WHERE client_id = $1 
+       ORDER BY start_date DESC`,
+      [req.params.clientId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/care-plans - Create new care plan
+app.post('/api/care-plans', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const {
+      clientId, serviceType, serviceDescription, frequency, careGoals,
+      specialInstructions, precautions, medicationNotes, mobilityNotes,
+      dietaryNotes, communicationNotes, startDate, endDate
+    } = req.body;
+
+    if (!clientId || !serviceType) {
+      return res.status(400).json({ error: 'clientId and serviceType are required' });
+    }
+
+    const planId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO care_plans (
+        id, client_id, service_type, service_description, frequency,
+        care_goals, special_instructions, precautions, medication_notes,
+        mobility_notes, dietary_notes, communication_notes, start_date, end_date, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING *`,
+      [
+        planId, clientId, serviceType, serviceDescription || null, frequency || null,
+        careGoals || null, specialInstructions || null, precautions || null,
+        medicationNotes || null, mobilityNotes || null, dietaryNotes || null,
+        communicationNotes || null, startDate || null, endDate || null, req.user.id
+      ]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'care_plans', planId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/care-plans/:id - Update care plan
+app.put('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const {
+      serviceType, serviceDescription, frequency, careGoals,
+      specialInstructions, precautions, medicationNotes, mobilityNotes,
+      dietaryNotes, communicationNotes, startDate, endDate
+    } = req.body;
+
+    const result = await pool.query(
+      `UPDATE care_plans SET
+        service_type = COALESCE($1, service_type),
+        service_description = COALESCE($2, service_description),
+        frequency = COALESCE($3, frequency),
+        care_goals = COALESCE($4, care_goals),
+        special_instructions = COALESCE($5, special_instructions),
+        precautions = COALESCE($6, precautions),
+        medication_notes = COALESCE($7, medication_notes),
+        mobility_notes = COALESCE($8, mobility_notes),
+        dietary_notes = COALESCE($9, dietary_notes),
+        communication_notes = COALESCE($10, communication_notes),
+        start_date = COALESCE($11, start_date),
+        end_date = COALESCE($12, end_date),
+        updated_at = NOW()
+       WHERE id = $13
+       RETURNING *`,
+      [
+        serviceType, serviceDescription, frequency, careGoals,
+        specialInstructions, precautions, medicationNotes, mobilityNotes,
+        dietaryNotes, communicationNotes, startDate, endDate, req.params.id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Care plan not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'care_plans', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/care-plans/:id - Delete care plan
+app.delete('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM care_plans WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Care plan not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'care_plans', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Care plan deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/care-plans/summary - Care plan statistics
+app.get('/api/care-plans/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const totalResult = await pool.query(
+      `SELECT COUNT(*) as total_plans FROM care_plans`
+    );
+
+    const activeResult = await pool.query(
+      `SELECT COUNT(*) as active_plans FROM care_plans 
+       WHERE (start_date IS NULL OR start_date <= CURRENT_DATE)
+       AND (end_date IS NULL OR end_date >= CURRENT_DATE)`
+    );
+
+    const byServiceType = await pool.query(
+      `SELECT service_type, COUNT(*) as count
+       FROM care_plans
+       GROUP BY service_type
+       ORDER BY count DESC`
+    );
+
+    const byClient = await pool.query(
+      `SELECT c.id, c.first_name || ' ' || c.last_name as client_name, COUNT(cp.id) as plan_count
+       FROM clients c
+       LEFT JOIN care_plans cp ON c.id = cp.client_id
+       GROUP BY c.id, c.first_name, c.last_name
+       HAVING COUNT(cp.id) > 0
+       ORDER BY plan_count DESC`
+    );
+
+    res.json({
+      total: totalResult.rows[0].total_plans,
+      active: activeResult.rows[0].active_plans,
+      byServiceType: byServiceType.rows,
+      byClient: byClient.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- INCIDENT REPORTING ----
+
+// GET /api/incidents - Get all incidents
+app.get('/api/incidents', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ir.*, c.first_name || ' ' || c.last_name as client_name, 
+              u.first_name || ' ' || u.last_name as caregiver_name
+       FROM incident_reports ir
+       LEFT JOIN clients c ON ir.client_id = c.id
+       LEFT JOIN users u ON ir.caregiver_id = u.id
+       ORDER BY ir.incident_date DESC, ir.incident_time DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/incidents/:id - Get specific incident
+app.get('/api/incidents/:id', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ir.*, c.first_name || ' ' || c.last_name as client_name,
+              u.first_name || ' ' || u.last_name as caregiver_name
+       FROM incident_reports ir
+       LEFT JOIN clients c ON ir.client_id = c.id
+       LEFT JOIN users u ON ir.caregiver_id = u.id
+       WHERE ir.id = $1`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/incidents - Report new incident
+app.post('/api/incidents', verifyToken, async (req, res) => {
+  try {
+    const {
+      clientId, caregiverId, incidentType, severity, incidentDate, incidentTime,
+      description, witnesses, injuriesOrDamage, actionsTaken, followUpRequired,
+      followUpNotes, reportedBy, reportedDate
+    } = req.body;
+
+    if (!clientId || !incidentType || !description) {
+      return res.status(400).json({ error: 'Client, incident type, and description are required' });
+    }
+
+    const incidentId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO incident_reports (
+        id, client_id, caregiver_id, incident_type, severity, incident_date, incident_time,
+        description, witnesses, injuries_or_damage, actions_taken, follow_up_required,
+        follow_up_notes, reported_by, reported_date, reported_by_user_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       RETURNING *`,
+      [
+        incidentId, clientId, caregiverId || null, incidentType, severity || 'moderate',
+        incidentDate, incidentTime || null, description, witnesses || null,
+        injuriesOrDamage || null, actionsTaken || null, followUpRequired || false,
+        followUpNotes || null, reportedBy || null, reportedDate || null, req.user.id
+      ]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'incident_reports', incidentId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/incidents/:id - Update incident
+app.patch('/api/incidents/:id', verifyToken, async (req, res) => {
+  try {
+    const {
+      severity, injuriesOrDamage, actionsTaken, followUpRequired, followUpNotes
+    } = req.body;
+
+    const result = await pool.query(
+      `UPDATE incident_reports SET
+        severity = COALESCE($1, severity),
+        injuries_or_damage = COALESCE($2, injuries_or_damage),
+        actions_taken = COALESCE($3, actions_taken),
+        follow_up_required = COALESCE($4, follow_up_required),
+        follow_up_notes = COALESCE($5, follow_up_notes),
+        updated_at = NOW()
+       WHERE id = $6
+       RETURNING *`,
+      [severity, injuriesOrDamage, actionsTaken, followUpRequired, followUpNotes, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'incident_reports', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/incidents/:id - Delete incident report
+app.delete('/api/incidents/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM incident_reports WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'incident_reports', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Incident report deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/incidents/summary - Incident statistics
+app.get('/api/incidents/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const totalResult = await pool.query(
+      `SELECT COUNT(*) as total FROM incident_reports`
+    );
+
+    const bySeverityResult = await pool.query(
+      `SELECT severity, COUNT(*) as count FROM incident_reports GROUP BY severity ORDER BY 
+       CASE severity WHEN 'critical' THEN 1 WHEN 'severe' THEN 2 WHEN 'moderate' THEN 3 WHEN 'minor' THEN 4 END`
+    );
+
+    const byTypeResult = await pool.query(
+      `SELECT incident_type, COUNT(*) as count FROM incident_reports GROUP BY incident_type ORDER BY count DESC`
+    );
+
+    const followUpResult = await pool.query(
+      `SELECT COUNT(*) as pending_followup FROM incident_reports WHERE follow_up_required = true`
+    );
+
+    const monthlyResult = await pool.query(
+      `SELECT 
+        DATE_TRUNC('month', incident_date)::DATE as month,
+        COUNT(*) as count,
+        COUNT(CASE WHEN severity IN ('critical', 'severe') THEN 1 END) as serious_count
+       FROM incident_reports
+       GROUP BY DATE_TRUNC('month', incident_date)
+       ORDER BY month DESC
+       LIMIT 12`
+    );
+
+    const byClientResult = await pool.query(
+      `SELECT c.id, c.first_name || ' ' || c.last_name as client_name, COUNT(ir.id) as incident_count
+       FROM clients c
+       LEFT JOIN incident_reports ir ON c.id = ir.client_id
+       WHERE ir.id IS NOT NULL
+       GROUP BY c.id, c.first_name, c.last_name
+       ORDER BY incident_count DESC
+       LIMIT 10`
+    );
+
+    res.json({
+      total: totalResult.rows[0].total,
+      bySeverity: bySeverityResult.rows,
+      byType: byTypeResult.rows,
+      pendingFollowUp: followUpResult.rows[0].pending_followup,
+      monthlyTrend: monthlyResult.rows,
+      topClients: byClientResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ---- NOTIFICATIONS ----
 
 // GET /api/notifications - Get notifications for user
