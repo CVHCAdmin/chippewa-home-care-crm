@@ -55,6 +55,15 @@ body {
     position: fixed;
     height: 100vh;
     z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-nav {
+    list-style: none;
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 2rem;
 }
 
 .sidebar-logo {
@@ -99,13 +108,11 @@ body {
 }
 
 .sidebar-user {
-    position: absolute;
-    bottom: 2rem;
-    left: 1rem;
-    right: 1rem;
+    position: relative;
     padding: 1rem;
     background: rgba(0,0,0,0.15);
     border-radius: 8px;
+    margin-top: auto;
 }
 
 .sidebar-user-name {
