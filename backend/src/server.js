@@ -733,6 +733,209 @@ app.put('/api/notifications/preferences', verifyToken, async (req, res) => {
   }
 });
 
+// ---- SCHEDULES ----
+
+// GET /api/schedules/:caregiverId - Get schedules for a specific caregiver
+app.get('/api/schedules/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM schedules WHERE caregiver_id = $1 AND is_active = true ORDER BY day_of_week, date, start_time`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/schedules-all - Get all schedules for calendar view
+app.get('/api/schedules-all', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT s.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
+              c.first_name as client_first_name, c.last_name as client_last_name
+       FROM schedules s
+       JOIN users u ON s.caregiver_id = u.id
+       JOIN clients c ON s.client_id = c.id
+       WHERE s.is_active = true
+       ORDER BY s.day_of_week, s.date, s.start_time`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/schedules - Create new schedule
+app.post('/api/schedules', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes } = req.body;
+    
+    const scheduleId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [scheduleId, caregiverId, clientId, scheduleType, dayOfWeek || null, date || null, startTime, endTime, notes || null]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'schedules', scheduleId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/schedules/:scheduleId - Delete a schedule
+app.delete('/api/schedules/:scheduleId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [req.params.scheduleId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Schedule not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'schedules', req.params.scheduleId, null, result.rows[0]);
+    res.json({ message: 'Schedule deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- CAREGIVER PROFILES ----
+
+// GET /api/caregiver-profile/:caregiverId
+app.get('/api/caregiver-profile/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    let result = await pool.query(
+      `SELECT * FROM caregiver_profiles WHERE caregiver_id = $1`,
+      [req.params.caregiverId]
+    );
+
+    if (result.rows.length === 0) {
+      // Create default profile
+      await pool.query(
+        `INSERT INTO caregiver_profiles (caregiver_id) VALUES ($1)`,
+        [req.params.caregiverId]
+      );
+      result = await pool.query(
+        `SELECT * FROM caregiver_profiles WHERE caregiver_id = $1`,
+        [req.params.caregiverId]
+      );
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/caregiver-profile/:caregiverId
+app.put('/api/caregiver-profile/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const { notes, capabilities, limitations, preferredHours, availableMon, availableTue, availableWed, availableThu, availableFri, availableSat, availableSun } = req.body;
+
+    const result = await pool.query(
+      `UPDATE caregiver_profiles SET
+        notes = COALESCE($1, notes),
+        capabilities = COALESCE($2, capabilities),
+        limitations = COALESCE($3, limitations),
+        preferred_hours = COALESCE($4, preferred_hours),
+        available_mon = COALESCE($5, available_mon),
+        available_tue = COALESCE($6, available_tue),
+        available_wed = COALESCE($7, available_wed),
+        available_thu = COALESCE($8, available_thu),
+        available_fri = COALESCE($9, available_fri),
+        available_sat = COALESCE($10, available_sat),
+        available_sun = COALESCE($11, available_sun),
+        updated_at = NOW()
+       WHERE caregiver_id = $12
+       RETURNING *`,
+      [notes, capabilities, limitations, preferredHours, availableMon, availableTue, availableWed, availableThu, availableFri, availableSat, availableSun, req.params.caregiverId]
+    );
+
+    await auditLog(req.user.id, 'UPDATE', 'caregiver_profiles', req.params.caregiverId, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- CERTIFICATIONS ----
+
+// GET /api/caregivers/:caregiverId/certifications
+app.get('/api/caregivers/:caregiverId/certifications', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM caregiver_certifications WHERE caregiver_id = $1 ORDER BY expiration_date DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/caregivers/:caregiverId/certifications
+app.post('/api/caregivers/:caregiverId/certifications', verifyToken, async (req, res) => {
+  try {
+    const { certificationName, certificationNumber, issuer, issuedDate, expirationDate } = req.body;
+    const certId = uuidv4();
+
+    const result = await pool.query(
+      `INSERT INTO caregiver_certifications (id, caregiver_id, certification_name, certification_number, issuer, issued_date, expiration_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [certId, req.params.caregiverId, certificationName, certificationNumber, issuer, issuedDate, expirationDate]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'caregiver_certifications', certId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/caregivers/certifications/:certId
+app.delete('/api/caregivers/certifications/:certId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM caregiver_certifications WHERE id = $1 RETURNING *`,
+      [req.params.certId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Certification not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'caregiver_certifications', req.params.certId, null, result.rows[0]);
+    res.json({ message: 'Certification deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/users/caregivers/:caregiverId - Get single caregiver
+app.get('/api/users/caregivers/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM users WHERE id = $1 AND role = 'caregiver'`,
+      [req.params.caregiverId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Caregiver not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ---- HEALTH CHECK ----
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });
