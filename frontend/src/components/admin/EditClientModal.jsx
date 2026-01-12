@@ -51,59 +51,44 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
   }, [client, isOpen]);
 
   const handleSave = async (e) => {
-  e.preventDefault();
-  setLoading(true);
-  setMessage('');
+    e.preventDefault();
+    setLoading(true);
+    setMessage('');
 
-  try {
-    // Clean up empty fields - convert empty strings to null for optional fields
-    const cleanedData = {
-      firstName: formData.firstName,
-      lastName: formData.lastName,
-      serviceType: formData.serviceType,
-      // Optional fields - only send if not empty
-      dateOfBirth: formData.dateOfBirth || null,
-      phone: formData.phone || null,
-      email: formData.email || null,
-      address: formData.address || null,
-      city: formData.city || null,
-      state: formData.state || null,
-      zip: formData.zip || null,
-      emergencyContactName: formData.emergencyContactName || null,
-      emergencyContactPhone: formData.emergencyContactPhone || null,
-      emergencyContactRelationship: formData.emergencyContactRelationship || null,
-      medicalNotes: formData.medicalNotes || null,
-      allergies: formData.allergies || null,
-      preferredCaregivers: formData.preferredCaregivers || null
-    };
+    try {
+      // Clean up empty fields - convert empty strings to null for optional fields
+      const cleanedData = {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        serviceType: formData.serviceType,
+        // Optional fields - only send if not empty
+        dateOfBirth: formData.dateOfBirth || null,
+        phone: formData.phone || null,
+        email: formData.email || null,
+        address: formData.address || null,
+        city: formData.city || null,
+        state: formData.state || null,
+        zip: formData.zip || null,
+        emergencyContactName: formData.emergencyContactName || null,
+        emergencyContactPhone: formData.emergencyContactPhone || null,
+        emergencyContactRelationship: formData.emergencyContactRelationship || null,
+        medicalNotes: formData.medicalNotes || null,
+        allergies: formData.allergies || null,
+        preferredCaregivers: formData.preferredCaregivers || null
+      };
 
-    const response = await fetch(`${API_BASE_URL}/api/clients/${client.id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(cleanedData)
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to update client');
-    }
-
-    setMessage('Client updated successfully!');
-    setTimeout(() => {
-      onSuccess();
-      onClose();
-    }, 1500);
-  } catch (error) {
-    setMessage('Error: ' + error.message);
-  } finally {
-    setLoading(false);
-  }
-};
+      const response = await fetch(`${API_BASE_URL}/api/clients/${client.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(cleanedData)
+      });
 
       if (!response.ok) {
-        throw new Error('Failed to update client');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update client');
       }
 
       setMessage('Client updated successfully!');
