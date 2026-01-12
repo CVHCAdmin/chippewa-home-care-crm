@@ -7,6 +7,7 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
     firstName: '',
     lastName: '',
     dateOfBirth: '',
+    gender: '',
     phone: '',
     email: '',
     address: '',
@@ -17,9 +18,15 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
     emergencyContactName: '',
     emergencyContactPhone: '',
     emergencyContactRelationship: '',
-    medicalNotes: '',
+    medicalConditions: '',
+    medications: '',
     allergies: '',
-    preferredCaregivers: ''
+    notes: '',
+    preferredCaregivers: '',
+    doNotUseCaregivers: '',
+    insuranceProvider: '',
+    insuranceId: '',
+    insuranceGroup: ''
   });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
@@ -31,6 +38,7 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
         firstName: client.first_name || '',
         lastName: client.last_name || '',
         dateOfBirth: client.date_of_birth || '',
+        gender: client.gender || '',
         phone: client.phone || '',
         email: client.email || '',
         address: client.address || '',
@@ -41,9 +49,15 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
         emergencyContactName: client.emergency_contact_name || '',
         emergencyContactPhone: client.emergency_contact_phone || '',
         emergencyContactRelationship: client.emergency_contact_relationship || '',
-        medicalNotes: client.medical_notes || '',
+        medicalConditions: client.medical_conditions || '',
+        medications: client.medications || '',
         allergies: client.allergies || '',
-        preferredCaregivers: client.preferred_caregivers || ''
+        notes: client.notes || '',
+        preferredCaregivers: client.preferred_caregivers || '',
+        doNotUseCaregivers: client.do_not_use_caregivers || '',
+        insuranceProvider: client.insurance_provider || '',
+        insuranceId: client.insurance_id || '',
+        insuranceGroup: client.insurance_group || ''
       });
       setDeleteConfirm(false);
       setMessage('');
@@ -56,13 +70,12 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
     setMessage('');
 
     try {
-      // Clean up empty fields - convert empty strings to null for optional fields
       const cleanedData = {
         firstName: formData.firstName,
         lastName: formData.lastName,
         serviceType: formData.serviceType,
-        // Optional fields - only send if not empty
         dateOfBirth: formData.dateOfBirth || null,
+        gender: formData.gender || null,
         phone: formData.phone || null,
         email: formData.email || null,
         address: formData.address || null,
@@ -72,9 +85,15 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
         emergencyContactName: formData.emergencyContactName || null,
         emergencyContactPhone: formData.emergencyContactPhone || null,
         emergencyContactRelationship: formData.emergencyContactRelationship || null,
-        medicalNotes: formData.medicalNotes || null,
+        medicalConditions: formData.medicalConditions || null,
+        medications: formData.medications || null,
         allergies: formData.allergies || null,
-        preferredCaregivers: formData.preferredCaregivers || null
+        notes: formData.notes || null,
+        preferredCaregivers: formData.preferredCaregivers || null,
+        doNotUseCaregivers: formData.doNotUseCaregivers || null,
+        insuranceProvider: formData.insuranceProvider || null,
+        insuranceId: formData.insuranceId || null,
+        insuranceGroup: formData.insuranceGroup || null
       };
 
       const response = await fetch(`${API_BASE_URL}/api/clients/${client.id}`, {
@@ -153,7 +172,7 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
         )}
 
         <form onSubmit={handleSave}>
-          {/* Basic Info */}
+          {/* Basic Information */}
           <div style={{ marginBottom: '1.5rem' }}>
             <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
               Basic Information
@@ -189,10 +208,24 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
               </div>
 
               <div className="form-group">
+                <label>Gender</label>
+                <select
+                  value={formData.gender}
+                  onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                >
+                  <option value="">Select...</option>
+                  <option value="M">Male</option>
+                  <option value="F">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <div className="form-group">
                 <label>Service Type *</label>
                 <select
                   value={formData.serviceType}
                   onChange={(e) => setFormData({ ...formData, serviceType: e.target.value })}
+                  required
                 >
                   <option value="personal_care">Personal Care</option>
                   <option value="companionship">Companionship</option>
@@ -203,7 +236,7 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
             </div>
           </div>
 
-          {/* Contact Info */}
+          {/* Contact Information */}
           <div style={{ marginBottom: '1.5rem' }}>
             <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
               Contact Information
@@ -308,6 +341,26 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
               Medical Information
             </h4>
             <div className="form-group">
+              <label>Medical Conditions</label>
+              <textarea
+                value={formData.medicalConditions}
+                onChange={(e) => setFormData({ ...formData, medicalConditions: e.target.value })}
+                placeholder="List any medical conditions..."
+                rows="2"
+              ></textarea>
+            </div>
+
+            <div className="form-group">
+              <label>Medications</label>
+              <textarea
+                value={formData.medications}
+                onChange={(e) => setFormData({ ...formData, medications: e.target.value })}
+                placeholder="List current medications..."
+                rows="2"
+              ></textarea>
+            </div>
+
+            <div className="form-group">
               <label>Allergies</label>
               <textarea
                 value={formData.allergies}
@@ -320,19 +373,70 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
             <div className="form-group">
               <label>Medical Notes</label>
               <textarea
-                value={formData.medicalNotes}
-                onChange={(e) => setFormData({ ...formData, medicalNotes: e.target.value })}
-                placeholder="Conditions, medications, care instructions..."
+                value={formData.notes}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                placeholder="General medical notes and care instructions..."
                 rows="3"
+              ></textarea>
+            </div>
+          </div>
+
+          {/* Insurance Information */}
+          <div style={{ marginBottom: '1.5rem' }}>
+            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
+              Insurance Information
+            </h4>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label>Insurance Provider</label>
+                <input
+                  type="text"
+                  value={formData.insuranceProvider}
+                  onChange={(e) => setFormData({ ...formData, insuranceProvider: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Policy Number</label>
+                <input
+                  type="text"
+                  value={formData.insuranceId}
+                  onChange={(e) => setFormData({ ...formData, insuranceId: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Group Number</label>
+                <input
+                  type="text"
+                  value={formData.insuranceGroup}
+                  onChange={(e) => setFormData({ ...formData, insuranceGroup: e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Caregiver Preferences */}
+          <div style={{ marginBottom: '1.5rem' }}>
+            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
+              Caregiver Preferences
+            </h4>
+            <div className="form-group">
+              <label>Preferred Caregivers</label>
+              <textarea
+                value={formData.preferredCaregivers}
+                onChange={(e) => setFormData({ ...formData, preferredCaregivers: e.target.value })}
+                placeholder="Any caregiver preferences..."
+                rows="2"
               ></textarea>
             </div>
 
             <div className="form-group">
-              <label>Preferred Caregivers / Notes</label>
+              <label>Do Not Use Caregivers</label>
               <textarea
-                value={formData.preferredCaregivers}
-                onChange={(e) => setFormData({ ...formData, preferredCaregivers: e.target.value })}
-                placeholder="Any caregiver preferences or special notes..."
+                value={formData.doNotUseCaregivers}
+                onChange={(e) => setFormData({ ...formData, doNotUseCaregivers: e.target.value })}
+                placeholder="Any caregivers to avoid..."
                 rows="2"
               ></textarea>
             </div>
