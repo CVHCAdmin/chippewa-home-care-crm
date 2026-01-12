@@ -5,17 +5,25 @@ import { API_BASE_URL } from '../../config';
 const CaregiverProfile = ({ caregiverId, token, onBack }) => {
   const [caregiver, setCaregiver] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [certifications, setCertifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
+  const [editingCerts, setEditingCerts] = useState(false);
+  const [message, setMessage] = useState('');
   const [formData, setFormData] = useState({
     notes: '',
     capabilities: '',
     limitations: '',
     availableDaysOfWeek: [],
     preferredHours: '',
-    certifications: ''
   });
-  const [saveMessage, setSaveMessage] = useState('');
+  const [newCert, setNewCert] = useState({
+    certificationName: '',
+    issuedDate: '',
+    expirationDate: '',
+    certificationNumber: '',
+    issuer: ''
+  });
 
   useEffect(() => {
     loadCaregiverData();
@@ -23,27 +31,31 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
 
   const loadCaregiverData = async () => {
     try {
-      const [caregiverRes, profileRes] = await Promise.all([
+      const [caregiverRes, profileRes, certsRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/users/caregivers/${caregiverId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         }),
         fetch(`${API_BASE_URL}/api/caregiver-profile/${caregiverId}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }),
+        fetch(`${API_BASE_URL}/api/caregivers/${caregiverId}/certifications`, {
           headers: { 'Authorization': `Bearer ${token}` }
         })
       ]);
 
       const caregiverData = await caregiverRes.json();
       const profileData = await profileRes.json();
+      const certsData = await certsRes.json();
 
       setCaregiver(caregiverData);
       setProfile(profileData);
+      setCertifications(Array.isArray(certsData) ? certsData : []);
       setFormData({
         notes: profileData?.notes || '',
         capabilities: profileData?.capabilities || '',
         limitations: profileData?.limitations || '',
         availableDaysOfWeek: profileData?.available_days_of_week || [],
         preferredHours: profileData?.preferred_hours || '',
-        certifications: profileData?.certifications || ''
       });
     } catch (error) {
       console.error('Failed to load caregiver data:', error);
@@ -52,7 +64,7 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
     }
   };
 
-  const handleSave = async () => {
+  const handleSaveProfile = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/caregiver-profile/${caregiverId}`, {
         method: 'PATCH',
@@ -65,12 +77,67 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
 
       if (!response.ok) throw new Error('Failed to save');
 
-      setSaveMessage('✓ Profile updated');
-      setTimeout(() => setSaveMessage(''), 2000);
+      setMessage('Profile updated');
+      setTimeout(() => setMessage(''), 2000);
       setEditing(false);
       loadCaregiverData();
     } catch (error) {
-      alert('Failed to save: ' + error.message);
+      setMessage('Error: ' + error.message);
+    }
+  };
+
+  const handleAddCertification = async (e) => {
+    e.preventDefault();
+
+    if (!newCert.certificationName || !newCert.issuedDate || !newCert.expirationDate) {
+      setMessage('Certification name, issued date, and expiration date are required');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/caregivers/${caregiverId}/certifications`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(newCert)
+      });
+
+      if (!response.ok) throw new Error('Failed to add certification');
+
+      setMessage('Certification added');
+      setTimeout(() => setMessage(''), 2000);
+      setNewCert({
+        certificationName: '',
+        issuedDate: '',
+        expirationDate: '',
+        certificationNumber: '',
+        issuer: ''
+      });
+      setEditingCerts(false);
+      loadCaregiverData();
+    } catch (error) {
+      setMessage('Error: ' + error.message);
+    }
+  };
+
+  const handleDeleteCertification = async (certId) => {
+    if (!window.confirm('Delete this certification?')) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/certifications/${certId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!response.ok) throw new Error('Failed to delete');
+
+      setMessage('Certification deleted');
+      setTimeout(() => setMessage(''), 2000);
+      loadCaregiverData();
+    } catch (error) {
+      setMessage('Error: ' + error.message);
     }
   };
 
@@ -83,6 +150,19 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
         return { ...prev, availableDaysOfWeek: [...days, day].sort() };
       }
     });
+  };
+
+  const isExpiringSoon = (expirationDate) => {
+    const expDate = new Date(expirationDate);
+    const today = new Date();
+    const daysUntilExpire = Math.floor((expDate - today) / (1000 * 60 * 60 * 24));
+    return daysUntilExpire < 90 && daysUntilExpire >= 0;
+  };
+
+  const isExpired = (expirationDate) => {
+    const expDate = new Date(expirationDate);
+    const today = new Date();
+    return expDate < today;
   };
 
   const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -102,15 +182,21 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
   return (
     <div>
       <div className="page-header">
-        <button className="btn btn-secondary" onClick={onBack}>← Back</button>
-        <h2>👔 {caregiver.first_name} {caregiver.last_name}</h2>
+        <button className="btn btn-secondary" onClick={onBack}>Back</button>
+        <h2>{caregiver.first_name} {caregiver.last_name}</h2>
         <button 
           className="btn btn-primary"
           onClick={() => setEditing(!editing)}
         >
-          {editing ? '✓ Done' : '✏️ Edit'}
+          {editing ? 'Done' : 'Edit'}
         </button>
       </div>
+
+      {message && (
+        <div className={`alert ${message.includes('Error') ? 'alert-error' : 'alert-success'}`}>
+          {message}
+        </div>
+      )}
 
       {/* Basic Info */}
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))' }}>
@@ -124,12 +210,137 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
 
         <div className="card">
           <h3>Status</h3>
-          <p><strong>Active:</strong> {caregiver.is_active ? '✓ Yes' : '✗ No'}</p>
-          <p><strong>Certifications:</strong> {caregiver.certifications || 'None listed'}</p>
+          <p><strong>Active:</strong> {caregiver.is_active ? 'Yes' : 'No'}</p>
         </div>
       </div>
 
-      {/* Profile Details */}
+      {/* Certifications Section */}
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', paddingBottom: '1rem', borderBottom: '1px solid #ddd' }}>
+          <h3 style={{ margin: 0 }}>Certifications & Credentials</h3>
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => setEditingCerts(!editingCerts)}
+          >
+            {editingCerts ? 'Cancel' : 'Add Certification'}
+          </button>
+        </div>
+
+        {editingCerts && (
+          <form onSubmit={handleAddCertification} style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid #ddd' }}>
+            <h4>Add New Certification</h4>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label>Certification Name *</label>
+                <input
+                  type="text"
+                  value={newCert.certificationName}
+                  onChange={(e) => setNewCert({ ...newCert, certificationName: e.target.value })}
+                  placeholder="e.g., CNA, LPN, RN, CPR, First Aid"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Issuer / Organization</label>
+                <input
+                  type="text"
+                  value={newCert.issuer}
+                  onChange={(e) => setNewCert({ ...newCert, issuer: e.target.value })}
+                  placeholder="e.g., American Red Cross"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Certification Number</label>
+                <input
+                  type="text"
+                  value={newCert.certificationNumber}
+                  onChange={(e) => setNewCert({ ...newCert, certificationNumber: e.target.value })}
+                  placeholder="License or cert number"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Issued Date *</label>
+                <input
+                  type="date"
+                  value={newCert.issuedDate}
+                  onChange={(e) => setNewCert({ ...newCert, issuedDate: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Expiration Date *</label>
+                <input
+                  type="date"
+                  value={newCert.expirationDate}
+                  onChange={(e) => setNewCert({ ...newCert, expirationDate: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary">Add Certification</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditingCerts(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
+
+        {certifications.length === 0 ? (
+          <p style={{ color: '#999', textAlign: 'center', padding: '1rem' }}>No certifications recorded.</p>
+        ) : (
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            {certifications.map(cert => {
+              const expired = isExpired(cert.expiration_date);
+              const expiringSoon = isExpiringSoon(cert.expiration_date);
+
+              return (
+                <div
+                  key={cert.id}
+                  style={{
+                    padding: '1rem',
+                    background: expired ? '#fff3cd' : expiringSoon ? '#fff9e6' : '#f9f9f9',
+                    border: `1px solid ${expired ? '#ffc107' : expiringSoon ? '#ffeb3b' : '#ddd'}`,
+                    borderRadius: '6px'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
+                    <div>
+                      <strong>{cert.certification_name}</strong>
+                      {cert.issuer && <div style={{ fontSize: '0.85rem', color: '#666' }}>Issuer: {cert.issuer}</div>}
+                      {cert.certification_number && <div style={{ fontSize: '0.85rem', color: '#666' }}>Cert #: {cert.certification_number}</div>}
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      {expired && <span className="badge" style={{ background: '#dc3545' }}>EXPIRED</span>}
+                      {expiringSoon && !expired && <span className="badge" style={{ background: '#ffc107', color: 'black' }}>EXPIRING SOON</span>}
+                      <button
+                        className="btn btn-sm btn-danger"
+                        onClick={() => handleDeleteCertification(cert.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
+                    <div>
+                      <strong>Issued:</strong> {new Date(cert.issued_date).toLocaleDateString()}
+                    </div>
+                    <div>
+                      <strong>Expires:</strong> {new Date(cert.expiration_date).toLocaleDateString()}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Profile Editing */}
       {editing ? (
         <div className="card card-form">
           <h3>Edit Caregiver Profile</h3>
@@ -182,16 +393,6 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
           </div>
 
           <div className="form-group">
-            <label>Certifications</label>
-            <input
-              type="text"
-              value={formData.certifications}
-              onChange={(e) => setFormData({ ...formData, certifications: e.target.value })}
-              placeholder="e.g., CNA, CPR, First Aid..."
-            />
-          </div>
-
-          <div className="form-group">
             <label>General Notes</label>
             <textarea
               value={formData.notes}
@@ -202,11 +403,9 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
           </div>
 
           <div className="form-actions">
-            <button className="btn btn-primary" onClick={handleSave}>Save Changes</button>
+            <button className="btn btn-primary" onClick={handleSaveProfile}>Save Changes</button>
             <button className="btn btn-secondary" onClick={() => setEditing(false)}>Cancel</button>
           </div>
-
-          {saveMessage && <p className="success-message">{saveMessage}</p>}
         </div>
       ) : (
         <>
@@ -239,13 +438,6 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
               )}
             </div>
           </div>
-
-          {formData.certifications && (
-            <div className="card">
-              <h3>Certifications</h3>
-              <p>{formData.certifications}</p>
-            </div>
-          )}
 
           {formData.notes && (
             <div className="card">
