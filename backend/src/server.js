@@ -4,6 +4,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
+const auditLogger = require('./middleware/auditLogger');
+const authorizeAdmin = require('./middleware/authorizeAdmin');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
@@ -32,6 +34,7 @@ const limiter = rateLimit({
   max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
+app.use(auditLogger); // IMPORTANT: Must be before routes
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -631,7 +634,11 @@ app.put('/api/notifications/preferences', verifyToken, async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });
 });
-
+// ---- NEW ADMIN FEATURES ----
+app.use('/api/reports', verifyToken, require('./routes/reports'));
+app.use('/api/payroll', verifyToken, require('./routes/payroll'));
+app.use('/api/audit-logs', verifyToken, require('./routes/auditLogs'));
+app.use('/api/users', verifyToken, require('./routes/users'));
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err);
