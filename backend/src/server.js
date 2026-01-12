@@ -1547,11 +1547,10 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
         COUNT(DISTINCT s.id) as total_shifts,
         COALESCE(AVG(pr.rating), 0) as avg_satisfaction
        FROM time_entries te
-       FULL OUTER JOIN invoices i ON te.caregiver_id = i.caregiver_id
-       FULL OUTER JOIN schedules s ON te.schedule_id = s.id
-       FULL OUTER JOIN performance_reviews pr ON te.caregiver_id = pr.caregiver_id
-       WHERE (te.shift_date >= $1 OR i.created_at >= $1 OR s.shift_date >= $1)
-       AND (te.shift_date <= $2 OR i.created_at <= $2 OR s.shift_date <= $2)`,
+       LEFT JOIN invoices i ON te.client_id = i.client_id AND i.created_at >= $1 AND i.created_at <= $2
+       LEFT JOIN schedules s ON te.schedule_id = s.id AND s.shift_date >= $1 AND s.shift_date <= $2
+       LEFT JOIN performance_reviews pr ON te.caregiver_id = pr.caregiver_id
+       WHERE te.shift_date >= $1 AND te.shift_date <= $2`,
       [startDate, endDate]
     );
 
@@ -1562,11 +1561,11 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
         u.last_name,
         COALESCE(SUM(te.hours_worked), 0) as total_hours,
         COALESCE(SUM(i.total), 0) as total_revenue,
-        COUNT(DISTINCT i.client_id) as clients_served,
+        COUNT(DISTINCT te.client_id) as clients_served,
         COALESCE(AVG(pr.rating), 0) as avg_satisfaction
        FROM users u
        LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.shift_date >= $1 AND te.shift_date <= $2
-       LEFT JOIN invoices i ON u.id = i.caregiver_id AND i.created_at >= $1 AND i.created_at <= $2
+       LEFT JOIN invoices i ON te.client_id = i.client_id AND i.created_at >= $1 AND i.created_at <= $2
        LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id
        WHERE u.role = 'caregiver'
        GROUP BY u.id, u.first_name, u.last_name
@@ -1583,7 +1582,7 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
         cp.service_type,
         COALESCE(SUM(te.hours_worked), 0) as total_hours,
         COALESCE(SUM(i.total), 0) as total_cost,
-        COUNT(DISTINCT i.caregiver_id) as caregiver_count
+        COUNT(DISTINCT te.caregiver_id) as caregiver_count
        FROM clients c
        LEFT JOIN care_plans cp ON c.id = cp.client_id
        LEFT JOIN time_entries te ON c.id = te.client_id AND te.shift_date >= $1 AND te.shift_date <= $2
@@ -1616,10 +1615,12 @@ app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
 
     let whereClause = `WHERE te.shift_date >= $1 AND te.shift_date <= $2`;
     const params = [startDate, endDate];
+    let paramIndex = 3;
 
     if (caregiverId) {
-      whereClause += ` AND te.caregiver_id = $3`;
+      whereClause += ` AND te.caregiver_id = $${paramIndex}`;
       params.push(caregiverId);
+      paramIndex++;
     }
 
     const hoursByWeekResult = await pool.query(
@@ -1635,13 +1636,14 @@ app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
 
     const hoursByTypeResult = await pool.query(
       `SELECT 
-        cp.service_type,
+        COALESCE(cp.service_type, 'Unassigned') as service_type,
         SUM(CAST(te.hours_worked AS DECIMAL)) as hours,
         ROUND(SUM(CAST(te.hours_worked AS DECIMAL)) * 100.0 / NULLIF((SELECT SUM(CAST(hours_worked AS DECIMAL)) FROM time_entries WHERE shift_date >= $1 AND shift_date <= $2), 0), 1) as percentage
        FROM time_entries te
-       LEFT JOIN care_plans cp ON te.client_id = cp.client_id
+       LEFT JOIN clients c ON te.client_id = c.id
+       LEFT JOIN care_plans cp ON c.id = cp.client_id
        ${whereClause}
-       GROUP BY cp.service_type
+       GROUP BY COALESCE(cp.service_type, 'Unassigned')
        ORDER BY hours DESC`,
       params
     );
@@ -1651,15 +1653,15 @@ app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
         u.id,
         u.first_name,
         u.last_name,
-        SUM(CAST(CASE WHEN te.hours_worked <= 40 THEN te.hours_worked ELSE 40 END AS DECIMAL)) as regular_hours,
-        SUM(CAST(CASE WHEN te.hours_worked > 40 THEN te.hours_worked - 40 ELSE 0 END AS DECIMAL)) as overtime_hours,
-        SUM(CAST(te.hours_worked AS DECIMAL)) as total_hours
+        COALESCE(SUM(CAST(CASE WHEN te.hours_worked <= 40 THEN te.hours_worked ELSE 40 END AS DECIMAL)), 0) as regular_hours,
+        COALESCE(SUM(CAST(CASE WHEN te.hours_worked > 40 THEN te.hours_worked - 40 ELSE 0 END AS DECIMAL)), 0) as overtime_hours,
+        COALESCE(SUM(CAST(te.hours_worked AS DECIMAL)), 0) as total_hours
        FROM users u
        LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.shift_date >= $1 AND te.shift_date <= $2
        WHERE u.role = 'caregiver'
        GROUP BY u.id, u.first_name, u.last_name
        ORDER BY total_hours DESC`,
-      params
+      [startDate, endDate]
     );
 
     res.json({
@@ -1682,15 +1684,15 @@ app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res)
         u.id,
         u.first_name,
         u.last_name,
-        ROUND(AVG(pr.rating), 2) as avg_rating,
+        COALESCE(ROUND(AVG(pr.rating), 2), 0) as avg_rating,
         COUNT(DISTINCT pr.id) as rating_count,
-        ROUND(100.0 * COUNT(DISTINCT s.id FILTER (WHERE s.status = 'completed')) / NULLIF(COUNT(DISTINCT s.id), 0), 1) as attendance_rate,
+        ROUND(100.0 * COUNT(DISTINCT s.id) FILTER (WHERE s.status = 'completed') / NULLIF(COUNT(DISTINCT s.id), 0), 1) as attendance_rate,
         COUNT(DISTINCT ir.id) as incident_count,
-        COALESCE(SUM(CAST(tr.CAST(completion_date IS NOT NULL AS INT) AS DECIMAL)), 0) as training_hours,
+        COUNT(DISTINCT tr.id) as training_hours,
         CASE 
-          WHEN AVG(pr.rating) >= 4.5 THEN 'Excellent'
-          WHEN AVG(pr.rating) >= 3.5 THEN 'Good'
-          WHEN AVG(pr.rating) >= 2.5 THEN 'Fair'
+          WHEN COALESCE(AVG(pr.rating), 0) >= 4.5 THEN 'Excellent'
+          WHEN COALESCE(AVG(pr.rating), 0) >= 3.5 THEN 'Good'
+          WHEN COALESCE(AVG(pr.rating), 0) >= 2.5 THEN 'Fair'
           ELSE 'Needs Improvement'
         END as status
        FROM users u
@@ -1752,9 +1754,9 @@ app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => 
       `SELECT 
         c.id,
         c.first_name || ' ' || c.last_name as client_name,
-        SUM(i.total) as total_revenue,
+        COALESCE(SUM(i.total), 0) as total_revenue,
         COUNT(DISTINCT i.id) as invoice_count,
-        ROUND(AVG(i.total), 2) as avg_invoice
+        COALESCE(ROUND(AVG(i.total), 2), 0) as avg_invoice
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
        WHERE i.created_at >= $1 AND i.created_at <= $2
@@ -1765,15 +1767,15 @@ app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => 
 
     const revenueByServiceResult = await pool.query(
       `SELECT 
-        cp.service_type,
-        SUM(i.total) as total_revenue,
-        COUNT(i.id) as invoice_count,
+        COALESCE(cp.service_type, 'Unassigned') as service_type,
+        COALESCE(SUM(i.total), 0) as total_revenue,
+        COUNT(DISTINCT i.id) as invoice_count,
         COUNT(DISTINCT i.client_id) as client_count
        FROM invoices i
        LEFT JOIN clients c ON i.client_id = c.id
-       LEFT JOIN care_plans cp ON c.id = cp.client_id
+       LEFT JOIN care_plans cp ON c.id = cp.client_id AND cp.start_date <= i.created_at::DATE AND (cp.end_date IS NULL OR cp.end_date >= i.created_at::DATE)
        WHERE i.created_at >= $1 AND i.created_at <= $2
-       GROUP BY cp.service_type
+       GROUP BY COALESCE(cp.service_type, 'Unassigned')
        ORDER BY total_revenue DESC`,
       [startDate, endDate]
     );
@@ -1781,9 +1783,9 @@ app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => 
     const monthlyRevenueResult = await pool.query(
       `SELECT 
         DATE_TRUNC('month', i.created_at)::DATE as month,
-        SUM(i.total) as total_revenue,
-        COUNT(i.id) as invoice_count,
-        ROUND(AVG(i.total), 2) as avg_invoice
+        COALESCE(SUM(i.total), 0) as total_revenue,
+        COUNT(DISTINCT i.id) as invoice_count,
+        COALESCE(ROUND(AVG(i.total), 2), 0) as avg_invoice
        FROM invoices i
        WHERE i.created_at >= $1 AND i.created_at <= $2
        GROUP BY DATE_TRUNC('month', i.created_at)
