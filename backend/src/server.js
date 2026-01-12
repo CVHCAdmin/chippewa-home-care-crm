@@ -34,7 +34,7 @@ const limiter = rateLimit({
   max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
-app.use(auditLogger(pool));
+
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -44,7 +44,7 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
-
+app.use(auditLogger(pool));
 // Test connection
 pool.query('SELECT NOW()', (err, res) => {
   if (err) {
