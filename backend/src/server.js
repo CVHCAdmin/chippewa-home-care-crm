@@ -1589,6 +1589,206 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
   }
 });
 
+// ---- ABSENCE MANAGEMENT ----
+
+// POST /api/absences - Record new absence
+app.post('/api/absences', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, absenceDate, absenceType, reason, duration, status } = req.body;
+
+    if (!caregiverId || !absenceDate || !absenceType) {
+      return res.status(400).json({ error: 'caregiverId, absenceDate, and absenceType are required' });
+    }
+
+    const absenceId = uuidv4();
+    const userRole = req.user.role;
+
+    // If admin submitting for caregiver, set status to pending. If caregiver submitting own request, pending. If admin submitting on behalf, can be approved.
+    const finalStatus = status || 'pending';
+
+    const result = await pool.query(
+      `INSERT INTO absences (id, caregiver_id, absence_date, absence_type, reason, duration_hours, status, submitted_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [absenceId, caregiverId, absenceDate, absenceType, reason || null, duration || null, finalStatus, req.user.id]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'absences', absenceId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/absences - List all absences with filtering
+app.get('/api/absences', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { status, absenceType, startDate, endDate } = req.query;
+
+    let query = `
+      SELECT a.*, u.first_name, u.last_name
+      FROM absences a
+      JOIN users u ON a.caregiver_id = u.id
+      WHERE 1=1
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (status) {
+      query += ` AND a.status = $${paramIndex}`;
+      params.push(status);
+      paramIndex++;
+    }
+
+    if (absenceType) {
+      query += ` AND a.absence_type = $${paramIndex}`;
+      params.push(absenceType);
+      paramIndex++;
+    }
+
+    if (startDate) {
+      query += ` AND a.absence_date >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      query += ` AND a.absence_date <= $${paramIndex}`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY a.absence_date DESC`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/absences/caregiver/:caregiverId - Get caregiver absence history
+app.get('/api/absences/caregiver/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM absences 
+       WHERE caregiver_id = $1 
+       ORDER BY absence_date DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/absences/:id - Approve or deny absence
+app.patch('/api/absences/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { status, approvedBy, notes } = req.body;
+
+    if (!status) {
+      return res.status(400).json({ error: 'status is required (approved or denied)' });
+    }
+
+    const result = await pool.query(
+      `UPDATE absences SET 
+        status = $1,
+        approved_by = COALESCE($2, $3),
+        approval_notes = $4,
+        approval_date = CASE WHEN $1 IN ('approved', 'denied') THEN NOW() ELSE approval_date END,
+        updated_at = NOW()
+       WHERE id = $5
+       RETURNING *`,
+      [status, approvedBy, req.user.id, notes || null, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Absence not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'absences', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/absences/:id - Remove absence record
+app.delete('/api/absences/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM absences WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Absence not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'absences', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Absence record deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/absences/summary - Absence statistics and trends
+app.get('/api/absences/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const summaryResult = await pool.query(
+      `SELECT 
+        COUNT(*) as total_absences,
+        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_approvals,
+        COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_absences,
+        COUNT(CASE WHEN status = 'denied' THEN 1 END) as denied_absences,
+        COUNT(CASE WHEN absence_type = 'no_show' THEN 1 END) as no_shows,
+        COUNT(CASE WHEN absence_type = 'call_out' THEN 1 END) as call_outs,
+        COUNT(CASE WHEN absence_type = 'sick' THEN 1 END) as sick_leave,
+        COUNT(CASE WHEN absence_type = 'personal' THEN 1 END) as personal_days,
+        COUNT(CASE WHEN absence_type = 'pto' THEN 1 END) as pto
+       FROM absences`
+    );
+
+    const caregiverStatsResult = await pool.query(
+      `SELECT 
+        u.id,
+        u.first_name || ' ' || u.last_name as caregiver_name,
+        COUNT(a.id) as total_absences,
+        COUNT(CASE WHEN a.absence_type = 'no_show' THEN 1 END) as no_shows,
+        COUNT(CASE WHEN a.absence_type = 'call_out' THEN 1 END) as call_outs,
+        COUNT(CASE WHEN a.absence_type = 'sick' THEN 1 END) as sick_days,
+        COUNT(CASE WHEN a.status = 'pending' THEN 1 END) as pending_approvals
+       FROM users u
+       LEFT JOIN absences a ON u.id = a.caregiver_id
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name
+       HAVING COUNT(a.id) > 0
+       ORDER BY total_absences DESC`
+    );
+
+    const monthlyTrendResult = await pool.query(
+      `SELECT 
+        DATE_TRUNC('month', absence_date)::DATE as month,
+        COUNT(*) as absence_count,
+        COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_count
+       FROM absences
+       GROUP BY DATE_TRUNC('month', absence_date)
+       ORDER BY month DESC
+       LIMIT 6`
+    );
+
+    res.json({
+      summary: summaryResult.rows[0],
+      caregiverStats: caregiverStatsResult.rows,
+      monthlyTrend: monthlyTrendResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // NOTIFICATIONS
 app.post('/api/notifications/subscribe', verifyToken, async (req, res) => {
   try {
