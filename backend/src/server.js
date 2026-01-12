@@ -1387,7 +1387,7 @@ app.get('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/reports/profitability - Profit margins and analysis
+// GET /api/reports/profitability - Profit margins and analysis (including expenses)
 app.get('/api/reports/profitability', verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
@@ -1395,9 +1395,12 @@ app.get('/api/reports/profitability', verifyToken, requireAdmin, async (req, res
         c.id,
         c.first_name || ' ' || c.last_name as client_name,
         SUM(i.total) as total_billed,
-        SUM(pli.gross_amount) as total_cost,
-        (SUM(i.total) - SUM(pli.gross_amount)) as profit,
-        ROUND((((SUM(i.total) - SUM(pli.gross_amount)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as profit_margin_percent,
+        SUM(pli.gross_amount) as payroll_cost,
+        COALESCE((SELECT SUM(amount) FROM expenses), 0) as total_company_expenses,
+        (SUM(i.total) - SUM(pli.gross_amount)) as gross_profit,
+        (SUM(i.total) - SUM(pli.gross_amount) - COALESCE((SELECT SUM(amount) FROM expenses), 0)) as net_profit,
+        ROUND((((SUM(i.total) - SUM(pli.gross_amount)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as gross_margin_percent,
+        ROUND((((SUM(i.total) - SUM(pli.gross_amount) - COALESCE((SELECT SUM(amount) FROM expenses), 0)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as net_margin_percent,
         COUNT(DISTINCT i.id) as invoice_count
        FROM clients c
        LEFT JOIN invoices i ON c.id = i.client_id
@@ -1405,7 +1408,7 @@ app.get('/api/reports/profitability', verifyToken, requireAdmin, async (req, res
        LEFT JOIN payroll_line_items pli ON ili.caregiver_id = pli.caregiver_id
        GROUP BY c.id, c.first_name, c.last_name
        HAVING SUM(i.total) > 0
-       ORDER BY profit DESC`
+       ORDER BY net_profit DESC`
     );
     res.json(result.rows);
   } catch (error) {
@@ -1503,21 +1506,26 @@ app.get('/api/reports/service-analysis', verifyToken, requireAdmin, async (req, 
   }
 });
 
-// GET /api/reports/payroll-vs-billing - Cost vs Revenue comparison
+// GET /api/reports/payroll-vs-billing - Cost vs Revenue comparison (with expenses)
 app.get('/api/reports/payroll-vs-billing', verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT 
-        DATE_TRUNC('month', COALESCE(i.billing_period_end, p.pay_period_end))::DATE as period,
+        DATE_TRUNC('month', COALESCE(i.billing_period_end, p.pay_period_end, e.expense_date))::DATE as period,
         SUM(i.total) as total_billed,
         SUM(p.gross_pay) as total_payroll_cost,
         SUM(p.taxes) as payroll_taxes,
+        COALESCE(SUM(e.amount), 0) as total_expenses,
         (SUM(i.total) - SUM(p.gross_pay)) as gross_profit,
-        ROUND((((SUM(i.total) - SUM(p.gross_pay)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as profit_margin_percent,
+        (SUM(i.total) - SUM(p.gross_pay) - COALESCE(SUM(e.amount), 0)) as net_profit,
+        ROUND((((SUM(i.total) - SUM(p.gross_pay)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as gross_margin_percent,
+        ROUND((((SUM(i.total) - SUM(p.gross_pay) - COALESCE(SUM(e.amount), 0)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as net_margin_percent,
         COUNT(DISTINCT i.id) as invoice_count,
-        COUNT(DISTINCT p.id) as payroll_count
+        COUNT(DISTINCT p.id) as payroll_count,
+        COUNT(DISTINCT e.id) as expense_count
        FROM invoices i
        FULL OUTER JOIN payroll p ON DATE_TRUNC('month', i.billing_period_end) = DATE_TRUNC('month', p.pay_period_end)
+       FULL OUTER JOIN expenses e ON DATE_TRUNC('month', i.billing_period_end) = DATE_TRUNC('month', e.expense_date)
        GROUP BY period
        ORDER BY period DESC`
     );
@@ -1527,7 +1535,7 @@ app.get('/api/reports/payroll-vs-billing', verifyToken, requireAdmin, async (req
   }
 });
 
-// GET /api/reports/dashboard - Overall business metrics
+// GET /api/reports/dashboard - Overall business metrics (with expenses and net profit)
 app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) => {
   try {
     const summaryResult = await pool.query(
@@ -1537,8 +1545,10 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
         (SELECT SUM(total) FROM invoices WHERE payment_status = 'paid') as total_revenue,
         (SELECT SUM(net_pay) FROM payroll WHERE status = 'paid') as total_payroll_paid,
         (SELECT SUM(total) FROM invoices WHERE payment_status = 'pending') as pending_revenue,
+        (SELECT SUM(amount) FROM expenses) as total_expenses,
         (SELECT COUNT(*) FROM schedules WHERE is_active = true) as active_schedules,
-        (SELECT AVG(NULLIF((billing_period_end::date - billing_period_start::date), 0)) FROM invoices) as avg_billing_period_days
+        (SELECT AVG(NULLIF((billing_period_end::date - billing_period_start::date), 0)) FROM invoices) as avg_billing_period_days,
+        ((SELECT SUM(total) FROM invoices WHERE payment_status = 'paid') - (SELECT SUM(net_pay) FROM payroll WHERE status = 'paid') - COALESCE((SELECT SUM(amount) FROM expenses), 0)) as net_profit
       `
     );
 
@@ -1546,6 +1556,7 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
       `SELECT 
         DATE_TRUNC('month', i.created_at)::DATE as month,
         SUM(i.total) as revenue,
+        COALESCE((SELECT SUM(amount) FROM expenses WHERE DATE_TRUNC('month', expense_date) = DATE_TRUNC('month', i.created_at)), 0) as expenses,
         COUNT(*) as invoice_count
        FROM invoices i
        GROUP BY DATE_TRUNC('month', i.created_at)
@@ -1578,11 +1589,22 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
        LIMIT 5`
     );
 
+    const expensesByCategory = await pool.query(
+      `SELECT 
+        category,
+        COUNT(*) as count,
+        SUM(amount) as total
+       FROM expenses
+       GROUP BY category
+       ORDER BY total DESC`
+    );
+
     res.json({
       summary: summaryResult.rows[0],
       monthlyTrend: monthlyTrendResult.rows,
       topClients: topClientsResult.rows,
-      topCaregivers: topCaregiversResult.rows
+      topCaregivers: topCaregiversResult.rows,
+      expensesByCategory: expensesByCategory.rows
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1997,7 +2019,536 @@ app.get('/api/caregivers/available', verifyToken, async (req, res) => {
   }
 });
 
-// NOTIFICATIONS
+// ---- EXPENSES ----
+
+// POST /api/expenses - Record new expense
+app.post('/api/expenses', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { expenseDate, category, description, amount, paymentMethod, notes, receiptUrl } = req.body;
+
+    if (!expenseDate || !category || !amount) {
+      return res.status(400).json({ error: 'expenseDate, category, and amount are required' });
+    }
+
+    const expenseId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO expenses (id, expense_date, category, description, amount, payment_method, notes, receipt_url, submitted_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [expenseId, expenseDate, category, description || null, amount, paymentMethod || null, notes || null, receiptUrl || null, req.user.id]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'expenses', expenseId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/expenses - List expenses with filtering
+app.get('/api/expenses', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { category, startDate, endDate, paymentMethod } = req.query;
+
+    let query = `SELECT * FROM expenses WHERE 1=1`;
+    const params = [];
+    let paramIndex = 1;
+
+    if (category) {
+      query += ` AND category = $${paramIndex}`;
+      params.push(category);
+      paramIndex++;
+    }
+
+    if (startDate) {
+      query += ` AND expense_date >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      query += ` AND expense_date <= $${paramIndex}`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
+    if (paymentMethod) {
+      query += ` AND payment_method = $${paramIndex}`;
+      params.push(paymentMethod);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY expense_date DESC`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/expenses/:id - Get expense details
+app.get('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM expenses WHERE id = $1`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/expenses/:id - Update expense
+app.put('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { expenseDate, category, description, amount, paymentMethod, notes, receiptUrl } = req.body;
+
+    const result = await pool.query(
+      `UPDATE expenses SET
+        expense_date = COALESCE($1, expense_date),
+        category = COALESCE($2, category),
+        description = COALESCE($3, description),
+        amount = COALESCE($4, amount),
+        payment_method = COALESCE($5, payment_method),
+        notes = COALESCE($6, notes),
+        receipt_url = COALESCE($7, receipt_url),
+        updated_at = NOW()
+       WHERE id = $8
+       RETURNING *`,
+      [expenseDate, category, description, amount, paymentMethod, notes, receiptUrl, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'expenses', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/expenses/:id - Delete expense
+app.delete('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM expenses WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'expenses', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Expense deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/expenses/summary - Expense statistics by category
+app.get('/api/expenses/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const totalResult = await pool.query(
+      `SELECT 
+        SUM(amount) as total_expenses,
+        COUNT(*) as expense_count,
+        AVG(amount) as average_expense
+       FROM expenses`
+    );
+
+    const categoryResult = await pool.query(
+      `SELECT 
+        category,
+        COUNT(*) as count,
+        SUM(amount) as total,
+        AVG(amount) as average
+       FROM expenses
+       GROUP BY category
+       ORDER BY total DESC`
+    );
+
+    const monthlyResult = await pool.query(
+      `SELECT 
+        DATE_TRUNC('month', expense_date)::DATE as month,
+        SUM(amount) as total
+       FROM expenses
+       GROUP BY DATE_TRUNC('month', expense_date)
+       ORDER BY month DESC
+       LIMIT 12`
+    );
+
+    res.json({
+      total: totalResult.rows[0],
+      byCategory: categoryResult.rows,
+      byMonth: monthlyResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- CARE PLANS ----
+
+// GET /api/care-plans - Get all care plans
+app.get('/api/care-plans', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT cp.*, c.first_name || ' ' || c.last_name as client_name
+       FROM care_plans cp
+       JOIN clients c ON cp.client_id = c.id
+       ORDER BY cp.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/care-plans/:clientId - Get care plans for specific client
+app.get('/api/care-plans/:clientId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM care_plans 
+       WHERE client_id = $1 
+       ORDER BY start_date DESC`,
+      [req.params.clientId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/care-plans - Create new care plan
+app.post('/api/care-plans', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const {
+      clientId, serviceType, serviceDescription, frequency, careGoals,
+      specialInstructions, precautions, medicationNotes, mobilityNotes,
+      dietaryNotes, communicationNotes, startDate, endDate
+    } = req.body;
+
+    if (!clientId || !serviceType) {
+      return res.status(400).json({ error: 'clientId and serviceType are required' });
+    }
+
+    const planId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO care_plans (
+        id, client_id, service_type, service_description, frequency,
+        care_goals, special_instructions, precautions, medication_notes,
+        mobility_notes, dietary_notes, communication_notes, start_date, end_date, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING *`,
+      [
+        planId, clientId, serviceType, serviceDescription || null, frequency || null,
+        careGoals || null, specialInstructions || null, precautions || null,
+        medicationNotes || null, mobilityNotes || null, dietaryNotes || null,
+        communicationNotes || null, startDate || null, endDate || null, req.user.id
+      ]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'care_plans', planId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/care-plans/:id - Update care plan
+app.put('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const {
+      serviceType, serviceDescription, frequency, careGoals,
+      specialInstructions, precautions, medicationNotes, mobilityNotes,
+      dietaryNotes, communicationNotes, startDate, endDate
+    } = req.body;
+
+    const result = await pool.query(
+      `UPDATE care_plans SET
+        service_type = COALESCE($1, service_type),
+        service_description = COALESCE($2, service_description),
+        frequency = COALESCE($3, frequency),
+        care_goals = COALESCE($4, care_goals),
+        special_instructions = COALESCE($5, special_instructions),
+        precautions = COALESCE($6, precautions),
+        medication_notes = COALESCE($7, medication_notes),
+        mobility_notes = COALESCE($8, mobility_notes),
+        dietary_notes = COALESCE($9, dietary_notes),
+        communication_notes = COALESCE($10, communication_notes),
+        start_date = COALESCE($11, start_date),
+        end_date = COALESCE($12, end_date),
+        updated_at = NOW()
+       WHERE id = $13
+       RETURNING *`,
+      [
+        serviceType, serviceDescription, frequency, careGoals,
+        specialInstructions, precautions, medicationNotes, mobilityNotes,
+        dietaryNotes, communicationNotes, startDate, endDate, req.params.id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Care plan not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'care_plans', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/care-plans/:id - Delete care plan
+app.delete('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM care_plans WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Care plan not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'care_plans', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Care plan deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/care-plans/summary - Care plan statistics
+app.get('/api/care-plans/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const totalResult = await pool.query(
+      `SELECT COUNT(*) as total_plans FROM care_plans`
+    );
+
+    const activeResult = await pool.query(
+      `SELECT COUNT(*) as active_plans FROM care_plans 
+       WHERE (start_date IS NULL OR start_date <= CURRENT_DATE)
+       AND (end_date IS NULL OR end_date >= CURRENT_DATE)`
+    );
+
+    const byServiceType = await pool.query(
+      `SELECT service_type, COUNT(*) as count
+       FROM care_plans
+       GROUP BY service_type
+       ORDER BY count DESC`
+    );
+
+    const byClient = await pool.query(
+      `SELECT c.id, c.first_name || ' ' || c.last_name as client_name, COUNT(cp.id) as plan_count
+       FROM clients c
+       LEFT JOIN care_plans cp ON c.id = cp.client_id
+       GROUP BY c.id, c.first_name, c.last_name
+       HAVING COUNT(cp.id) > 0
+       ORDER BY plan_count DESC`
+    );
+
+    res.json({
+      total: totalResult.rows[0].total_plans,
+      active: activeResult.rows[0].active_plans,
+      byServiceType: byServiceType.rows,
+      byClient: byClient.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- NOTIFICATIONS ----
+
+
+// GET /api/notifications - Get notifications for user
+app.get('/api/notifications', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM notifications 
+       WHERE recipient_id = $1 OR (recipient_type = 'admin' AND $2 = 'admin')
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [req.user.id, req.user.role]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/notification-settings - Get notification settings
+app.get('/api/notification-settings', verifyToken, async (req, res) => {
+  try {
+    let result = await pool.query(
+      `SELECT * FROM notification_settings WHERE user_id = $1`,
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      // Create default settings
+      await pool.query(
+        `INSERT INTO notification_settings (user_id, email_enabled, schedule_alerts, payroll_alerts, absence_alerts, payment_alerts)
+         VALUES ($1, true, true, true, true, true)`,
+        [req.user.id]
+      );
+      result = await pool.query(
+        `SELECT * FROM notification_settings WHERE user_id = $1`,
+        [req.user.id]
+      );
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/notification-settings - Update notification settings
+app.put('/api/notification-settings', verifyToken, async (req, res) => {
+  try {
+    const { emailEnabled, scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts } = req.body;
+
+    const result = await pool.query(
+      `UPDATE notification_settings SET
+        email_enabled = COALESCE($1, email_enabled),
+        schedule_alerts = COALESCE($2, schedule_alerts),
+        payroll_alerts = COALESCE($3, payroll_alerts),
+        absence_alerts = COALESCE($4, absence_alerts),
+        payment_alerts = COALESCE($5, payment_alerts),
+        updated_at = NOW()
+       WHERE user_id = $6
+       RETURNING *`,
+      [emailEnabled, scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts, req.user.id]
+    );
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/notifications/send - Send manual notification
+app.post('/api/notifications/send', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { recipientType, recipientId, notificationType, subject, message } = req.body;
+
+    if (!recipientId || !subject || !message) {
+      return res.status(400).json({ error: 'recipientId, subject, and message are required' });
+    }
+
+    const notificationId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO notifications (id, recipient_type, recipient_id, notification_type, subject, message, status, sent_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [notificationId, recipientType, recipientId, notificationType || 'general', subject, message, 'sent', req.user.id]
+    );
+
+    // Send email if enabled (would integrate with email service)
+    // For now, just log in database
+    await auditLog(req.user.id, 'CREATE', 'notifications', notificationId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/notifications/send-bulk - Send to multiple recipients
+app.post('/api/notifications/send-bulk', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { recipientIds, notificationType, subject, message } = req.body;
+
+    if (!recipientIds || recipientIds.length === 0 || !subject || !message) {
+      return res.status(400).json({ error: 'recipientIds, subject, and message are required' });
+    }
+
+    const sentNotifications = [];
+
+    for (const recipientId of recipientIds) {
+      const notificationId = uuidv4();
+      const result = await pool.query(
+        `INSERT INTO notifications (id, recipient_type, recipient_id, notification_type, subject, message, status, sent_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [notificationId, 'caregiver', recipientId, notificationType || 'general', subject, message, 'sent', req.user.id]
+      );
+      sentNotifications.push(result.rows[0]);
+    }
+
+    await auditLog(req.user.id, 'CREATE', 'notifications', 'bulk', null, { count: sentNotifications.length });
+    res.status(201).json({ sent: sentNotifications.length, notifications: sentNotifications });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/notifications/:id/read - Mark notification as read
+app.patch('/api/notifications/:id/read', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE notifications SET is_read = true, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/notifications/:id - Delete notification
+app.delete('/api/notifications/:id', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM notifications WHERE id = $1 AND recipient_id = $2 RETURNING *`,
+      [req.params.id, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    res.json({ message: 'Notification deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/notifications/summary - Notification statistics
+app.get('/api/notifications/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        COUNT(*) as total_notifications,
+        COUNT(CASE WHEN is_read = false THEN 1 END) as unread_count,
+        COUNT(CASE WHEN status = 'sent' THEN 1 END) as sent_count,
+        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_count,
+        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count,
+        COUNT(DISTINCT recipient_id) as unique_recipients
+       FROM notifications`
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ORIGINAL NOTIFICATIONS ENDPOINTS
 app.post('/api/notifications/subscribe', verifyToken, async (req, res) => {
   try {
     const { subscription } = req.body;
