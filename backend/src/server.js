@@ -1340,6 +1340,255 @@ app.get('/api/payroll-periods', verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// ---- REPORTS & ANALYTICS ----
+
+// GET /api/reports/revenue - Revenue by period, client, or service
+app.get('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate, groupBy = 'period' } = req.query;
+
+    let query = `
+      SELECT 
+        DATE_TRUNC('month', i.billing_period_end)::DATE as period,
+        c.id as client_id,
+        c.first_name || ' ' || c.last_name as client_name,
+        sp.service_name,
+        SUM(i.total) as total_revenue,
+        COUNT(DISTINCT i.id) as invoice_count,
+        SUM(i.subtotal) as subtotal,
+        SUM(i.tax) as tax_collected
+      FROM invoices i
+      JOIN clients c ON i.client_id = c.id
+      LEFT JOIN client_services cs ON c.id = cs.client_id
+      LEFT JOIN service_pricing sp ON cs.service_pricing_id = sp.id
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (startDate && endDate) {
+      query += ` WHERE i.created_at >= $${paramIndex} AND i.created_at <= $${paramIndex + 1}`;
+      params.push(startDate, endDate);
+      paramIndex += 2;
+    }
+
+    if (groupBy === 'client') {
+      query += ` GROUP BY c.id, c.first_name, c.last_name, sp.service_name ORDER BY total_revenue DESC`;
+    } else if (groupBy === 'service') {
+      query += ` GROUP BY sp.service_name ORDER BY total_revenue DESC`;
+    } else {
+      query += ` GROUP BY period, c.id, c.first_name, c.last_name, sp.service_name ORDER BY period DESC`;
+    }
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/reports/profitability - Profit margins and analysis
+app.get('/api/reports/profitability', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        c.id,
+        c.first_name || ' ' || c.last_name as client_name,
+        SUM(i.total) as total_billed,
+        SUM(pli.gross_amount) as total_cost,
+        (SUM(i.total) - SUM(pli.gross_amount)) as profit,
+        ROUND((((SUM(i.total) - SUM(pli.gross_amount)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as profit_margin_percent,
+        COUNT(DISTINCT i.id) as invoice_count
+       FROM clients c
+       LEFT JOIN invoices i ON c.id = i.client_id
+       LEFT JOIN invoice_line_items ili ON i.id = ili.invoice_id
+       LEFT JOIN payroll_line_items pli ON ili.caregiver_id = pli.caregiver_id
+       GROUP BY c.id, c.first_name, c.last_name
+       HAVING SUM(i.total) > 0
+       ORDER BY profit DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/reports/caregiver-performance - Caregiver stats and metrics
+app.get('/api/reports/caregiver-performance', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        u.id,
+        u.first_name || ' ' || u.last_name as caregiver_name,
+        COUNT(DISTINCT te.id) as time_entries,
+        SUM(te.hours_worked) as total_hours,
+        cr.base_hourly_rate,
+        SUM(pli.gross_amount) as total_earned,
+        COUNT(DISTINCT s.id) as active_schedules,
+        COUNT(DISTINCT s.client_id) as unique_clients
+       FROM users u
+       LEFT JOIN time_entries te ON u.id = te.caregiver_id
+       LEFT JOIN caregiver_rates cr ON u.id = cr.caregiver_id
+       LEFT JOIN payroll_line_items pli ON u.id = pli.caregiver_id
+       LEFT JOIN schedules s ON u.id = s.caregiver_id AND s.is_active = true
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name, cr.base_hourly_rate
+       ORDER BY total_earned DESC NULLS LAST`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/reports/client-summary - Client revenue and cost breakdown
+app.get('/api/reports/client-summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        c.id,
+        c.first_name || ' ' || c.last_name as client_name,
+        c.service_type,
+        c.city,
+        COUNT(DISTINCT s.id) as active_schedules,
+        COUNT(DISTINCT i.id) as total_invoices,
+        SUM(i.total) as total_billed,
+        SUM(i.subtotal) as subtotal,
+        SUM(CASE WHEN i.payment_status = 'paid' THEN i.total ELSE 0 END) as amount_paid,
+        SUM(CASE WHEN i.payment_status = 'pending' THEN i.total ELSE 0 END) as amount_pending,
+        COUNT(DISTINCT te.caregiver_id) as unique_caregivers,
+        SUM(te.hours_worked) as total_hours_worked
+       FROM clients c
+       LEFT JOIN invoices i ON c.id = i.client_id
+       LEFT JOIN schedules s ON c.id = s.client_id AND s.is_active = true
+       LEFT JOIN time_entries te ON c.id = te.client_id
+       WHERE c.is_active = true
+       GROUP BY c.id, c.first_name, c.last_name, c.service_type, c.city
+       ORDER BY total_billed DESC NULLS LAST`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/reports/service-analysis - Service type profitability
+app.get('/api/reports/service-analysis', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        sp.id,
+        sp.service_name,
+        sp.client_hourly_rate as charge_rate,
+        sp.caregiver_hourly_rate as cost_rate,
+        (sp.client_hourly_rate - sp.caregiver_hourly_rate) as margin_per_hour,
+        ROUND((((sp.client_hourly_rate - sp.caregiver_hourly_rate) / sp.client_hourly_rate) * 100)::numeric, 2) as margin_percent,
+        COUNT(DISTINCT cs.client_id) as clients_using,
+        COUNT(DISTINCT s.id) as active_assignments,
+        SUM(ili.hours) as total_hours_billed
+       FROM service_pricing sp
+       LEFT JOIN client_services cs ON sp.id = cs.service_pricing_id
+       LEFT JOIN schedules s ON cs.client_id = s.client_id AND s.is_active = true
+       LEFT JOIN invoices i ON cs.client_id = i.client_id
+       LEFT JOIN invoice_line_items ili ON i.id = ili.invoice_id AND ili.caregiver_id IN (
+         SELECT caregiver_id FROM schedules WHERE client_id = cs.client_id
+       )
+       WHERE sp.is_active = true
+       GROUP BY sp.id, sp.service_name, sp.client_hourly_rate, sp.caregiver_hourly_rate
+       ORDER BY margin_per_hour DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/reports/payroll-vs-billing - Cost vs Revenue comparison
+app.get('/api/reports/payroll-vs-billing', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        DATE_TRUNC('month', COALESCE(i.billing_period_end, p.pay_period_end))::DATE as period,
+        SUM(i.total) as total_billed,
+        SUM(p.gross_pay) as total_payroll_cost,
+        SUM(p.taxes) as payroll_taxes,
+        (SUM(i.total) - SUM(p.gross_pay)) as gross_profit,
+        ROUND((((SUM(i.total) - SUM(p.gross_pay)) / NULLIF(SUM(i.total), 0)) * 100)::numeric, 2) as profit_margin_percent,
+        COUNT(DISTINCT i.id) as invoice_count,
+        COUNT(DISTINCT p.id) as payroll_count
+       FROM invoices i
+       FULL OUTER JOIN payroll p ON DATE_TRUNC('month', i.billing_period_end) = DATE_TRUNC('month', p.pay_period_end)
+       GROUP BY period
+       ORDER BY period DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/reports/dashboard - Overall business metrics
+app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const summaryResult = await pool.query(
+      `SELECT 
+        (SELECT COUNT(*) FROM clients WHERE is_active = true) as active_clients,
+        (SELECT COUNT(*) FROM users WHERE role = 'caregiver') as total_caregivers,
+        (SELECT SUM(total) FROM invoices WHERE payment_status = 'paid') as total_revenue,
+        (SELECT SUM(net_pay) FROM payroll WHERE status = 'paid') as total_payroll_paid,
+        (SELECT SUM(total) FROM invoices WHERE payment_status = 'pending') as pending_revenue,
+        (SELECT COUNT(*) FROM schedules WHERE is_active = true) as active_schedules,
+        (SELECT AVG(NULLIF((billing_period_end::date - billing_period_start::date), 0)) FROM invoices) as avg_billing_period_days
+      `
+    );
+
+    const monthlyTrendResult = await pool.query(
+      `SELECT 
+        DATE_TRUNC('month', i.created_at)::DATE as month,
+        SUM(i.total) as revenue,
+        COUNT(*) as invoice_count
+       FROM invoices i
+       GROUP BY DATE_TRUNC('month', i.created_at)
+       ORDER BY month DESC
+       LIMIT 6`
+    );
+
+    const topClientsResult = await pool.query(
+      `SELECT 
+        c.id,
+        c.first_name || ' ' || c.last_name as client_name,
+        SUM(i.total) as total_revenue
+       FROM invoices i
+       JOIN clients c ON i.client_id = c.id
+       GROUP BY c.id, c.first_name, c.last_name
+       ORDER BY total_revenue DESC
+       LIMIT 5`
+    );
+
+    const topCaregiversResult = await pool.query(
+      `SELECT 
+        u.id,
+        u.first_name || ' ' || u.last_name as caregiver_name,
+        SUM(pli.gross_amount) as total_earned,
+        SUM(pli.total_hours) as total_hours
+       FROM payroll_line_items pli
+       JOIN users u ON pli.caregiver_id = u.id
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY total_earned DESC
+       LIMIT 5`
+    );
+
+    res.json({
+      summary: summaryResult.rows[0],
+      monthlyTrend: monthlyTrendResult.rows,
+      topClients: topClientsResult.rows,
+      topCaregivers: topCaregiversResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // NOTIFICATIONS
 app.post('/api/notifications/subscribe', verifyToken, async (req, res) => {
   try {
