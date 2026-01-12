@@ -269,13 +269,14 @@ app.get('/api/clients/:id', verifyToken, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 app.put('/api/clients/:id', verifyToken, async (req, res) => {
   try {
     const { 
       firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
-      serviceType, emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-      medicalNotes, allergies, preferredCaregivers 
+      serviceType, medicalConditions, allergies, medications, notes,
+      insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
+      emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
+      medicalNotes, doNotUseCaregivers
     } = req.body;
     
     const result = await pool.query(
@@ -290,17 +291,27 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
         state = $8,
         zip = $9,
         service_type = $10,
-        emergency_contact_name = $11,
-        emergency_contact_phone = $12,
-        emergency_contact_relationship = $13,
-        medical_notes = $14,
-        allergies = $15,
-        preferred_caregivers = $16,
+        medical_conditions = $11,
+        allergies = $12,
+        medications = $13,
+        notes = $14,
+        insurance_provider = $15,
+        insurance_id = $16,
+        insurance_group = $17,
+        gender = $18,
+        preferred_caregivers = $19,
+        emergency_contact_name = $20,
+        emergency_contact_phone = $21,
+        emergency_contact_relationship = $22,
+        medical_notes = $23,
+        do_not_use_caregivers = $24,
         updated_at = NOW()
-       WHERE id = $17 RETURNING *`,
+       WHERE id = $25 RETURNING *`,
       [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
-       serviceType, emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-       medicalNotes, allergies, preferredCaregivers, req.params.id]
+       serviceType, medicalConditions, allergies, medications, notes,
+       insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
+       emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
+       medicalNotes, doNotUseCaregivers, req.params.id]
     );
 
     if (result.rows.length === 0) {
