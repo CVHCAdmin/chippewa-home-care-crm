@@ -430,64 +430,35 @@ app.get('/api/referral-sources', verifyToken, async (req, res) => {
   }
 });
 
-// ---- TIME TRACKING WITH GPS ----
-app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
+// ---- CAREGIVER SCHEDULES ----
+app.post('/api/schedules', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { clientId, assignmentId, latitude, longitude } = req.body;
-    const entryId = uuidv4();
+    const { caregiverId, dayOfWeek, date, startTime, endTime, maxHours } = req.body;
+    const scheduleId = uuidv4();
 
     const result = await pool.query(
-      `INSERT INTO time_entries (id, caregiver_id, client_id, assignment_id, start_time, clock_in_location)
-       VALUES ($1, $2, $3, $4, NOW(), $5)
+      `INSERT INTO caregiver_schedules (id, caregiver_id, day_of_week, date, start_time, end_time, max_hours_per_week)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [entryId, req.user.id, clientId, assignmentId, JSON.stringify({ lat: latitude, lng: longitude })]
+      [scheduleId, caregiverId, dayOfWeek, date, startTime, endTime, maxHours]
     );
 
+    await auditLog(req.user.id, 'CREATE', 'caregiver_schedules', scheduleId, null, result.rows[0]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
+app.get('/api/schedules/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const { latitude, longitude } = req.body;
-
     const result = await pool.query(
-      `UPDATE time_entries SET 
-       end_time = NOW(), 
-       clock_out_location = $1,
-       duration_minutes = EXTRACT(EPOCH FROM (NOW() - start_time))/60,
-       is_complete = true,
-       updated_at = NOW()
-       WHERE id = $2 AND caregiver_id = $3
-       RETURNING *`,
-      [JSON.stringify({ lat: latitude, lng: longitude }), req.params.id, req.user.id]
+      `SELECT * FROM caregiver_schedules 
+       WHERE caregiver_id = $1 
+       ORDER BY date DESC, start_time`,
+      [req.params.caregiverId]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Time entry not found' });
-    }
-
-    await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GPS tracking endpoint (called periodically during shift)
-app.post('/api/gps-tracking', verifyToken, async (req, res) => {
-  try {
-    const { timeEntryId, latitude, longitude, accuracy, speed, heading } = req.body;
-
-    await pool.query(
-      `INSERT INTO gps_tracking (caregiver_id, time_entry_id, latitude, longitude, accuracy, speed, heading)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [req.user.id, timeEntryId, latitude, longitude, accuracy, speed, heading]
-    );
-
-    res.json({ success: true });
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -668,7 +639,286 @@ app.get('/api/export/invoices-csv', verifyToken, requireAdmin, async (req, res) 
   }
 });
 
-// ---- NOTIFICATIONS ----
+// ---- TIME TRACKING ----
+
+// POST /api/time-entries/clock-in
+app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
+  try {
+    const { clientId, latitude, longitude } = req.body;
+    const entryId = uuidv4();
+
+    const result = await pool.query(
+      `INSERT INTO time_entries (id, caregiver_id, client_id, clock_in, start_location)
+       VALUES ($1, $2, $3, NOW(), $4)
+       RETURNING *`,
+      [entryId, req.user.id, clientId, JSON.stringify({ lat: latitude, lng: longitude })]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'time_entries', entryId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/time-entries/:id/clock-out
+app.patch('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
+  try {
+    const { latitude, longitude, notes } = req.body;
+
+    // Calculate hours worked
+    const timeEntry = await pool.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
+    const clockIn = new Date(timeEntry.rows[0].clock_in);
+    const clockOut = new Date();
+    const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
+
+    const result = await pool.query(
+      `UPDATE time_entries SET 
+        clock_out = NOW(),
+        end_location = $1,
+        hours_worked = $2,
+        notes = $3,
+        updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [JSON.stringify({ lat: latitude, lng: longitude }), hoursWorked.toFixed(2), notes || null, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Time entry not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/time-entries - Get all time entries
+app.get('/api/time-entries', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT te.*, u.first_name, u.last_name, c.first_name as client_first_name, c.last_name as client_last_name
+       FROM time_entries te
+       JOIN users u ON te.caregiver_id = u.id
+       JOIN clients c ON te.client_id = c.id
+       ORDER BY te.clock_in DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/time-entries/caregiver/:caregiverId - Get caregiver time entries
+app.get('/api/time-entries/caregiver/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
+       FROM time_entries te
+       JOIN clients c ON te.client_id = c.id
+       WHERE te.caregiver_id = $1
+       ORDER BY te.clock_in DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- CAREGIVER RATES ----
+
+// GET /api/caregiver-rates/:caregiverId
+app.get('/api/caregiver-rates/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    let result = await pool.query(
+      `SELECT * FROM caregiver_rates WHERE caregiver_id = $1`,
+      [req.params.caregiverId]
+    );
+
+    if (result.rows.length === 0) {
+      // Create default rate if not exists
+      await pool.query(
+        `INSERT INTO caregiver_rates (caregiver_id, base_hourly_rate) VALUES ($1, $2)`,
+        [req.params.caregiverId, 18.50]
+      );
+      result = await pool.query(
+        `SELECT * FROM caregiver_rates WHERE caregiver_id = $1`,
+        [req.params.caregiverId]
+      );
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/caregiver-rates/:caregiverId
+app.put('/api/caregiver-rates/:caregiverId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { baseHourlyRate, overtimeRate, premiumRate } = req.body;
+
+    const result = await pool.query(
+      `UPDATE caregiver_rates SET
+        base_hourly_rate = COALESCE($1, base_hourly_rate),
+        overtime_rate = COALESCE($2, overtime_rate),
+        premium_rate = COALESCE($3, premium_rate),
+        updated_at = NOW()
+       WHERE caregiver_id = $4
+       RETURNING *`,
+      [baseHourlyRate, overtimeRate, premiumRate, req.params.caregiverId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Caregiver rate not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'caregiver_rates', req.params.caregiverId, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- ENHANCED INVOICING ----
+
+// GET /api/invoices/:id - Get invoice details with line items
+app.get('/api/invoices/:id', verifyToken, async (req, res) => {
+  try {
+    const invoiceResult = await pool.query(
+      `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.address, c.city, c.state, c.zip
+       FROM invoices i
+       JOIN clients c ON i.client_id = c.id
+       WHERE i.id = $1`,
+      [req.params.id]
+    );
+
+    if (invoiceResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const lineItemsResult = await pool.query(
+      `SELECT ili.*, u.first_name, u.last_name
+       FROM invoice_line_items ili
+       LEFT JOIN users u ON ili.caregiver_id = u.id
+       WHERE ili.invoice_id = $1
+       ORDER BY ili.created_at`,
+      [req.params.id]
+    );
+
+    res.json({
+      ...invoiceResult.rows[0],
+      lineItems: lineItemsResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/invoices/generate-from-schedules - Enhanced invoice generation
+app.post('/api/invoices/generate-from-schedules', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { clientId, billingPeriodStart, billingPeriodEnd } = req.body;
+    const invoiceId = uuidv4();
+    const invoiceNumber = `INV-${Date.now()}`;
+
+    // Get schedules for the billing period
+    const schedulesResult = await pool.query(
+      `SELECT s.*, u.first_name, u.last_name
+       FROM schedules s
+       JOIN users u ON s.caregiver_id = u.id
+       WHERE s.client_id = $1
+       AND s.is_active = true
+       AND s.date >= $2
+       AND s.date <= $3`,
+      [clientId, billingPeriodStart, billingPeriodEnd]
+    );
+
+    let subtotal = 0;
+    const lineItems = [];
+
+    // Calculate billing from schedules
+    for (const schedule of schedulesResult.rows) {
+      const [startHour, startMin] = schedule.start_time.split(':');
+      const [endHour, endMin] = schedule.end_time.split(':');
+      
+      const startMinutes = parseInt(startHour) * 60 + parseInt(startMin);
+      const endMinutes = parseInt(endHour) * 60 + parseInt(endMin);
+      const hours = ((endMinutes - startMinutes) / 60).toFixed(2);
+
+      // Get caregiver rate
+      const rateResult = await pool.query(
+        `SELECT base_hourly_rate FROM caregiver_rates WHERE caregiver_id = $1`,
+        [schedule.caregiver_id]
+      );
+      const rate = rateResult.rows[0]?.base_hourly_rate || 18.50;
+      const amount = (hours * rate).toFixed(2);
+
+      subtotal += parseFloat(amount);
+      lineItems.push({
+        caregiverId: schedule.caregiver_id,
+        caregiver_name: `${schedule.first_name} ${schedule.last_name}`,
+        description: `Care Services - ${schedule.date}`,
+        hours: hours,
+        rate: rate,
+        amount: amount
+      });
+    }
+
+    const tax = (subtotal * 0.08).toFixed(2);
+    const total = (subtotal + parseFloat(tax)).toFixed(2);
+
+    // Create invoice
+    const invoiceResult = await pool.query(
+      `INSERT INTO invoices (id, invoice_number, client_id, billing_period_start, billing_period_end, subtotal, tax, total, payment_due_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [invoiceId, invoiceNumber, clientId, billingPeriodStart, billingPeriodEnd, subtotal, tax, total, 
+       new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)]
+    );
+
+    // Create line items
+    for (const item of lineItems) {
+      await pool.query(
+        `INSERT INTO invoice_line_items (invoice_id, caregiver_id, description, hours, rate, amount)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [invoiceId, item.caregiverId, item.description, item.hours, item.rate, item.amount]
+      );
+    }
+
+    await auditLog(req.user.id, 'CREATE', 'invoices', invoiceId, null, invoiceResult.rows[0]);
+    res.status(201).json({
+      ...invoiceResult.rows[0],
+      lineItems: lineItems
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/invoices/billing-summary - Revenue report
+app.get('/api/invoices/billing-summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        COUNT(*) as total_invoices,
+        SUM(CASE WHEN payment_status = 'paid' THEN total ELSE 0 END) as paid_amount,
+        SUM(CASE WHEN payment_status = 'pending' THEN total ELSE 0 END) as pending_amount,
+        SUM(CASE WHEN payment_status = 'overdue' THEN total ELSE 0 END) as overdue_amount,
+        SUM(total) as total_billed,
+        AVG(total) as average_invoice
+       FROM invoices`
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// NOTIFICATIONS
 app.post('/api/notifications/subscribe', verifyToken, async (req, res) => {
   try {
     const { subscription } = req.body;
