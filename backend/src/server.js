@@ -325,6 +325,75 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
   }
 });
 
+// ---- CLIENT ONBOARDING ----
+app.get('/api/clients/:id/onboarding', verifyToken, async (req, res) => {
+  try {
+    let result = await pool.query(
+      `SELECT * FROM client_onboarding WHERE client_id = $1`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      // Create one if it doesn't exist
+      await pool.query(
+        `INSERT INTO client_onboarding (client_id) VALUES ($1)`,
+        [req.params.id]
+      );
+      result = await pool.query(
+        `SELECT * FROM client_onboarding WHERE client_id = $1`,
+        [req.params.id]
+      );
+    }
+
+    res.json(result.rows[0] || {});
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/clients/:id/onboarding/:stepId', verifyToken, async (req, res) => {
+  try {
+    const stepId = req.params.stepId;
+    const updates = req.body;
+
+    // Build dynamic UPDATE query based on fields provided
+    let updateFields = [];
+    let params = [];
+    let paramIndex = 1;
+
+    Object.keys(updates).forEach(key => {
+      updateFields.push(`${key} = $${paramIndex}`);
+      params.push(updates[key]);
+      paramIndex++;
+    });
+
+    if (updateFields.length === 0) {
+      return res.json({ message: 'No fields to update' });
+    }
+
+    updateFields.push(`updated_at = NOW()`);
+    params.push(req.params.id);
+
+    const query = `
+      UPDATE client_onboarding 
+      SET ${updateFields.join(', ')}
+      WHERE client_id = $${paramIndex}
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, params);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Onboarding record not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'client_onboarding', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ---- REFERRAL SOURCES ----
 app.post('/api/referral-sources', verifyToken, requireAdmin, async (req, res) => {
   try {
