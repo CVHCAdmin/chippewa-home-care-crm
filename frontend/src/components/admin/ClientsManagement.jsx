@@ -1,11 +1,14 @@
 // src/components/admin/ClientsManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { getClients, createClient } from '../../config';
+import EditClientModal from './EditClientModal';
 
 const ClientsManagement = ({ token }) => {
   const [clients, setClients] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -57,15 +60,20 @@ const ClientsManagement = ({ token }) => {
     }
   };
 
+  const handleViewClient = (client) => {
+    setSelectedClient(client);
+    setShowEditModal(true);
+  };
+
   return (
     <div>
       <div className="page-header">
-        <h2>👥 Clients</h2>
+        <h2>Clients</h2>
         <button 
           className="btn btn-primary"
           onClick={() => setShowForm(!showForm)}
         >
-          {showForm ? '✕ Cancel' : '➕ Add Client'}
+          {showForm ? 'Cancel' : 'Add Client'}
         </button>
       </div>
 
@@ -135,11 +143,39 @@ const ClientsManagement = ({ token }) => {
               </div>
 
               <div className="form-group">
+                <label>Address</label>
+                <input
+                  type="text"
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
                 <label>City</label>
                 <input
                   type="text"
                   value={formData.city}
                   onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>State</label>
+                <input
+                  type="text"
+                  value={formData.state}
+                  onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+                  maxLength="2"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Zip</label>
+                <input
+                  type="text"
+                  value={formData.zip}
+                  onChange={(e) => setFormData({ ...formData, zip: e.target.value })}
                 />
               </div>
             </div>
@@ -183,13 +219,29 @@ const ClientsManagement = ({ token }) => {
                 </td>
                 <td>{client.city || 'N/A'}</td>
                 <td>
-                  <button className="btn btn-sm btn-primary">View</button>
+                  <button 
+                    className="btn btn-sm btn-primary"
+                    onClick={() => handleViewClient(client)}
+                  >
+                    Edit
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+
+      <EditClientModal
+        client={selectedClient}
+        isOpen={showEditModal}
+        onClose={() => {
+          setShowEditModal(false);
+          setSelectedClient(null);
+        }}
+        onSuccess={loadClients}
+        token={token}
+      />
     </div>
   );
 };
