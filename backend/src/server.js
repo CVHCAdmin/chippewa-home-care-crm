@@ -1789,6 +1789,214 @@ app.get('/api/absences/summary', verifyToken, requireAdmin, async (req, res) => 
   }
 });
 
+// ---- CAREGIVER AVAILABILITY ----
+
+// GET /api/caregivers/:caregiverId/availability - Get caregiver availability
+app.get('/api/caregivers/:caregiverId/availability', verifyToken, async (req, res) => {
+  try {
+    let result = await pool.query(
+      `SELECT * FROM caregiver_availability WHERE caregiver_id = $1`,
+      [req.params.caregiverId]
+    );
+
+    if (result.rows.length === 0) {
+      // Create default availability (Mon-Fri, 8am-5pm)
+      await pool.query(
+        `INSERT INTO caregiver_availability (caregiver_id, status, max_hours_per_week,
+          monday_available, monday_start_time, monday_end_time,
+          tuesday_available, tuesday_start_time, tuesday_end_time,
+          wednesday_available, wednesday_start_time, wednesday_end_time,
+          thursday_available, thursday_start_time, thursday_end_time,
+          friday_available, friday_start_time, friday_end_time,
+          saturday_available, sunday_available)
+         VALUES ($1, $2, $3, true, '08:00', '17:00', true, '08:00', '17:00',
+          true, '08:00', '17:00', true, '08:00', '17:00', true, '08:00', '17:00',
+          false, false)`,
+        [req.params.caregiverId, 'available', 40]
+      );
+      result = await pool.query(
+        `SELECT * FROM caregiver_availability WHERE caregiver_id = $1`,
+        [req.params.caregiverId]
+      );
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/caregivers/:caregiverId/availability - Update caregiver availability
+app.put('/api/caregivers/:caregiverId/availability', verifyToken, async (req, res) => {
+  try {
+    const {
+      status, maxHoursPerWeek,
+      mondayAvailable, mondayStartTime, mondayEndTime,
+      tuesdayAvailable, tuesdayStartTime, tuesdayEndTime,
+      wednesdayAvailable, wednesdayStartTime, wednesdayEndTime,
+      thursdayAvailable, thursdayStartTime, thursdayEndTime,
+      fridayAvailable, fridayStartTime, fridayEndTime,
+      saturdayAvailable, saturdayStartTime, saturdayEndTime,
+      sundayAvailable, sundayStartTime, sundayEndTime
+    } = req.body;
+
+    const result = await pool.query(
+      `UPDATE caregiver_availability SET
+        status = COALESCE($1, status),
+        max_hours_per_week = COALESCE($2, max_hours_per_week),
+        monday_available = COALESCE($3, monday_available),
+        monday_start_time = COALESCE($4, monday_start_time),
+        monday_end_time = COALESCE($5, monday_end_time),
+        tuesday_available = COALESCE($6, tuesday_available),
+        tuesday_start_time = COALESCE($7, tuesday_start_time),
+        tuesday_end_time = COALESCE($8, tuesday_end_time),
+        wednesday_available = COALESCE($9, wednesday_available),
+        wednesday_start_time = COALESCE($10, wednesday_start_time),
+        wednesday_end_time = COALESCE($11, wednesday_end_time),
+        thursday_available = COALESCE($12, thursday_available),
+        thursday_start_time = COALESCE($13, thursday_start_time),
+        thursday_end_time = COALESCE($14, thursday_end_time),
+        friday_available = COALESCE($15, friday_available),
+        friday_start_time = COALESCE($16, friday_start_time),
+        friday_end_time = COALESCE($17, friday_end_time),
+        saturday_available = COALESCE($18, saturday_available),
+        saturday_start_time = COALESCE($19, saturday_start_time),
+        saturday_end_time = COALESCE($20, saturday_end_time),
+        sunday_available = COALESCE($21, sunday_available),
+        sunday_start_time = COALESCE($22, sunday_start_time),
+        sunday_end_time = COALESCE($23, sunday_end_time),
+        updated_at = NOW()
+       WHERE caregiver_id = $24
+       RETURNING *`,
+      [status, maxHoursPerWeek,
+       mondayAvailable, mondayStartTime, mondayEndTime,
+       tuesdayAvailable, tuesdayStartTime, tuesdayEndTime,
+       wednesdayAvailable, wednesdayStartTime, wednesdayEndTime,
+       thursdayAvailable, thursdayStartTime, thursdayEndTime,
+       fridayAvailable, fridayStartTime, fridayEndTime,
+       saturdayAvailable, saturdayStartTime, saturdayEndTime,
+       sundayAvailable, sundayStartTime, sundayEndTime,
+       req.params.caregiverId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Caregiver availability not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'caregiver_availability', req.params.caregiverId, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/caregivers/:caregiverId/blackout-dates - Get blackout dates
+app.get('/api/caregivers/:caregiverId/blackout-dates', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM caregiver_blackout_dates 
+       WHERE caregiver_id = $1 
+       ORDER BY start_date DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/caregivers/:caregiverId/blackout-dates - Add blackout date
+app.post('/api/caregivers/:caregiverId/blackout-dates', verifyToken, async (req, res) => {
+  try {
+    const { startDate, endDate, reason } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const blackoutId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO caregiver_blackout_dates (id, caregiver_id, start_date, end_date, reason)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [blackoutId, req.params.caregiverId, startDate, endDate, reason || null]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'caregiver_blackout_dates', blackoutId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/blackout-dates/:dateId - Delete blackout date
+app.delete('/api/blackout-dates/:dateId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM caregiver_blackout_dates WHERE id = $1 RETURNING *`,
+      [req.params.dateId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Blackout date not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'caregiver_blackout_dates', req.params.dateId, null, result.rows[0]);
+    res.json({ message: 'Blackout date deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/caregivers/available - Find available caregivers for a shift
+app.get('/api/caregivers/available', verifyToken, async (req, res) => {
+  try {
+    const { date, dayOfWeek, startTime, endTime } = req.query;
+
+    if (!dayOfWeek || !startTime || !endTime) {
+      return res.status(400).json({ error: 'dayOfWeek, startTime, and endTime are required' });
+    }
+
+    const dayMap = {
+      0: 'sunday', 1: 'monday', 2: 'tuesday', 3: 'wednesday',
+      4: 'thursday', 5: 'friday', 6: 'saturday'
+    };
+    const dayName = dayMap[parseInt(dayOfWeek)];
+    const availableField = `${dayName}_available`;
+    const startField = `${dayName}_start_time`;
+    const endField = `${dayName}_end_time`;
+
+    let query = `
+      SELECT u.id, u.first_name, u.last_name, ca.${availableField}, ca.${startField}, ca.${endField}
+      FROM users u
+      LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
+      WHERE u.role = 'caregiver'
+      AND ca.${availableField} = true
+      AND ca.${startField} <= $1
+      AND ca.${endField} >= $2
+    `;
+
+    const params = [startTime, endTime];
+
+    if (date) {
+      query += ` AND NOT EXISTS (
+        SELECT 1 FROM caregiver_blackout_dates
+        WHERE caregiver_id = u.id
+        AND start_date <= $3
+        AND end_date >= $3
+      )`;
+      params.push(date);
+    }
+
+    query += ` ORDER BY u.first_name, u.last_name`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // NOTIFICATIONS
 app.post('/api/notifications/subscribe', verifyToken, async (req, res) => {
   try {
