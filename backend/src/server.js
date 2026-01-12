@@ -918,6 +918,182 @@ app.get('/api/invoices/billing-summary', verifyToken, requireAdmin, async (req, 
   }
 });
 
+// ---- SERVICE PRICING ----
+
+// GET /api/service-pricing - List all services
+app.get('/api/service-pricing', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM service_pricing WHERE is_active = true ORDER BY service_name`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/service-pricing - Create new service
+app.post('/api/service-pricing', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { serviceName, description, clientHourlyRate, caregiverHourlyRate } = req.body;
+    const serviceId = uuidv4();
+
+    if (!serviceName || !clientHourlyRate || !caregiverHourlyRate) {
+      return res.status(400).json({ error: 'serviceName, clientHourlyRate, and caregiverHourlyRate are required' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO service_pricing (id, service_name, description, client_hourly_rate, caregiver_hourly_rate)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [serviceId, serviceName, description || null, clientHourlyRate, caregiverHourlyRate]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'service_pricing', serviceId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/service-pricing/:id - Update service pricing
+app.put('/api/service-pricing/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { serviceName, description, clientHourlyRate, caregiverHourlyRate } = req.body;
+
+    const result = await pool.query(
+      `UPDATE service_pricing SET
+        service_name = COALESCE($1, service_name),
+        description = COALESCE($2, description),
+        client_hourly_rate = COALESCE($3, client_hourly_rate),
+        caregiver_hourly_rate = COALESCE($4, caregiver_hourly_rate),
+        updated_at = NOW()
+       WHERE id = $5
+       RETURNING *`,
+      [serviceName, description, clientHourlyRate, caregiverHourlyRate, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'service_pricing', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/service-pricing/:id - Deactivate service
+app.delete('/api/service-pricing/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE service_pricing SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'service_pricing', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Service deactivated' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- CLIENT SERVICES ----
+
+// GET /api/clients/:clientId/services - Get client's assigned services
+app.get('/api/clients/:clientId/services', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT cs.*, sp.service_name, sp.client_hourly_rate, sp.caregiver_hourly_rate
+       FROM client_services cs
+       JOIN service_pricing sp ON cs.service_pricing_id = sp.id
+       WHERE cs.client_id = $1
+       ORDER BY cs.is_primary DESC, sp.service_name`,
+      [req.params.clientId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/clients/:clientId/services - Assign service to client
+app.post('/api/clients/:clientId/services', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { servicePricingId, isPrimary, notes } = req.body;
+    const assignmentId = uuidv4();
+
+    if (!servicePricingId) {
+      return res.status(400).json({ error: 'servicePricingId is required' });
+    }
+
+    // If setting as primary, unset other primaries for this client
+    if (isPrimary) {
+      await pool.query(
+        `UPDATE client_services SET is_primary = false WHERE client_id = $1`,
+        [req.params.clientId]
+      );
+    }
+
+    const result = await pool.query(
+      `INSERT INTO client_services (id, client_id, service_pricing_id, is_primary, notes)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [assignmentId, req.params.clientId, servicePricingId, isPrimary || false, notes || null]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'client_services', assignmentId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/clients/:clientId/services/:serviceId - Remove service from client
+app.delete('/api/clients/:clientId/services/:serviceId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM client_services WHERE id = $1 AND client_id = $2 RETURNING *`,
+      [req.params.serviceId, req.params.clientId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Service assignment not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'client_services', req.params.serviceId, null, result.rows[0]);
+    res.json({ message: 'Service removed from client' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/service-pricing/margins - Get all services with profit margins
+app.get('/api/service-pricing/margins', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        id,
+        service_name,
+        client_hourly_rate,
+        caregiver_hourly_rate,
+        (client_hourly_rate - caregiver_hourly_rate) as margin_per_hour,
+        ROUND((((client_hourly_rate - caregiver_hourly_rate) / client_hourly_rate) * 100)::numeric, 1) as margin_percentage
+       FROM service_pricing
+       WHERE is_active = true
+       ORDER BY margin_per_hour DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // NOTIFICATIONS
 app.post('/api/notifications/subscribe', verifyToken, async (req, res) => {
   try {
