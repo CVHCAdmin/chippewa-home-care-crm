@@ -2828,6 +2828,407 @@ app.get('/api/incidents/summary', verifyToken, requireAdmin, async (req, res) =>
   }
 });
 
+// ---- PERFORMANCE REVIEWS ----
+
+// GET /api/performance-reviews - Get all performance reviews
+app.get('/api/performance-reviews', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT pr.*, c.first_name || ' ' || c.last_name as caregiver_name,
+              cl.first_name || ' ' || cl.last_name as client_name
+       FROM performance_reviews pr
+       LEFT JOIN users c ON pr.caregiver_id = c.id
+       LEFT JOIN clients cl ON pr.client_id = cl.id
+       ORDER BY pr.review_date DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/performance-reviews/:caregiverId - Get reviews for specific caregiver
+app.get('/api/performance-reviews/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT pr.*, cl.first_name || ' ' || cl.last_name as client_name
+       FROM performance_reviews pr
+       LEFT JOIN clients cl ON pr.client_id = cl.id
+       WHERE pr.caregiver_id = $1
+       ORDER BY pr.review_date DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/performance-reviews - Create performance review
+app.post('/api/performance-reviews', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { caregiverId, clientId, reviewDate, performanceNotes, strengths, areasForImprovement, overallAssessment } = req.body;
+
+    if (!caregiverId || !clientId || !performanceNotes) {
+      return res.status(400).json({ error: 'Caregiver, client, and performance notes are required' });
+    }
+
+    const reviewId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO performance_reviews (id, caregiver_id, client_id, review_date, performance_notes, strengths, areas_for_improvement, overall_assessment, reviewed_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [reviewId, caregiverId, clientId, reviewDate, performanceNotes, strengths || null, areasForImprovement || null, overallAssessment || 'satisfactory', req.user.id]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'performance_reviews', reviewId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/performance-reviews/:id - Delete performance review
+app.delete('/api/performance-reviews/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM performance_reviews WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Review not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'performance_reviews', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Review deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/performance-reviews/summary/:caregiverId - Performance summary for caregiver
+app.get('/api/performance-reviews/summary/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        COUNT(*) as total_reviews,
+        AVG(CASE WHEN overall_assessment = 'excellent' THEN 3 WHEN overall_assessment = 'satisfactory' THEN 2 WHEN overall_assessment = 'needs_improvement' THEN 1 ELSE 0 END) as avg_score,
+        COUNT(CASE WHEN overall_assessment = 'excellent' THEN 1 END) as excellent_count,
+        COUNT(CASE WHEN overall_assessment = 'satisfactory' THEN 1 END) as satisfactory_count,
+        COUNT(CASE WHEN overall_assessment = 'needs_improvement' THEN 1 END) as needs_improvement_count,
+        MAX(review_date) as last_review_date
+       FROM performance_reviews
+       WHERE caregiver_id = $1`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- COMPLIANCE TRACKING ----
+
+// GET /api/caregivers/:caregiverId/background-check - Get background check
+app.get('/api/caregivers/:caregiverId/background-check', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM background_checks WHERE caregiver_id = $1 ORDER BY check_date DESC LIMIT 1`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows.length > 0 ? result.rows[0] : null);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/caregivers/:caregiverId/background-check - Save background check
+app.post('/api/caregivers/:caregiverId/background-check', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { checkDate, expirationDate, status, clearanceNumber, notes } = req.body;
+
+    if (!checkDate || !status) {
+      return res.status(400).json({ error: 'Check date and status are required' });
+    }
+
+    const checkId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO background_checks (id, caregiver_id, check_date, expiration_date, status, clearance_number, notes, checked_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [checkId, req.params.caregiverId, checkDate, expirationDate || null, status, clearanceNumber || null, notes || null, req.user.id]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'background_checks', checkId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/caregivers/:caregiverId/training-records - Get training records
+app.get('/api/caregivers/:caregiverId/training-records', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM training_records WHERE caregiver_id = $1 ORDER BY completion_date DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/caregivers/:caregiverId/training-records - Add training record
+app.post('/api/caregivers/:caregiverId/training-records', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { trainingType, completionDate, expirationDate, certificationNumber, provider, status } = req.body;
+
+    if (!trainingType || !completionDate) {
+      return res.status(400).json({ error: 'Training type and completion date are required' });
+    }
+
+    const recordId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO training_records (id, caregiver_id, training_type, completion_date, expiration_date, certification_number, provider, status, recorded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [recordId, req.params.caregiverId, trainingType, completionDate, expirationDate || null, certificationNumber || null, provider || null, status || 'completed', req.user.id]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'training_records', recordId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/training-records/:id - Delete training record
+app.delete('/api/training-records/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM training_records WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Training record not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'training_records', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Training record deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/caregivers/:caregiverId/compliance-documents - Get compliance documents
+app.get('/api/caregivers/:caregiverId/compliance-documents', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM compliance_documents WHERE caregiver_id = $1 ORDER BY upload_date DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/caregivers/:caregiverId/compliance-documents - Upload compliance document
+app.post('/api/caregivers/:caregiverId/compliance-documents', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { documentType, documentName, expirationDate, fileUrl, notes } = req.body;
+
+    if (!documentType || !documentName) {
+      return res.status(400).json({ error: 'Document type and name are required' });
+    }
+
+    const docId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO compliance_documents (id, caregiver_id, document_type, document_name, expiration_date, file_url, notes, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [docId, req.params.caregiverId, documentType, documentName, expirationDate || null, fileUrl || null, notes || null, req.user.id]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'compliance_documents', docId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/compliance-documents/:id - Delete compliance document
+app.delete('/api/compliance-documents/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM compliance_documents WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'compliance_documents', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Document deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/compliance/summary - Compliance overview
+app.get('/api/compliance/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const expiredBgResult = await pool.query(
+      `SELECT COUNT(*) as expired_bg FROM background_checks WHERE expiration_date < CURRENT_DATE`
+    );
+
+    const expiredTrainingResult = await pool.query(
+      `SELECT COUNT(*) as expired_training FROM training_records WHERE expiration_date < CURRENT_DATE AND status != 'expired'`
+    );
+
+    const trainingByTypeResult = await pool.query(
+      `SELECT training_type, COUNT(*) as count FROM training_records WHERE status = 'completed' GROUP BY training_type ORDER BY count DESC`
+    );
+
+    const bgStatusResult = await pool.query(
+      `SELECT status, COUNT(*) as count FROM background_checks GROUP BY status`
+    );
+
+    res.json({
+      expiredBackgroundChecks: expiredBgResult.rows[0].expired_bg,
+      expiredTraining: expiredTrainingResult.rows[0].expired_training,
+      trainingByType: trainingByTypeResult.rows,
+      backgroundCheckStatus: bgStatusResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- REFERRAL SOURCES ----
+
+// GET /api/referral-sources - Get all referral sources
+app.get('/api/referral-sources', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM referral_sources ORDER BY name ASC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/referral-sources - Create referral source
+app.post('/api/referral-sources', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { name, type, contactName, email, phone, address, city, state, zip } = req.body;
+
+    if (!name || !type) {
+      return res.status(400).json({ error: 'Name and type are required' });
+    }
+
+    const sourceId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO referral_sources (id, name, type, contact_name, email, phone, address, city, state, zip, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      [sourceId, name, type, contactName || null, email || null, phone || null, address || null, city || null, state || 'WI', zip || null, req.user.id]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'referral_sources', sourceId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/referral-sources/:id - Update referral source
+app.put('/api/referral-sources/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { name, type, contactName, email, phone, address, city, state, zip } = req.body;
+
+    const result = await pool.query(
+      `UPDATE referral_sources SET
+        name = COALESCE($1, name),
+        type = COALESCE($2, type),
+        contact_name = COALESCE($3, contact_name),
+        email = COALESCE($4, email),
+        phone = COALESCE($5, phone),
+        address = COALESCE($6, address),
+        city = COALESCE($7, city),
+        state = COALESCE($8, state),
+        zip = COALESCE($9, zip),
+        updated_at = NOW()
+       WHERE id = $10
+       RETURNING *`,
+      [name, type, contactName, email, phone, address, city, state, zip, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Referral source not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'referral_sources', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/referral-sources/:id - Delete referral source
+app.delete('/api/referral-sources/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM referral_sources WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Referral source not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'referral_sources', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Referral source deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/referral-sources/stats - Referral statistics
+app.get('/api/referral-sources/stats', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const totalResult = await pool.query(
+      `SELECT COUNT(*) as total FROM referral_sources`
+    );
+
+    const byTypeResult = await pool.query(
+      `SELECT type, COUNT(*) as count FROM referral_sources GROUP BY type ORDER BY count DESC`
+    );
+
+    const clientsBySourceResult = await pool.query(
+      `SELECT rs.id, rs.name, COUNT(c.id) as client_count
+       FROM referral_sources rs
+       LEFT JOIN clients c ON rs.id = c.referral_source_id
+       WHERE c.id IS NOT NULL
+       GROUP BY rs.id, rs.name
+       ORDER BY client_count DESC`
+    );
+
+    res.json({
+      total: totalResult.rows[0].total,
+      byType: byTypeResult.rows,
+      topSources: clientsBySourceResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ---- NOTIFICATIONS ----
 
 // GET /api/notifications - Get notifications for user
