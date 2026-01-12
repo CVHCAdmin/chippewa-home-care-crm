@@ -2197,16 +2197,13 @@ app.get('/api/expenses/summary', verifyToken, requireAdmin, async (req, res) => 
   }
 });
 
-// ---- CARE PLANS ----
+// ---- JOB APPLICATIONS ----
 
-// GET /api/care-plans - Get all care plans
-app.get('/api/care-plans', verifyToken, async (req, res) => {
+// GET /api/applications - Get all job applications
+app.get('/api/applications', verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT cp.*, c.first_name || ' ' || c.last_name as client_name
-       FROM care_plans cp
-       JOIN clients c ON cp.client_id = c.id
-       ORDER BY cp.created_at DESC`
+      `SELECT * FROM job_applications ORDER BY created_at DESC`
     );
     res.json(result.rows);
   } catch (error) {
@@ -2214,154 +2211,264 @@ app.get('/api/care-plans', verifyToken, async (req, res) => {
   }
 });
 
-// GET /api/care-plans/:clientId - Get care plans for specific client
-app.get('/api/care-plans/:clientId', verifyToken, async (req, res) => {
+// GET /api/applications/:id - Get specific application
+app.get('/api/applications/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM care_plans 
-       WHERE client_id = $1 
-       ORDER BY start_date DESC`,
-      [req.params.clientId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST /api/care-plans - Create new care plan
-app.post('/api/care-plans', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const {
-      clientId, serviceType, serviceDescription, frequency, careGoals,
-      specialInstructions, precautions, medicationNotes, mobilityNotes,
-      dietaryNotes, communicationNotes, startDate, endDate
-    } = req.body;
-
-    if (!clientId || !serviceType) {
-      return res.status(400).json({ error: 'clientId and serviceType are required' });
-    }
-
-    const planId = uuidv4();
-    const result = await pool.query(
-      `INSERT INTO care_plans (
-        id, client_id, service_type, service_description, frequency,
-        care_goals, special_instructions, precautions, medication_notes,
-        mobility_notes, dietary_notes, communication_notes, start_date, end_date, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-       RETURNING *`,
-      [
-        planId, clientId, serviceType, serviceDescription || null, frequency || null,
-        careGoals || null, specialInstructions || null, precautions || null,
-        medicationNotes || null, mobilityNotes || null, dietaryNotes || null,
-        communicationNotes || null, startDate || null, endDate || null, req.user.id
-      ]
-    );
-
-    await auditLog(req.user.id, 'CREATE', 'care_plans', planId, null, result.rows[0]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// PUT /api/care-plans/:id - Update care plan
-app.put('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const {
-      serviceType, serviceDescription, frequency, careGoals,
-      specialInstructions, precautions, medicationNotes, mobilityNotes,
-      dietaryNotes, communicationNotes, startDate, endDate
-    } = req.body;
-
-    const result = await pool.query(
-      `UPDATE care_plans SET
-        service_type = COALESCE($1, service_type),
-        service_description = COALESCE($2, service_description),
-        frequency = COALESCE($3, frequency),
-        care_goals = COALESCE($4, care_goals),
-        special_instructions = COALESCE($5, special_instructions),
-        precautions = COALESCE($6, precautions),
-        medication_notes = COALESCE($7, medication_notes),
-        mobility_notes = COALESCE($8, mobility_notes),
-        dietary_notes = COALESCE($9, dietary_notes),
-        communication_notes = COALESCE($10, communication_notes),
-        start_date = COALESCE($11, start_date),
-        end_date = COALESCE($12, end_date),
-        updated_at = NOW()
-       WHERE id = $13
-       RETURNING *`,
-      [
-        serviceType, serviceDescription, frequency, careGoals,
-        specialInstructions, precautions, medicationNotes, mobilityNotes,
-        dietaryNotes, communicationNotes, startDate, endDate, req.params.id
-      ]
+      `SELECT * FROM job_applications WHERE id = $1`,
+      [req.params.id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Care plan not found' });
+      return res.status(404).json({ error: 'Application not found' });
     }
 
-    await auditLog(req.user.id, 'UPDATE', 'care_plans', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// DELETE /api/care-plans/:id - Delete care plan
-app.delete('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
+// POST /api/applications - Submit job application
+app.post('/api/applications', async (req, res) => {
   try {
-    const result = await pool.query(
-      `DELETE FROM care_plans WHERE id = $1 RETURNING *`,
-      [req.params.id]
-    );
+    const {
+      firstName, lastName, email, phone, dateOfBirth, address, city, state, zip,
+      yearsOfExperience, previousEmployer1, jobTitle1, employmentDates1,
+      previousEmployer2, jobTitle2, employmentDates2,
+      previousEmployer3, jobTitle3, employmentDates3,
+      hasCNA, hasLPN, hasRN, hasCPR, hasFirstAid
+    } = req.body;
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Care plan not found' });
+    if (!firstName || !lastName || !email || !phone) {
+      return res.status(400).json({ error: 'Name, email, and phone are required' });
     }
 
-    await auditLog(req.user.id, 'DELETE', 'care_plans', req.params.id, null, result.rows[0]);
-    res.json({ message: 'Care plan deleted' });
+    const appId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO job_applications (
+        id, first_name, last_name, email, phone, date_of_birth, address, city, state, zip,
+        years_of_experience, previous_employer_1, job_title_1, employment_dates_1,
+        previous_employer_2, job_title_2, employment_dates_2,
+        previous_employer_3, job_title_3, employment_dates_3,
+        has_cna, has_lpn, has_rn, has_cpr, has_first_aid, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+       RETURNING *`,
+      [
+        appId, firstName, lastName, email, phone, dateOfBirth, address, city, state, zip,
+        yearsOfExperience, previousEmployer1, jobTitle1, employmentDates1,
+        previousEmployer2, jobTitle2, employmentDates2,
+        previousEmployer3, jobTitle3, employmentDates3,
+        hasCNA, hasLPN, hasRN, hasCPR, hasFirstAid, 'applied'
+      ]
+    );
+
+    res.status(201).json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/care-plans/summary - Care plan statistics
-app.get('/api/care-plans/summary', verifyToken, requireAdmin, async (req, res) => {
+// PATCH /api/applications/:id - Update application status & notes
+app.patch('/api/applications/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { status, interviewNotes } = req.body;
+
+    const result = await pool.query(
+      `UPDATE job_applications SET
+        status = COALESCE($1, status),
+        interview_notes = COALESCE($2, interview_notes),
+        updated_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [status, interviewNotes, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    await auditLog(req.user.id, 'UPDATE', 'job_applications', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/applications/:id/hire - Convert applicant to caregiver
+app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { interviewNotes } = req.body;
+
+    // Get application details
+    const appResult = await pool.query(
+      `SELECT * FROM job_applications WHERE id = $1`,
+      [req.params.id]
+    );
+
+    if (appResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    const app = appResult.rows[0];
+
+    // Check if user already exists
+    const existingUser = await pool.query(
+      `SELECT id FROM users WHERE email = $1`,
+      [app.email]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'User with this email already exists' });
+    }
+
+    // Create caregiver account
+    const userId = uuidv4();
+    const hashedPassword = await bcrypt.hash('TempPassword123!', 10);
+
+    const userResult = await pool.query(
+      `INSERT INTO users (id, first_name, last_name, email, password, phone, date_of_birth, address, city, state, zip, role)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id, first_name, last_name, email, role`,
+      [
+        userId, app.first_name, app.last_name, app.email, hashedPassword, app.phone,
+        app.date_of_birth, app.address, app.city, app.state, app.zip, 'caregiver'
+      ]
+    );
+
+    // Create caregiver profile
+    await pool.query(
+      `INSERT INTO caregiver_profiles (caregiver_id, notes)
+       VALUES ($1, $2)`,
+      [userId, `Hired from application. Experience: ${app.years_of_experience} years`]
+    );
+
+    // Create caregiver rates
+    await pool.query(
+      `INSERT INTO caregiver_rates (caregiver_id, base_hourly_rate)
+       VALUES ($1, $2)`,
+      [userId, 18.50]
+    );
+
+    // Create caregiver availability
+    await pool.query(
+      `INSERT INTO caregiver_availability (caregiver_id, status)
+       VALUES ($1, $2)`,
+      [userId, 'available']
+    );
+
+    // Add certifications if applicable
+    if (app.has_cna) {
+      await pool.query(
+        `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
+         VALUES ($1, $2)`,
+        [userId, 'CNA']
+      );
+    }
+    if (app.has_lpn) {
+      await pool.query(
+        `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
+         VALUES ($1, $2)`,
+        [userId, 'LPN']
+      );
+    }
+    if (app.has_rn) {
+      await pool.query(
+        `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
+         VALUES ($1, $2)`,
+        [userId, 'RN']
+      );
+    }
+    if (app.has_cpr) {
+      await pool.query(
+        `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
+         VALUES ($1, $2)`,
+        [userId, 'CPR']
+      );
+    }
+    if (app.has_first_aid) {
+      await pool.query(
+        `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
+         VALUES ($1, $2)`,
+        [userId, 'First Aid']
+      );
+    }
+
+    // Update application status
+    const updateResult = await pool.query(
+      `UPDATE job_applications SET
+        status = 'hired',
+        interview_notes = $1,
+        hired_user_id = $2,
+        hired_date = NOW(),
+        updated_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [interviewNotes, userId, req.params.id]
+    );
+
+    await auditLog(req.user.id, 'HIRE', 'job_applications', req.params.id, null, updateResult.rows[0]);
+
+    res.json({
+      message: 'Applicant hired successfully',
+      application: updateResult.rows[0],
+      user: userResult.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/applications/:id - Delete application
+app.delete('/api/applications/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM job_applications WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    await auditLog(req.user.id, 'DELETE', 'job_applications', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Application deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/applications/summary - Application statistics
+app.get('/api/applications/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
     const totalResult = await pool.query(
-      `SELECT COUNT(*) as total_plans FROM care_plans`
+      `SELECT COUNT(*) as total FROM job_applications`
     );
 
-    const activeResult = await pool.query(
-      `SELECT COUNT(*) as active_plans FROM care_plans 
-       WHERE (start_date IS NULL OR start_date <= CURRENT_DATE)
-       AND (end_date IS NULL OR end_date >= CURRENT_DATE)`
+    const statusResult = await pool.query(
+      `SELECT status, COUNT(*) as count FROM job_applications GROUP BY status`
     );
 
-    const byServiceType = await pool.query(
-      `SELECT service_type, COUNT(*) as count
-       FROM care_plans
-       GROUP BY service_type
-       ORDER BY count DESC`
+    const certResult = await pool.query(
+      `SELECT 
+        COUNT(CASE WHEN has_cna THEN 1 END) as cna_count,
+        COUNT(CASE WHEN has_lpn THEN 1 END) as lpn_count,
+        COUNT(CASE WHEN has_rn THEN 1 END) as rn_count,
+        COUNT(CASE WHEN has_cpr THEN 1 END) as cpr_count,
+        COUNT(CASE WHEN has_first_aid THEN 1 END) as first_aid_count
+       FROM job_applications WHERE status = 'hired'`
     );
 
-    const byClient = await pool.query(
-      `SELECT c.id, c.first_name || ' ' || c.last_name as client_name, COUNT(cp.id) as plan_count
-       FROM clients c
-       LEFT JOIN care_plans cp ON c.id = cp.client_id
-       GROUP BY c.id, c.first_name, c.last_name
-       HAVING COUNT(cp.id) > 0
-       ORDER BY plan_count DESC`
+    const hiredResult = await pool.query(
+      `SELECT COUNT(*) as hired_count FROM job_applications WHERE status = 'hired'`
     );
 
     res.json({
-      total: totalResult.rows[0].total_plans,
-      active: activeResult.rows[0].active_plans,
-      byServiceType: byServiceType.rows,
-      byClient: byClient.rows
+      total: totalResult.rows[0].total,
+      byStatus: statusResult.rows,
+      hiredCertifications: certResult.rows[0],
+      hiredCount: hiredResult.rows[0].hired_count
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2369,7 +2476,6 @@ app.get('/api/care-plans/summary', verifyToken, requireAdmin, async (req, res) =
 });
 
 // ---- NOTIFICATIONS ----
-
 
 // GET /api/notifications - Get notifications for user
 app.get('/api/notifications', verifyToken, async (req, res) => {
