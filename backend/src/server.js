@@ -272,12 +272,35 @@ app.get('/api/clients/:id', verifyToken, async (req, res) => {
 
 app.put('/api/clients/:id', verifyToken, async (req, res) => {
   try {
-    const { firstName, lastName, phone, email, medicalConditions, allergies, medications } = req.body;
+    const { 
+      firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
+      serviceType, emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
+      medicalNotes, allergies, preferredCaregivers 
+    } = req.body;
+    
     const result = await pool.query(
-      `UPDATE clients SET first_name = $1, last_name = $2, phone = $3, email = $4, 
-       medical_conditions = $5, allergies = $6, medications = $7, updated_at = NOW()
-       WHERE id = $8 RETURNING *`,
-      [firstName, lastName, phone, email, medicalConditions, allergies, medications, req.params.id]
+      `UPDATE clients SET 
+        first_name = $1, 
+        last_name = $2, 
+        date_of_birth = $3,
+        phone = $4, 
+        email = $5, 
+        address = $6,
+        city = $7,
+        state = $8,
+        zip = $9,
+        service_type = $10,
+        emergency_contact_name = $11,
+        emergency_contact_phone = $12,
+        emergency_contact_relationship = $13,
+        medical_notes = $14,
+        allergies = $15,
+        preferred_caregivers = $16,
+        updated_at = NOW()
+       WHERE id = $17 RETURNING *`,
+      [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
+       serviceType, emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
+       medicalNotes, allergies, preferredCaregivers, req.params.id]
     );
 
     if (result.rows.length === 0) {
