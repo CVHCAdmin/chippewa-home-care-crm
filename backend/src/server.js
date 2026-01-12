@@ -34,7 +34,7 @@ const limiter = rateLimit({
   max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
-app.use(auditLogger); // IMPORTANT: Must be before routes
+app.use(auditLogger(pool));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
