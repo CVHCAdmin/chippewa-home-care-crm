@@ -2813,6 +2813,7 @@ app.get('/api/performance-reviews', verifyToken, async (req, res) => {
     const result = await pool.query(
       `SELECT pr.*, c.first_name || ' ' || c.last_name as caregiver_name,
               cl.first_name || ' ' || cl.last_name as client_name
+       FROM performance_reviews pr
        LEFT JOIN users c ON pr.caregiver_id = c.id
        LEFT JOIN clients cl ON pr.client_id = cl.id
        ORDER BY pr.review_date DESC`
@@ -2828,6 +2829,7 @@ app.get('/api/performance-reviews/:caregiverId', verifyToken, async (req, res) =
   try {
     const result = await pool.query(
       `SELECT pr.*, cl.first_name || ' ' || cl.last_name as client_name
+       FROM performance_reviews pr
        LEFT JOIN clients cl ON pr.client_id = cl.id
        WHERE pr.caregiver_id = $1
        ORDER BY pr.review_date DESC`,
