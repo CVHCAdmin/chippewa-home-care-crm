@@ -1788,9 +1788,6 @@ app.get('/api/absences/summary', verifyToken, requireAdmin, async (req, res) => 
   }
 });
 
-
-});
-
 // ---- CAREGIVER AVAILABILITY ----
 
 // GET /api/caregivers/:caregiverId/availability - Get caregiver availability
