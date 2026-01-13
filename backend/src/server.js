@@ -3289,8 +3289,19 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
         totalShifts: parseInt(summary.rows[0].totalShifts) || 0,
         avgSatisfaction: parseFloat(summary.rows[0].avgSatisfaction) || 0
       },
-      topCaregivers: topCaregivers.rows || [],
-      topClients: topClients.rows || []
+      topCaregivers: (topCaregivers.rows || []).map(cg => ({
+        ...cg,
+        total_hours: parseFloat(cg.total_hours) || 0,
+        clients_served: parseInt(cg.clients_served) || 0,
+        total_revenue: parseFloat(cg.total_revenue) || 0,
+        avg_satisfaction: parseFloat(cg.avg_satisfaction) || 0
+      })),
+      topClients: (topClients.rows || []).map(cl => ({
+        ...cl,
+        total_hours: parseFloat(cl.total_hours) || 0,
+        total_cost: parseFloat(cl.total_cost) || 0,
+        caregiver_count: parseInt(cl.caregiver_count) || 0
+      }))
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3327,7 +3338,16 @@ app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
        WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY total_hours DESC`,
       [startDate, endDate]
     );
-    res.json({ hoursByWeek: hoursByWeek.rows || [], hoursByType: hoursByType.rows || [], caregiverBreakdown: caregiverBreakdown.rows || [] });
+    res.json({ 
+      hoursByWeek: (hoursByWeek.rows || []).map(row => ({
+        ...row,
+        hours: parseFloat(row.hours) || 0
+      })),
+      caregiverBreakdown: (caregiverBreakdown.rows || []).map(row => ({
+        ...row,
+        total_hours: parseFloat(row.total_hours) || 0
+      }))
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3351,7 +3371,13 @@ app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res)
        WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY avg_rating DESC`,
       [startDate, endDate]
     );
-    res.json({ performance: performance.rows || [] });
+    res.json({ 
+      performance: (performance.rows || []).map(row => ({
+        ...row,
+        avg_rating: parseFloat(row.avg_rating) || 0,
+        rating_count: parseInt(row.rating_count) || 0
+      }))
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3372,7 +3398,13 @@ app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res
        WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY avg_rating DESC`,
       [startDate, endDate]
     );
-    res.json({ satisfaction: satisfaction.rows || [] });
+    res.json({ 
+      satisfaction: (satisfaction.rows || []).map(row => ({
+        ...row,
+        avg_rating: parseFloat(row.avg_rating) || 0,
+        review_count: parseInt(row.review_count) || 0
+      }))
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3410,9 +3442,21 @@ app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => 
       [startDate, endDate]
     );
     res.json({
-      byClient: byClient.rows || [],
-      byService: byService.rows || [],
-      byMonth: byMonth.rows || []
+      byClient: (byClient.rows || []).map(row => ({
+        ...row,
+        total_revenue: parseFloat(row.total_revenue) || 0,
+        invoice_count: parseInt(row.invoice_count) || 0
+      })),
+      byService: (byService.rows || []).map(row => ({
+        ...row,
+        total_revenue: parseFloat(row.total_revenue) || 0,
+        invoice_count: parseInt(row.invoice_count) || 0
+      })),
+      byMonth: (byMonth.rows || []).map(row => ({
+        ...row,
+        total_revenue: parseFloat(row.total_revenue) || 0,
+        invoice_count: parseInt(row.invoice_count) || 0
+      }))
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
