@@ -3257,21 +3257,28 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
     const topCaregivers = await pool.query(
       `SELECT u.id, u.first_name, u.last_name,
               COALESCE(SUM(te.duration_minutes) / 60.0, 0) as total_hours,
-              COUNT(DISTINCT te.client_id) as clients_served
+              COUNT(DISTINCT te.client_id) as clients_served,
+              COALESCE(SUM(i.total), 0) as total_revenue,
+              COALESCE(AVG(pr.rating), 0) as avg_satisfaction
        FROM users u
        LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.is_complete = true
          AND CAST(te.start_time AS DATE) >= $1 AND CAST(te.start_time AS DATE) <= $2
+       LEFT JOIN invoices i ON te.client_id = i.client_id AND CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
+       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id AND CAST(pr.review_date AS DATE) >= $1 AND CAST(pr.review_date AS DATE) <= $2
        WHERE u.role = 'caregiver'
        GROUP BY u.id, u.first_name, u.last_name
        ORDER BY total_hours DESC LIMIT 5`,
       [startDate, endDate]
     );
     const topClients = await pool.query(
-      `SELECT c.id, c.first_name, c.last_name,
-              COALESCE(SUM(i.total), 0) as total_cost
+      `SELECT c.id, c.first_name, c.last_name, c.service_type,
+              COALESCE(SUM(i.total), 0) as total_cost,
+              COALESCE(SUM(te.duration_minutes)::numeric / 60.0, 0) as total_hours,
+              COUNT(DISTINCT te.caregiver_id) as caregiver_count
        FROM clients c
        LEFT JOIN invoices i ON c.id = i.client_id AND CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
-       GROUP BY c.id, c.first_name, c.last_name
+       LEFT JOIN time_entries te ON c.id = te.client_id AND te.is_complete = true AND CAST(te.start_time AS DATE) >= $1 AND CAST(te.start_time AS DATE) <= $2
+       GROUP BY c.id, c.first_name, c.last_name, c.service_type
        ORDER BY total_cost DESC LIMIT 5`,
       [startDate, endDate]
     );
