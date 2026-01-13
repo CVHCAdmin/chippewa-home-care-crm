@@ -14,18 +14,19 @@ const AuditLog = require('../models/AuditLog');
  * - Suspicious activity flags
  */
 
-const auditLogger = async (req, res, next) => {
-  // Skip audit logging for read-only report endpoints (POST that don't mutate data)
-  if (req.path.startsWith('/api/reports')) {
-    return next();
-  }
+const auditLogger = (pool) => {
+  return async (req, res, next) => {
+    // Skip audit logging for read-only report endpoints (POST that don't mutate data)
+    if (req.path.startsWith('/api/reports')) {
+      return next();
+    }
 
-  // Store original send and json methods
-  const originalSend = res.send;
-  const originalJson = res.json;
-  
-  let responseBody = null;
-  let requestBody = JSON.stringify(req.body || {});
+    // Store original send and json methods
+    const originalSend = res.send;
+    const originalJson = res.json;
+    
+    let responseBody = null;
+    let requestBody = JSON.stringify(req.body || {});
 
   // Intercept res.send
   res.send = function(data) {
@@ -78,6 +79,7 @@ const auditLogger = async (req, res, next) => {
   });
 
   next();
+  };
 };
 
 /**
