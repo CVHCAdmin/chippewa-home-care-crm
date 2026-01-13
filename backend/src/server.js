@@ -204,6 +204,19 @@ app.get('/api/users/caregivers', verifyToken, requireAdmin, async (req, res) => 
   }
 });
 
+// GET /api/users/admins - Get all admin users
+app.get('/api/users/admins', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, email, first_name, last_name, phone, hire_date, is_active, role
+       FROM users WHERE role = 'admin' ORDER BY first_name`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/users/convert-to-admin', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { userId } = req.body;
