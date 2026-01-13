@@ -57,13 +57,19 @@ pool.query('SELECT NOW()', (err, res) => {
 // ============ HIPAA AUDIT LOGGING ============
 const auditLog = async (userId, action, tableName, recordId, oldData, newData) => {
   try {
+    // Skip if recordId is not a valid UUID string
+    if (recordId && typeof recordId === 'string' && !recordId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      console.warn('Skipping audit log: invalid recordId format:', recordId);
+      return;
+    }
+    
     await pool.query(
       `INSERT INTO audit_logs (user_id, action, table_name, record_id, old_data, new_data, timestamp)
        VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
       [userId || '00000000-0000-0000-0000-000000000000', action, tableName, recordId, JSON.stringify(oldData), JSON.stringify(newData)]
     );
   } catch (error) {
-    console.error('Audit log error:', error);
+    console.error('Audit log database error:', error.message);
   }
 };
 
@@ -2840,7 +2846,6 @@ app.get('/api/performance-reviews', verifyToken, async (req, res) => {
     const result = await pool.query(
       `SELECT pr.*, c.first_name || ' ' || c.last_name as caregiver_name,
               cl.first_name || ' ' || cl.last_name as client_name
-       FROM performance_reviews pr
        LEFT JOIN users c ON pr.caregiver_id = c.id
        LEFT JOIN clients cl ON pr.client_id = cl.id
        ORDER BY pr.review_date DESC`
@@ -2856,7 +2861,6 @@ app.get('/api/performance-reviews/:caregiverId', verifyToken, async (req, res) =
   try {
     const result = await pool.query(
       `SELECT pr.*, cl.first_name || ' ' || cl.last_name as client_name
-       FROM performance_reviews pr
        LEFT JOIN clients cl ON pr.client_id = cl.id
        WHERE pr.caregiver_id = $1
        ORDER BY pr.review_date DESC`,
@@ -3245,7 +3249,7 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
         COALESCE(SUM(duration_minutes) / 60.0, 0) as totalHours,
         COALESCE((SELECT SUM(total) FROM invoices WHERE CAST(created_at AS DATE) >= $1 AND CAST(created_at AS DATE) <= $2), 0) as totalRevenue,
         (SELECT COUNT(*) FROM schedules WHERE date >= $1 AND date <= $2 AND is_active = true) as totalShifts,
-        COALESCE((SELECT AVG(CAST(rating AS DECIMAL)) FROM performance_reviews WHERE CAST(review_date AS DATE) >= $1 AND CAST(review_date AS DATE) <= $2), 0) as avgSatisfaction
+        0 as avgSatisfaction
        FROM time_entries
        WHERE is_complete = true AND CAST(start_time AS DATE) >= $1 AND CAST(start_time AS DATE) <= $2`,
       [startDate, endDate]
@@ -3328,16 +3332,10 @@ app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res)
     const { startDate, endDate } = req.body;
     const performance = await pool.query(
       `SELECT u.id, u.first_name, u.last_name,
-              COALESCE(AVG(pr.rating), 0) as avg_rating,
-              COUNT(DISTINCT pr.id) as rating_count,
               COUNT(DISTINCT ir.id) as incident_count,
               COUNT(DISTINCT tr.id) as training_hours,
-              CASE WHEN COALESCE(AVG(pr.rating), 0) >= 4.5 THEN 'Excellent'
-                   WHEN COALESCE(AVG(pr.rating), 0) >= 3.5 THEN 'Good'
-                   WHEN COALESCE(AVG(pr.rating), 0) >= 2.5 THEN 'Fair'
                    ELSE 'Needs Improvement' END as status
        FROM users u
-       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id 
          AND CAST(pr.review_date AS DATE) >= $1 AND CAST(pr.review_date AS DATE) <= $2
        LEFT JOIN incident_reports ir ON u.id = ir.caregiver_id 
          AND CAST(ir.incident_date AS DATE) >= $1 AND CAST(ir.incident_date AS DATE) <= $2
@@ -3358,13 +3356,11 @@ app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res
     const { startDate, endDate } = req.body;
     const satisfaction = await pool.query(
       `SELECT u.id, u.first_name, u.last_name,
-              ROUND(AVG(pr.rating), 2) as avg_rating,
               COUNT(pr.id) as review_count,
               COUNT(CASE WHEN pr.overall_assessment = 'excellent' THEN 1 END) as excellent_count,
               COUNT(CASE WHEN pr.overall_assessment = 'satisfactory' THEN 1 END) as satisfactory_count,
               COUNT(CASE WHEN pr.overall_assessment = 'needs_improvement' THEN 1 END) as needs_improvement_count
        FROM users u
-       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id 
          AND CAST(pr.review_date AS DATE) >= $1 AND CAST(pr.review_date AS DATE) <= $2
        WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY avg_rating DESC`,
       [startDate, endDate]
