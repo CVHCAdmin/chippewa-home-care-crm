@@ -3233,35 +3233,35 @@ app.get('/api/referral-sources/stats', verifyToken, requireAdmin, async (req, re
   }
 });
 
+
+// ---- REPORTS (POST ENDPOINTS) ----
+
 // POST /api/reports/overview
 app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-
     const summary = await pool.query(
       `SELECT 
-        COALESCE(SUM(EXTRACT(EPOCH FROM (clock_out - clock_in)) / 3600), 0) as totalHours,
+        COALESCE(SUM(duration_minutes) / 60.0, 0) as totalHours,
         COALESCE((SELECT SUM(total) FROM invoices WHERE CAST(created_at AS DATE) >= $1 AND CAST(created_at AS DATE) <= $2), 0) as totalRevenue,
         (SELECT COUNT(*) FROM schedules WHERE date >= $1 AND date <= $2 AND is_active = true) as totalShifts,
         COALESCE((SELECT AVG(CAST(rating AS DECIMAL)) FROM performance_reviews WHERE CAST(review_date AS DATE) >= $1 AND CAST(review_date AS DATE) <= $2), 0) as avgSatisfaction
        FROM time_entries
-       WHERE clock_out IS NOT NULL AND CAST(clock_in AS DATE) >= $1 AND CAST(clock_in AS DATE) <= $2`,
+       WHERE is_complete = true AND CAST(start_time AS DATE) >= $1 AND CAST(start_time AS DATE) <= $2`,
       [startDate, endDate]
     );
-
     const topCaregivers = await pool.query(
       `SELECT u.id, u.first_name, u.last_name,
-              COALESCE(SUM(EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600), 0) as total_hours,
+              COALESCE(SUM(te.duration_minutes) / 60.0, 0) as total_hours,
               COUNT(DISTINCT te.client_id) as clients_served
        FROM users u
-       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.clock_out IS NOT NULL
-         AND CAST(te.clock_in AS DATE) >= $1 AND CAST(te.clock_in AS DATE) <= $2
+       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.is_complete = true
+         AND CAST(te.start_time AS DATE) >= $1 AND CAST(te.start_time AS DATE) <= $2
        WHERE u.role = 'caregiver'
        GROUP BY u.id, u.first_name, u.last_name
        ORDER BY total_hours DESC LIMIT 5`,
       [startDate, endDate]
     );
-
     const topClients = await pool.query(
       `SELECT c.id, c.first_name, c.last_name,
               COALESCE(SUM(i.total), 0) as total_cost
@@ -3271,7 +3271,6 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
        ORDER BY total_cost DESC LIMIT 5`,
       [startDate, endDate]
     );
-
     res.json({
       summary: {
         totalHours: parseFloat(summary.rows[0].totalhours) || 0,
@@ -3291,53 +3290,33 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
 app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-
     const hoursByWeek = await pool.query(
-      `SELECT TO_CHAR(DATE_TRUNC('week', clock_in), 'YYYY-WW') as week,
-              SUM(EXTRACT(EPOCH FROM (clock_out - clock_in)) / 3600) as hours
-       FROM time_entries
-       WHERE clock_out IS NOT NULL AND CAST(clock_in AS DATE) >= $1 AND CAST(clock_in AS DATE) <= $2
-       GROUP BY DATE_TRUNC('week', clock_in)
-       ORDER BY DATE_TRUNC('week', clock_in) DESC`,
+      `SELECT TO_CHAR(DATE_TRUNC('week', start_time), 'YYYY-WW') as week, SUM(duration_minutes) / 60.0 as hours
+       FROM time_entries WHERE is_complete = true AND CAST(start_time AS DATE) >= $1 AND CAST(start_time AS DATE) <= $2
+       GROUP BY DATE_TRUNC('week', start_time) ORDER BY DATE_TRUNC('week', start_time) DESC`,
       [startDate, endDate]
     );
-
     const hoursByType = await pool.query(
       `SELECT COALESCE(cp.service_type, 'Unassigned') as service_type,
-              SUM(EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600) as hours,
-              ROUND(SUM(EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600) * 100.0 / 
-                NULLIF((SELECT SUM(EXTRACT(EPOCH FROM (clock_out - clock_in)) / 3600) FROM time_entries 
-                  WHERE clock_out IS NOT NULL AND CAST(clock_in AS DATE) >= $1 AND CAST(clock_in AS DATE) <= $2), 0), 1) as percentage
-       FROM time_entries te
-       LEFT JOIN clients c ON te.client_id = c.id
+              SUM(te.duration_minutes) / 60.0 as hours,
+              ROUND(SUM(te.duration_minutes) * 100.0 / NULLIF((SELECT SUM(duration_minutes) FROM time_entries WHERE is_complete = true AND CAST(start_time AS DATE) >= $1 AND CAST(start_time AS DATE) <= $2), 0), 1) as percentage
+       FROM time_entries te LEFT JOIN clients c ON te.client_id = c.id
        LEFT JOIN care_plans cp ON c.id = cp.client_id
-       WHERE te.clock_out IS NOT NULL AND CAST(te.clock_in AS DATE) >= $1 AND CAST(te.clock_in AS DATE) <= $2
-       GROUP BY COALESCE(cp.service_type, 'Unassigned')
-       ORDER BY hours DESC`,
+       WHERE te.is_complete = true AND CAST(te.start_time AS DATE) >= $1 AND CAST(te.start_time AS DATE) <= $2
+       GROUP BY COALESCE(cp.service_type, 'Unassigned') ORDER BY hours DESC`,
       [startDate, endDate]
     );
-
     const caregiverBreakdown = await pool.query(
       `SELECT u.id, u.first_name, u.last_name,
-              COALESCE(SUM(EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600), 0) as total_hours,
-              COALESCE(SUM(CASE WHEN EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600 <= 40 
-                THEN EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600 ELSE 40 END), 0) as regular_hours,
-              COALESCE(SUM(CASE WHEN EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600 > 40 
-                THEN EXTRACT(EPOCH FROM (te.clock_out - te.clock_in)) / 3600 - 40 ELSE 0 END), 0) as overtime_hours
-       FROM users u
-       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.clock_out IS NOT NULL
-         AND CAST(te.clock_in AS DATE) >= $1 AND CAST(te.clock_in AS DATE) <= $2
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY total_hours DESC`,
+              COALESCE(SUM(te.duration_minutes) / 60.0, 0) as total_hours,
+              COALESCE(SUM(CASE WHEN te.duration_minutes / 60.0 <= 40 THEN te.duration_minutes / 60.0 ELSE 40 END), 0) as regular_hours,
+              COALESCE(SUM(CASE WHEN te.duration_minutes / 60.0 > 40 THEN te.duration_minutes / 60.0 - 40 ELSE 0 END), 0) as overtime_hours
+       FROM users u LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.is_complete = true
+         AND CAST(te.start_time AS DATE) >= $1 AND CAST(te.start_time AS DATE) <= $2
+       WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY total_hours DESC`,
       [startDate, endDate]
     );
-
-    res.json({
-      hoursByWeek: hoursByWeek.rows || [],
-      hoursByType: hoursByType.rows || [],
-      caregiverBreakdown: caregiverBreakdown.rows || []
-    });
+    res.json({ hoursByWeek: hoursByWeek.rows || [], hoursByType: hoursByType.rows || [], caregiverBreakdown: caregiverBreakdown.rows || [] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3347,7 +3326,6 @@ app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
 app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-
     const performance = await pool.query(
       `SELECT u.id, u.first_name, u.last_name,
               COALESCE(AVG(pr.rating), 0) as avg_rating,
@@ -3365,12 +3343,9 @@ app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res)
          AND CAST(ir.incident_date AS DATE) >= $1 AND CAST(ir.incident_date AS DATE) <= $2
        LEFT JOIN training_records tr ON u.id = tr.caregiver_id 
          AND CAST(tr.completion_date AS DATE) >= $1 AND CAST(tr.completion_date AS DATE) <= $2
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY avg_rating DESC`,
+       WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY avg_rating DESC`,
       [startDate, endDate]
     );
-
     res.json({ performance: performance.rows || [] });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3381,7 +3356,6 @@ app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res)
 app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-
     const satisfaction = await pool.query(
       `SELECT u.id, u.first_name, u.last_name,
               ROUND(AVG(pr.rating), 2) as avg_rating,
@@ -3392,12 +3366,9 @@ app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res
        FROM users u
        LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id 
          AND CAST(pr.review_date AS DATE) >= $1 AND CAST(pr.review_date AS DATE) <= $2
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY avg_rating DESC`,
+       WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY avg_rating DESC`,
       [startDate, endDate]
     );
-
     res.json({ satisfaction: satisfaction.rows || [] });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3408,43 +3379,33 @@ app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res
 app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-
     const byClient = await pool.query(
       `SELECT c.id, c.first_name || ' ' || c.last_name as client_name,
               COALESCE(SUM(i.total), 0) as total_revenue,
               COUNT(DISTINCT i.id) as invoice_count
-       FROM invoices i
-       JOIN clients c ON i.client_id = c.id
+       FROM invoices i JOIN clients c ON i.client_id = c.id
        WHERE CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
-       GROUP BY c.id, c.first_name, c.last_name
-       ORDER BY total_revenue DESC`,
+       GROUP BY c.id, c.first_name, c.last_name ORDER BY total_revenue DESC`,
       [startDate, endDate]
     );
-
     const byService = await pool.query(
       `SELECT COALESCE(cp.service_type, 'Unassigned') as service_type,
               COALESCE(SUM(i.total), 0) as total_revenue,
               COUNT(DISTINCT i.id) as invoice_count
-       FROM invoices i
-       LEFT JOIN clients c ON i.client_id = c.id
+       FROM invoices i LEFT JOIN clients c ON i.client_id = c.id
        LEFT JOIN care_plans cp ON c.id = cp.client_id
        WHERE CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
-       GROUP BY COALESCE(cp.service_type, 'Unassigned')
-       ORDER BY total_revenue DESC`,
+       GROUP BY COALESCE(cp.service_type, 'Unassigned') ORDER BY total_revenue DESC`,
       [startDate, endDate]
     );
-
     const byMonth = await pool.query(
       `SELECT DATE_TRUNC('month', created_at)::DATE as month,
               COALESCE(SUM(total), 0) as total_revenue,
               COUNT(DISTINCT id) as invoice_count
-       FROM invoices
-       WHERE CAST(created_at AS DATE) >= $1 AND CAST(created_at AS DATE) <= $2
-       GROUP BY DATE_TRUNC('month', created_at)
-       ORDER BY month DESC`,
+       FROM invoices WHERE CAST(created_at AS DATE) >= $1 AND CAST(created_at AS DATE) <= $2
+       GROUP BY DATE_TRUNC('month', created_at) ORDER BY month DESC`,
       [startDate, endDate]
     );
-
     res.json({
       byClient: byClient.rows || [],
       byService: byService.rows || [],
