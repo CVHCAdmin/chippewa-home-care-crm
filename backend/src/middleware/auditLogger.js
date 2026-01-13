@@ -3,15 +3,7 @@ const AuditLog = require('../models/AuditLog');
 
 /**
  * Audit Logger Middleware
- * 
- * This middleware logs all non-GET requests to the audit_logs collection.
- * It captures:
- * - User information
- * - Action taken (create, update, delete)
- * - Entity type and ID
- * - Changes made (old vs new values)
- * - Network information
- * - Suspicious activity flags
+ * Logs all non-GET requests to the audit_logs collection.
  */
 
 const auditLogger = (pool) => {
@@ -28,57 +20,55 @@ const auditLogger = (pool) => {
     let responseBody = null;
     let requestBody = JSON.stringify(req.body || {});
 
-  // Intercept res.send
-  res.send = function(data) {
-    responseBody = data;
-    return originalSend.call(this, data);
-  };
+    // Intercept res.send
+    res.send = function(data) {
+      responseBody = data;
+      return originalSend.call(this, data);
+    };
 
-  // Intercept res.json
-  res.json = function(data) {
-    responseBody = JSON.stringify(data);
-    return originalJson.call(this, data);
-  };
+    // Intercept res.json
+    res.json = function(data) {
+      responseBody = JSON.stringify(data);
+      return originalJson.call(this, data);
+    };
 
-  // Log after response is sent
-  res.on('finish', async () => {
-    try {
-      // Only log non-GET requests and successful operations
-      if (req.method !== 'GET' && res.statusCode < 400) {
-        const auditData = extractAuditData(req, res, requestBody, responseBody);
-        
-        // Save to database
-        await AuditLog.createAuditLog(auditData);
+    // Log after response is sent
+    res.on('finish', async () => {
+      try {
+        // Only log non-GET requests and successful operations
+        if (req.method !== 'GET' && res.statusCode < 400) {
+          const auditData = extractAuditData(req, res, requestBody, responseBody);
+          await AuditLog.createAuditLog(auditData);
+        }
+        // Log failed operations too (for security)
+        else if (req.method !== 'GET' && res.statusCode >= 400) {
+          const auditData = extractAuditData(req, res, requestBody, responseBody);
+          auditData.flags = ['access_denied'];
+          await AuditLog.createAuditLog(auditData);
+        }
+        // Log failed logins
+        else if (req.path.includes('/login') && res.statusCode >= 400) {
+          await AuditLog.createAuditLog({
+            timestamp: new Date(),
+            user_id: null,
+            user_name: req.body?.email || 'Unknown',
+            action: 'failed_login',
+            entity_type: 'user',
+            entity_id: 'login-attempt',
+            ip_address: extractIP(req),
+            user_agent: req.get('user-agent'),
+            flags: ['multiple_failed_login'],
+            status_code: res.statusCode,
+            is_sensitive: true
+          });
+        }
+      } catch (error) {
+        console.error('Error logging audit:', error);
+        // Don't throw - audit logging shouldn't break the app
       }
-      // Log failed operations too (for security)
-      else if (req.method !== 'GET' && res.statusCode >= 400) {
-        const auditData = extractAuditData(req, res, requestBody, responseBody);
-        auditData.flags = ['access_denied'];
-        await AuditLog.createAuditLog(auditData);
-      }
-      // Log failed logins
-      else if (req.path.includes('/login') && res.statusCode >= 400) {
-        await AuditLog.createAuditLog({
-          timestamp: new Date(),
-          user_id: null,
-          user_name: req.body?.email || 'Unknown',
-          action: 'failed_login',
-          entity_type: 'user',
-          entity_id: 'login-attempt',
-          ip_address: extractIP(req),
-          user_agent: req.get('user-agent'),
-          flags: ['multiple_failed_login'],
-          status_code: res.statusCode,
-          is_sensitive: true
-        });
-      }
-    } catch (error) {
-      console.error('Error logging audit:', error);
-      // Don't throw - audit logging shouldn't break the app
-    }
-  });
+    });
 
-  next();
+    next();
   };
 };
 
@@ -233,27 +223,6 @@ function extractIP(req) {
          req.socket?.remoteAddress || 
          req.connection?.remoteAddress ||
          'unknown';
-}
-
-/**
- * Clean up sensitive data from logs (passwords, etc)
- */
-function sanitizeData(data) {
-  if (!data) return data;
-
-  const sensitiveFields = ['password', 'token', 'secret', 'apiKey'];
-  
-  if (typeof data === 'object') {
-    const cleaned = { ...data };
-    for (const field of sensitiveFields) {
-      if (cleaned[field]) {
-        cleaned[field] = '[REDACTED]';
-      }
-    }
-    return cleaned;
-  }
-
-  return data;
 }
 
 module.exports = auditLogger;
