@@ -7,13 +7,11 @@ const AbsenceManagement = ({ token }) => {
   const [caregivers, setCaregivers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [filter, setFilter] = useState('all'); // all, pending, approved, denied
   const [formData, setFormData] = useState({
     caregiverId: '',
-    absenceDate: '',
-    absenceType: 'call_out', // call_out, no_show, sick, personal
-    reason: '',
-    status: 'pending'
+    date: '',
+    type: 'call_out',
+    reason: ''
   });
 
   useEffect(() => {
@@ -59,10 +57,9 @@ const AbsenceManagement = ({ token }) => {
 
       setFormData({
         caregiverId: '',
-        absenceDate: '',
-        absenceType: 'call_out',
-        reason: '',
-        status: 'pending'
+        date: '',
+        type: 'call_out',
+        reason: ''
       });
       setShowForm(false);
       loadData();
@@ -72,39 +69,20 @@ const AbsenceManagement = ({ token }) => {
     }
   };
 
-  const handleApprove = async (absenceId) => {
+  const handleDelete = async (absenceId) => {
+    if (!window.confirm('Are you sure you want to delete this absence?')) return;
+    
     try {
       const response = await fetch(`${API_BASE_URL}/api/absences/${absenceId}`, {
-        method: 'PATCH',
+        method: 'DELETE',
         headers: {
-          'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ status: 'approved' })
+        }
       });
 
-      if (!response.ok) throw new Error('Failed to approve');
+      if (!response.ok) throw new Error('Failed to delete');
       loadData();
-      alert('Absence approved!');
-    } catch (error) {
-      alert('Failed: ' + error.message);
-    }
-  };
-
-  const handleDeny = async (absenceId) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/absences/${absenceId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ status: 'denied' })
-      });
-
-      if (!response.ok) throw new Error('Failed to deny');
-      loadData();
-      alert('Absence denied!');
+      alert('Absence deleted!');
     } catch (error) {
       alert('Failed: ' + error.message);
     }
@@ -125,27 +103,9 @@ const AbsenceManagement = ({ token }) => {
     }
   };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'approved':
-        return 'badge-success';
-      case 'denied':
-        return 'badge-danger';
-      case 'pending':
-        return 'badge-warning';
-      default:
-        return 'badge-secondary';
-    }
-  };
-
   const getTypeLabel = (type) => {
     return type.replace('_', ' ').toUpperCase();
   };
-
-  const filteredAbsences = absences.filter(absence => {
-    if (filter === 'all') return true;
-    return absence.status === filter;
-  });
 
   const getCaregiverName = (id) => {
     const cg = caregivers.find(c => c.id === id);
@@ -189,8 +149,8 @@ const AbsenceManagement = ({ token }) => {
                 <label>Absence Date *</label>
                 <input
                   type="date"
-                  value={formData.absenceDate}
-                  onChange={(e) => setFormData({ ...formData, absenceDate: e.target.value })}
+                  value={formData.date}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
                   required
                 />
               </div>
@@ -198,25 +158,13 @@ const AbsenceManagement = ({ token }) => {
               <div className="form-group">
                 <label>Absence Type *</label>
                 <select
-                  value={formData.absenceType}
-                  onChange={(e) => setFormData({ ...formData, absenceType: e.target.value })}
+                  value={formData.type}
+                  onChange={(e) => setFormData({ ...formData, type: e.target.value })}
                 >
                   <option value="call_out">Call Out</option>
                   <option value="no_show">No Show</option>
                   <option value="sick">Sick Leave</option>
                   <option value="personal">Personal</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Status *</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                >
-                  <option value="pending">Pending</option>
-                  <option value="approved">Approved</option>
-                  <option value="denied">Denied</option>
                 </select>
               </div>
 
@@ -239,23 +187,10 @@ const AbsenceManagement = ({ token }) => {
         </div>
       )}
 
-      {/* Filter Tabs */}
-      <div className="filter-tabs">
-        {['all', 'pending', 'approved', 'denied'].map(f => (
-          <button
-            key={f}
-            className={`filter-tab ${filter === f ? 'active' : ''}`}
-            onClick={() => setFilter(f)}
-          >
-            {f.charAt(0).toUpperCase() + f.slice(1)}
-          </button>
-        ))}
-      </div>
-
       {/* Absences Table */}
       {loading ? (
         <div className="loading"><div className="spinner"></div></div>
-      ) : filteredAbsences.length === 0 ? (
+      ) : absences.length === 0 ? (
         <div className="card card-centered">
           <p>No absences recorded.</p>
         </div>
@@ -267,43 +202,27 @@ const AbsenceManagement = ({ token }) => {
               <th>Date</th>
               <th>Type</th>
               <th>Reason</th>
-              <th>Status</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {filteredAbsences.map(absence => (
+            {absences.map(absence => (
               <tr key={absence.id}>
                 <td><strong>{getCaregiverName(absence.caregiver_id)}</strong></td>
-                <td>{new Date(absence.absence_date).toLocaleDateString()}</td>
+                <td>{new Date(absence.date).toLocaleDateString()}</td>
                 <td>
-                  <span className={`badge ${getTypeColor(absence.absence_type)}`}>
-                    {getTypeLabel(absence.absence_type)}
+                  <span className={`badge ${getTypeColor(absence.type)}`}>
+                    {getTypeLabel(absence.type)}
                   </span>
                 </td>
                 <td>{absence.reason || 'N/A'}</td>
                 <td>
-                  <span className={`badge ${getStatusColor(absence.status)}`}>
-                    {absence.status.toUpperCase()}
-                  </span>
-                </td>
-                <td>
-                  {absence.status === 'pending' && (
-                    <>
-                      <button
-                        className="btn btn-sm btn-success"
-                        onClick={() => handleApprove(absence.id)}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        onClick={() => handleDeny(absence.id)}
-                      >
-                        Deny
-                      </button>
-                    </>
-                  )}
+                  <button
+                    className="btn btn-sm btn-danger"
+                    onClick={() => handleDelete(absence.id)}
+                  >
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}
