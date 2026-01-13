@@ -10,6 +10,7 @@ import SchedulesManagement from './admin/SchedulesManagement';
 import ClientOnboarding from './admin/ClientOnboarding';
 import PerformanceRatings from './admin/PerformanceRatings';
 import AbsenceManagement from './admin/AbsenceManagement';
+import ExpenseManagement from './admin/ExpenseManagement';
 import ScheduleCalendar from './admin/ScheduleCalendar';
 import CaregiverProfile from './admin/CaregiverProfile';
 import ApplicationsDashboard from './admin/ApplicationsDashboard';
@@ -113,6 +114,8 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         return <ReportsAnalytics token={token} />;
       case 'payroll':
         return <PayrollProcessing token={token} />;
+      case 'expenses':
+        return <ExpenseManagement token={token} />;
       case 'audit-logs':
         return <AuditLogs token={token} />;
       case 'caregiver-profile':
@@ -311,6 +314,15 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               onClick={() => handlePageClick('payroll')}
             >
               Payroll
+            </a>
+          </li>
+          <li>
+            <a
+              href="#expenses"
+              className={currentPage === 'expenses' ? 'active' : ''}
+              onClick={() => handlePageClick('expenses')}
+            >
+              💰 Expenses
             </a>
           </li>
           <li>
