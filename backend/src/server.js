@@ -1535,268 +1535,80 @@ app.get('/api/reports/payroll-vs-billing', verifyToken, requireAdmin, async (req
   }
 });
 
-// POST /api/reports/overview - Overview report with KPIs and top performers
-app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) => {
+// GET /api/reports/dashboard - Overall business metrics (with expenses and net profit)
+app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { startDate, endDate, caregiverId, clientId } = req.body;
-
     const summaryResult = await pool.query(
       `SELECT 
-        COALESCE(SUM(CAST(te.hours_worked AS DECIMAL)), 0) as total_hours,
-        COALESCE(SUM(i.total), 0) as total_revenue,
-        COUNT(DISTINCT s.id) as total_shifts,
-        COALESCE(AVG(pr.rating), 0) as avg_satisfaction
-       FROM time_entries te
-       LEFT JOIN invoices i ON te.client_id = i.client_id AND i.created_at >= $1 AND i.created_at <= $2
-       LEFT JOIN schedules s ON te.schedule_id = s.id AND s.shift_date >= $1 AND s.shift_date <= $2
-       LEFT JOIN performance_reviews pr ON te.caregiver_id = pr.caregiver_id
-       WHERE te.shift_date >= $1 AND te.shift_date <= $2`,
-      [startDate, endDate]
+        (SELECT COUNT(*) FROM clients WHERE is_active = true) as active_clients,
+        (SELECT COUNT(*) FROM users WHERE role = 'caregiver') as total_caregivers,
+        COALESCE((SELECT SUM(total) FROM invoices WHERE payment_status = 'paid'), 0) as total_revenue,
+        COALESCE((SELECT SUM(net_pay) FROM payroll WHERE status = 'paid'), 0) as total_payroll_paid,
+        COALESCE((SELECT SUM(total) FROM invoices WHERE payment_status = 'pending'), 0) as pending_revenue,
+        COALESCE((SELECT SUM(amount) FROM expenses), 0) as total_expenses,
+        (SELECT COUNT(*) FROM schedules WHERE is_active = true) as active_schedules,
+        COALESCE((SELECT AVG(NULLIF((billing_period_end::date - billing_period_start::date), 0)) FROM invoices), 0) as avg_billing_period_days,
+        COALESCE((SELECT SUM(total) FROM invoices WHERE payment_status = 'paid'), 0) - COALESCE((SELECT SUM(net_pay) FROM payroll WHERE status = 'paid'), 0) - COALESCE((SELECT SUM(amount) FROM expenses), 0) as net_profit,
+        COALESCE((SELECT SUM(CAST(hours_worked AS DECIMAL)) FROM time_entries), 0) as total_hours,
+        (SELECT COUNT(*) FROM schedules WHERE status = 'completed') as completed_shifts,
+        COALESCE((SELECT AVG(CAST(rating AS DECIMAL)) FROM performance_reviews WHERE overall_assessment = 'excellent'), 0) as avg_satisfaction
+      `
     );
 
-    const topCaregiversResult = await pool.query(
+    const monthlyTrendResult = await pool.query(
       `SELECT 
-        u.id,
-        u.first_name,
-        u.last_name,
-        COALESCE(SUM(te.hours_worked), 0) as total_hours,
-        COALESCE(SUM(i.total), 0) as total_revenue,
-        COUNT(DISTINCT te.client_id) as clients_served,
-        COALESCE(AVG(pr.rating), 0) as avg_satisfaction
-       FROM users u
-       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.shift_date >= $1 AND te.shift_date <= $2
-       LEFT JOIN invoices i ON te.client_id = i.client_id AND i.created_at >= $1 AND i.created_at <= $2
-       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY total_hours DESC
-       LIMIT 5`,
-      [startDate, endDate]
+        DATE_TRUNC('month', i.created_at)::DATE as month,
+        COALESCE(SUM(i.total), 0) as revenue,
+        COALESCE((SELECT SUM(amount) FROM expenses WHERE DATE_TRUNC('month', expense_date) = DATE_TRUNC('month', i.created_at)), 0) as expenses,
+        COUNT(*) as invoice_count
+       FROM invoices i
+       GROUP BY DATE_TRUNC('month', i.created_at)
+       ORDER BY month DESC
+       LIMIT 6`
     );
 
     const topClientsResult = await pool.query(
       `SELECT 
         c.id,
-        c.first_name,
-        c.last_name,
-        cp.service_type,
-        COALESCE(SUM(te.hours_worked), 0) as total_hours,
-        COALESCE(SUM(i.total), 0) as total_cost,
-        COUNT(DISTINCT te.caregiver_id) as caregiver_count
-       FROM clients c
-       LEFT JOIN care_plans cp ON c.id = cp.client_id
-       LEFT JOIN time_entries te ON c.id = te.client_id AND te.shift_date >= $1 AND te.shift_date <= $2
-       LEFT JOIN invoices i ON c.id = i.client_id AND i.created_at >= $1 AND i.created_at <= $2
-       GROUP BY c.id, c.first_name, c.last_name, cp.service_type
-       ORDER BY total_hours DESC
-       LIMIT 5`,
-      [startDate, endDate]
-    );
-
-    res.json({
-      summary: {
-        totalHours: parseFloat(summaryResult.rows[0].total_hours) || 0,
-        totalRevenue: parseFloat(summaryResult.rows[0].total_revenue) || 0,
-        totalShifts: parseInt(summaryResult.rows[0].total_shifts) || 0,
-        avgSatisfaction: parseFloat(summaryResult.rows[0].avg_satisfaction) || 0
-      },
-      topCaregivers: topCaregiversResult.rows,
-      topClients: topClientsResult.rows
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST /api/reports/hours - Hours worked breakdown
-app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { startDate, endDate, caregiverId, clientId } = req.body;
-
-    let whereClause = `WHERE te.shift_date >= $1 AND te.shift_date <= $2`;
-    const params = [startDate, endDate];
-    let paramIndex = 3;
-
-    if (caregiverId) {
-      whereClause += ` AND te.caregiver_id = $${paramIndex}`;
-      params.push(caregiverId);
-      paramIndex++;
-    }
-
-    const hoursByWeekResult = await pool.query(
-      `SELECT 
-        TO_CHAR(DATE_TRUNC('week', te.shift_date), 'YYYY-WW') as week,
-        SUM(CAST(te.hours_worked AS DECIMAL)) as hours
-       FROM time_entries te
-       ${whereClause}
-       GROUP BY DATE_TRUNC('week', te.shift_date)
-       ORDER BY DATE_TRUNC('week', te.shift_date) DESC`,
-      params
-    );
-
-    const hoursByTypeResult = await pool.query(
-      `SELECT 
-        COALESCE(cp.service_type, 'Unassigned') as service_type,
-        SUM(CAST(te.hours_worked AS DECIMAL)) as hours,
-        ROUND(SUM(CAST(te.hours_worked AS DECIMAL)) * 100.0 / NULLIF((SELECT SUM(CAST(hours_worked AS DECIMAL)) FROM time_entries WHERE shift_date >= $1 AND shift_date <= $2), 0), 1) as percentage
-       FROM time_entries te
-       LEFT JOIN clients c ON te.client_id = c.id
-       LEFT JOIN care_plans cp ON c.id = cp.client_id
-       ${whereClause}
-       GROUP BY COALESCE(cp.service_type, 'Unassigned')
-       ORDER BY hours DESC`,
-      params
-    );
-
-    const caregiverBreakdownResult = await pool.query(
-      `SELECT 
-        u.id,
-        u.first_name,
-        u.last_name,
-        COALESCE(SUM(CAST(CASE WHEN te.hours_worked <= 40 THEN te.hours_worked ELSE 40 END AS DECIMAL)), 0) as regular_hours,
-        COALESCE(SUM(CAST(CASE WHEN te.hours_worked > 40 THEN te.hours_worked - 40 ELSE 0 END AS DECIMAL)), 0) as overtime_hours,
-        COALESCE(SUM(CAST(te.hours_worked AS DECIMAL)), 0) as total_hours
-       FROM users u
-       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.shift_date >= $1 AND te.shift_date <= $2
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY total_hours DESC`,
-      [startDate, endDate]
-    );
-
-    res.json({
-      hoursByWeek: hoursByWeekResult.rows,
-      hoursByType: hoursByTypeResult.rows,
-      caregiverBreakdown: caregiverBreakdownResult.rows
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST /api/reports/performance - Caregiver performance metrics
-app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { startDate, endDate, caregiverId, clientId } = req.body;
-
-    const performanceResult = await pool.query(
-      `SELECT 
-        u.id,
-        u.first_name,
-        u.last_name,
-        COALESCE(ROUND(AVG(pr.rating), 2), 0) as avg_rating,
-        COUNT(DISTINCT pr.id) as rating_count,
-        ROUND(100.0 * COUNT(DISTINCT s.id) FILTER (WHERE s.status = 'completed') / NULLIF(COUNT(DISTINCT s.id), 0), 1) as attendance_rate,
-        COUNT(DISTINCT ir.id) as incident_count,
-        COUNT(DISTINCT tr.id) as training_hours,
-        CASE 
-          WHEN COALESCE(AVG(pr.rating), 0) >= 4.5 THEN 'Excellent'
-          WHEN COALESCE(AVG(pr.rating), 0) >= 3.5 THEN 'Good'
-          WHEN COALESCE(AVG(pr.rating), 0) >= 2.5 THEN 'Fair'
-          ELSE 'Needs Improvement'
-        END as status
-       FROM users u
-       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id AND pr.review_date >= $1 AND pr.review_date <= $2
-       LEFT JOIN schedules s ON u.id = s.caregiver_id AND s.shift_date >= $1 AND s.shift_date <= $2
-       LEFT JOIN incident_reports ir ON u.id = ir.caregiver_id AND ir.incident_date >= $1 AND ir.incident_date <= $2
-       LEFT JOIN training_records tr ON u.id = tr.caregiver_id AND tr.completion_date >= $1 AND tr.completion_date <= $2
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY avg_rating DESC`,
-      [startDate, endDate]
-    );
-
-    res.json({
-      performance: performanceResult.rows
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST /api/reports/satisfaction - Client satisfaction metrics
-app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { startDate, endDate, caregiverId, clientId } = req.body;
-
-    const satisfactionResult = await pool.query(
-      `SELECT 
-        u.id as caregiver_id,
-        u.first_name,
-        u.last_name,
-        ROUND(AVG(pr.rating), 2) as avg_rating,
-        COUNT(pr.id) as review_count,
-        COUNT(CASE WHEN pr.overall_assessment = 'excellent' THEN 1 END) as excellent_count,
-        COUNT(CASE WHEN pr.overall_assessment = 'satisfactory' THEN 1 END) as satisfactory_count,
-        COUNT(CASE WHEN pr.overall_assessment = 'needs_improvement' THEN 1 END) as needs_improvement_count
-       FROM users u
-       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id AND pr.review_date >= $1 AND pr.review_date <= $2
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY avg_rating DESC`,
-      [startDate, endDate]
-    );
-
-    res.json({
-      satisfaction: satisfactionResult.rows
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST /api/reports/revenue - Revenue breakdown by client, service, caregiver
-app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { startDate, endDate, caregiverId, clientId } = req.body;
-
-    const revenueByClientResult = await pool.query(
-      `SELECT 
-        c.id,
         c.first_name || ' ' || c.last_name as client_name,
-        COALESCE(SUM(i.total), 0) as total_revenue,
-        COUNT(DISTINCT i.id) as invoice_count,
-        COALESCE(ROUND(AVG(i.total), 2), 0) as avg_invoice
+        SUM(i.total) as total_revenue
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
-       WHERE i.created_at >= $1 AND i.created_at <= $2
        GROUP BY c.id, c.first_name, c.last_name
-       ORDER BY total_revenue DESC`,
-      [startDate, endDate]
+       ORDER BY total_revenue DESC
+       LIMIT 5`
     );
 
-    const revenueByServiceResult = await pool.query(
+    const topCaregiversResult = await pool.query(
       `SELECT 
-        COALESCE(cp.service_type, 'Unassigned') as service_type,
-        COALESCE(SUM(i.total), 0) as total_revenue,
-        COUNT(DISTINCT i.id) as invoice_count,
-        COUNT(DISTINCT i.client_id) as client_count
-       FROM invoices i
-       LEFT JOIN clients c ON i.client_id = c.id
-       LEFT JOIN care_plans cp ON c.id = cp.client_id AND cp.start_date <= i.created_at::DATE AND (cp.end_date IS NULL OR cp.end_date >= i.created_at::DATE)
-       WHERE i.created_at >= $1 AND i.created_at <= $2
-       GROUP BY COALESCE(cp.service_type, 'Unassigned')
-       ORDER BY total_revenue DESC`,
-      [startDate, endDate]
+        u.id,
+        u.first_name || ' ' || u.last_name as caregiver_name,
+        COALESCE(SUM(pli.gross_amount), 0) as total_earned,
+        COALESCE(SUM(pli.total_hours), 0) as total_hours
+       FROM payroll_line_items pli
+       JOIN users u ON pli.caregiver_id = u.id
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY total_earned DESC
+       LIMIT 5`
     );
 
-    const monthlyRevenueResult = await pool.query(
+    const expensesByCategory = await pool.query(
       `SELECT 
-        DATE_TRUNC('month', i.created_at)::DATE as month,
-        COALESCE(SUM(i.total), 0) as total_revenue,
-        COUNT(DISTINCT i.id) as invoice_count,
-        COALESCE(ROUND(AVG(i.total), 2), 0) as avg_invoice
-       FROM invoices i
-       WHERE i.created_at >= $1 AND i.created_at <= $2
-       GROUP BY DATE_TRUNC('month', i.created_at)
-       ORDER BY month DESC`,
-      [startDate, endDate]
+        category,
+        COUNT(*) as count,
+        SUM(amount) as total
+       FROM expenses
+       GROUP BY category
+       ORDER BY total DESC`
     );
 
     res.json({
-      byClient: revenueByClientResult.rows,
-      byService: revenueByServiceResult.rows,
-      byMonth: monthlyRevenueResult.rows
+      success: true,
+      summary: summaryResult.rows[0],
+      monthlyTrend: monthlyTrendResult.rows,
+      topClients: topClientsResult.rows,
+      topCaregivers: topCaregiversResult.rows,
+      expensesByCategory: expensesByCategory.rows
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3417,6 +3229,282 @@ app.get('/api/referral-sources/stats', verifyToken, requireAdmin, async (req, re
       topSources: clientsBySourceResult.rows
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- REPORTS (POST ENDPOINTS) ----
+
+// POST /api/reports/overview - Overview report 
+app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    const totalHoursResult = await pool.query(
+      `SELECT COALESCE(SUM(CAST(hours_worked AS DECIMAL)), 0) as total_hours
+       FROM time_entries
+       WHERE CAST(clock_in AS DATE) >= $1 AND CAST(clock_in AS DATE) <= $2`,
+      [startDate, endDate]
+    );
+
+    const totalRevenueResult = await pool.query(
+      `SELECT COALESCE(SUM(total), 0) as total_revenue
+       FROM invoices
+       WHERE CAST(created_at AS DATE) >= $1 AND CAST(created_at AS DATE) <= $2`,
+      [startDate, endDate]
+    );
+
+    const totalShiftsResult = await pool.query(
+      `SELECT COUNT(*) as total_shifts
+       FROM schedules
+       WHERE date >= $1 AND date <= $2 AND status = 'completed'`,
+      [startDate, endDate]
+    );
+
+    const avgSatisfactionResult = await pool.query(
+      `SELECT COALESCE(AVG(CAST(rating AS DECIMAL)), 0) as avg_satisfaction
+       FROM performance_reviews
+       WHERE CAST(review_date AS DATE) >= $1 AND CAST(review_date AS DATE) <= $2`,
+      [startDate, endDate]
+    );
+
+    const topCaregiversResult = await pool.query(
+      `SELECT 
+        u.id,
+        u.first_name,
+        u.last_name,
+        COALESCE(SUM(te.hours_worked), 0) as total_hours,
+        COUNT(DISTINCT te.client_id) as clients_served
+       FROM users u
+       LEFT JOIN time_entries te ON u.id = te.caregiver_id 
+         AND CAST(te.clock_in AS DATE) >= $1 AND CAST(te.clock_in AS DATE) <= $2
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY total_hours DESC
+       LIMIT 5`,
+      [startDate, endDate]
+    );
+
+    const topClientsResult = await pool.query(
+      `SELECT 
+        c.id,
+        c.first_name,
+        c.last_name,
+        COALESCE(SUM(i.total), 0) as total_cost
+       FROM clients c
+       LEFT JOIN invoices i ON c.id = i.client_id 
+         AND CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
+       GROUP BY c.id, c.first_name, c.last_name
+       ORDER BY total_cost DESC
+       LIMIT 5`,
+      [startDate, endDate]
+    );
+
+    res.json({
+      summary: {
+        totalHours: parseFloat(totalHoursResult.rows[0].total_hours) || 0,
+        totalRevenue: parseFloat(totalRevenueResult.rows[0].total_revenue) || 0,
+        totalShifts: parseInt(totalShiftsResult.rows[0].total_shifts) || 0,
+        avgSatisfaction: parseFloat(avgSatisfactionResult.rows[0].avg_satisfaction) || 0
+      },
+      topCaregivers: topCaregiversResult.rows || [],
+      topClients: topClientsResult.rows || []
+    });
+  } catch (error) {
+    console.error('Overview report error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/reports/hours - Hours worked breakdown
+app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    const hoursByWeekResult = await pool.query(
+      `SELECT 
+        TO_CHAR(DATE_TRUNC('week', clock_in), 'YYYY-WW') as week,
+        SUM(CAST(hours_worked AS DECIMAL)) as hours
+       FROM time_entries
+       WHERE CAST(clock_in AS DATE) >= $1 AND CAST(clock_in AS DATE) <= $2
+       GROUP BY DATE_TRUNC('week', clock_in)
+       ORDER BY DATE_TRUNC('week', clock_in) DESC`,
+      [startDate, endDate]
+    );
+
+    const hoursByTypeResult = await pool.query(
+      `SELECT 
+        COALESCE(cp.service_type, 'Unassigned') as service_type,
+        SUM(CAST(te.hours_worked AS DECIMAL)) as hours,
+        ROUND(SUM(CAST(te.hours_worked AS DECIMAL)) * 100.0 / NULLIF((SELECT SUM(CAST(hours_worked AS DECIMAL)) FROM time_entries WHERE CAST(clock_in AS DATE) >= $1 AND CAST(clock_in AS DATE) <= $2), 0), 1) as percentage
+       FROM time_entries te
+       LEFT JOIN clients c ON te.client_id = c.id
+       LEFT JOIN care_plans cp ON c.id = cp.client_id
+       WHERE CAST(te.clock_in AS DATE) >= $1 AND CAST(te.clock_in AS DATE) <= $2
+       GROUP BY COALESCE(cp.service_type, 'Unassigned')
+       ORDER BY hours DESC`,
+      [startDate, endDate]
+    );
+
+    const caregiverBreakdownResult = await pool.query(
+      `SELECT 
+        u.id,
+        u.first_name,
+        u.last_name,
+        COALESCE(SUM(CAST(CASE WHEN te.hours_worked <= 40 THEN te.hours_worked ELSE 40 END AS DECIMAL)), 0) as regular_hours,
+        COALESCE(SUM(CAST(CASE WHEN te.hours_worked > 40 THEN te.hours_worked - 40 ELSE 0 END AS DECIMAL)), 0) as overtime_hours,
+        COALESCE(SUM(CAST(te.hours_worked AS DECIMAL)), 0) as total_hours
+       FROM users u
+       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND CAST(te.clock_in AS DATE) >= $1 AND CAST(te.clock_in AS DATE) <= $2
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY total_hours DESC`,
+      [startDate, endDate]
+    );
+
+    res.json({
+      hoursByWeek: hoursByWeekResult.rows || [],
+      hoursByType: hoursByTypeResult.rows || [],
+      caregiverBreakdown: caregiverBreakdownResult.rows || []
+    });
+  } catch (error) {
+    console.error('Hours report error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/reports/performance - Performance metrics
+app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    const performanceResult = await pool.query(
+      `SELECT 
+        u.id,
+        u.first_name,
+        u.last_name,
+        COALESCE(ROUND(AVG(pr.rating), 2), 0) as avg_rating,
+        COUNT(DISTINCT pr.id) as rating_count,
+        ROUND(100.0 * COUNT(DISTINCT s.id) FILTER (WHERE s.status = 'completed') / NULLIF(COUNT(DISTINCT s.id), 0), 1) as attendance_rate,
+        COUNT(DISTINCT ir.id) as incident_count,
+        COUNT(DISTINCT tr.id) as training_hours,
+        CASE 
+          WHEN COALESCE(AVG(pr.rating), 0) >= 4.5 THEN 'Excellent'
+          WHEN COALESCE(AVG(pr.rating), 0) >= 3.5 THEN 'Good'
+          WHEN COALESCE(AVG(pr.rating), 0) >= 2.5 THEN 'Fair'
+          ELSE 'Needs Improvement'
+        END as status
+       FROM users u
+       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id 
+         AND CAST(pr.review_date AS DATE) >= $1 AND CAST(pr.review_date AS DATE) <= $2
+       LEFT JOIN schedules s ON u.id = s.caregiver_id AND s.date >= $1 AND s.date <= $2
+       LEFT JOIN incident_reports ir ON u.id = ir.caregiver_id 
+         AND CAST(ir.incident_date AS DATE) >= $1 AND CAST(ir.incident_date AS DATE) <= $2
+       LEFT JOIN training_records tr ON u.id = tr.caregiver_id 
+         AND CAST(tr.completion_date AS DATE) >= $1 AND CAST(tr.completion_date AS DATE) <= $2
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY avg_rating DESC`,
+      [startDate, endDate]
+    );
+
+    res.json({
+      performance: performanceResult.rows || []
+    });
+  } catch (error) {
+    console.error('Performance report error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/reports/satisfaction - Satisfaction metrics
+app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    const satisfactionResult = await pool.query(
+      `SELECT 
+        u.id as caregiver_id,
+        u.first_name,
+        u.last_name,
+        ROUND(AVG(pr.rating), 2) as avg_rating,
+        COUNT(pr.id) as review_count,
+        COUNT(CASE WHEN pr.overall_assessment = 'excellent' THEN 1 END) as excellent_count,
+        COUNT(CASE WHEN pr.overall_assessment = 'satisfactory' THEN 1 END) as satisfactory_count,
+        COUNT(CASE WHEN pr.overall_assessment = 'needs_improvement' THEN 1 END) as needs_improvement_count
+       FROM users u
+       LEFT JOIN performance_reviews pr ON u.id = pr.caregiver_id 
+         AND CAST(pr.review_date AS DATE) >= $1 AND CAST(pr.review_date AS DATE) <= $2
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY avg_rating DESC`,
+      [startDate, endDate]
+    );
+
+    res.json({
+      satisfaction: satisfactionResult.rows || []
+    });
+  } catch (error) {
+    console.error('Satisfaction report error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/reports/revenue - Revenue breakdown
+app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    const revenueByClientResult = await pool.query(
+      `SELECT 
+        c.id,
+        c.first_name || ' ' || c.last_name as client_name,
+        COALESCE(SUM(i.total), 0) as total_revenue,
+        COUNT(DISTINCT i.id) as invoice_count,
+        COALESCE(ROUND(AVG(i.total), 2), 0) as avg_invoice
+       FROM invoices i
+       JOIN clients c ON i.client_id = c.id
+       WHERE CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
+       GROUP BY c.id, c.first_name, c.last_name
+       ORDER BY total_revenue DESC`,
+      [startDate, endDate]
+    );
+
+    const revenueByServiceResult = await pool.query(
+      `SELECT 
+        COALESCE(cp.service_type, 'Unassigned') as service_type,
+        COALESCE(SUM(i.total), 0) as total_revenue,
+        COUNT(DISTINCT i.id) as invoice_count,
+        COUNT(DISTINCT i.client_id) as client_count
+       FROM invoices i
+       LEFT JOIN clients c ON i.client_id = c.id
+       LEFT JOIN care_plans cp ON c.id = cp.client_id
+       WHERE CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
+       GROUP BY COALESCE(cp.service_type, 'Unassigned')
+       ORDER BY total_revenue DESC`,
+      [startDate, endDate]
+    );
+
+    const monthlyRevenueResult = await pool.query(
+      `SELECT 
+        DATE_TRUNC('month', i.created_at)::DATE as month,
+        COALESCE(SUM(i.total), 0) as total_revenue,
+        COUNT(DISTINCT i.id) as invoice_count,
+        COALESCE(ROUND(AVG(i.total), 2), 0) as avg_invoice
+       FROM invoices i
+       WHERE CAST(i.created_at AS DATE) >= $1 AND CAST(i.created_at AS DATE) <= $2
+       GROUP BY DATE_TRUNC('month', i.created_at)
+       ORDER BY month DESC`,
+      [startDate, endDate]
+    );
+
+    res.json({
+      byClient: revenueByClientResult.rows || [],
+      byService: revenueByServiceResult.rows || [],
+      byMonth: monthlyRevenueResult.rows || []
+    });
+  } catch (error) {
+    console.error('Revenue report error:', error);
     res.status(500).json({ error: error.message });
   }
 });
