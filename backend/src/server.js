@@ -3277,10 +3277,10 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
     );
     res.json({
       summary: {
-        totalHours: parseFloat(summary.rows[0].totalhours) || 0,
-        totalRevenue: parseFloat(summary.rows[0].totalrevenue) || 0,
-        totalShifts: parseInt(summary.rows[0].totalshifts) || 0,
-        avgSatisfaction: parseFloat(summary.rows[0].avgsatisfaction) || 0
+        totalHours: parseFloat(summary.rows[0].totalHours) || 0,
+        totalRevenue: parseFloat(summary.rows[0].totalRevenue) || 0,
+        totalShifts: parseInt(summary.rows[0].totalShifts) || 0,
+        avgSatisfaction: parseFloat(summary.rows[0].avgSatisfaction) || 0
       },
       topCaregivers: topCaregivers.rows || [],
       topClients: topClients.rows || []
