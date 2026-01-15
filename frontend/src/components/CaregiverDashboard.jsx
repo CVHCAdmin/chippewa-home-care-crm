@@ -317,36 +317,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
     return (
       <>
-        {/* Stats Row */}
-        <div className="grid">
-          <div className="stat-card">
-            <h3>Today's Shifts</h3>
-            <div className="value">{todaySchedules.length}</div>
-          </div>
-          <div className="stat-card">
-            <h3>Hours This Week</h3>
-            <div className="value">{weeklyHours.toFixed(1)}</div>
-          </div>
-          <div className="stat-card">
-            <h3>GPS Status</h3>
-            <div className="value">
-              <span className={location ? 'badge badge-success' : 'badge badge-danger'}>
-                {location ? 'Active' : 'Inactive'}
-              </span>
-            </div>
-          </div>
-        </div>
-
         {/* Clock In/Out Card */}
-        <div className="card">
-          <div className="card-title">
-            {activeSession ? 'Currently Working' : 'Clock In'}
-          </div>
-
+        <div className={`clock-card ${activeSession ? 'active' : 'ready'}`}>
           {!activeSession ? (
             <>
+              <h2>Ready to Clock In?</h2>
+
               <div className="form-group">
-                <label>Select Client *</label>
+                <label>Select Client</label>
                 <select
                   value={selectedClient}
                   onChange={(e) => setSelectedClient(e.target.value)}
@@ -360,69 +338,92 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 </select>
               </div>
 
-              {location && (
-                <p className="text-muted">
-                  GPS Active (±{location.accuracy.toFixed(0)}m accuracy)
-                </p>
-              )}
+              <div className="gps-status">
+                <span className={`gps-dot ${location ? '' : 'inactive'}`}></span>
+                {location ? (
+                  <span>GPS Active • ±{location.accuracy.toFixed(0)}m accuracy</span>
+                ) : (
+                  <span>Waiting for GPS...</span>
+                )}
+              </div>
 
               <button
-                className="btn btn-primary btn-block"
+                className="clock-btn clock-in"
                 onClick={handleClockIn}
                 disabled={!selectedClient || !location}
               >
-                CLOCK IN
+                🟢 CLOCK IN
               </button>
             </>
           ) : (
-            <>
-              <p className="text-muted">Working with</p>
-              <h3>{getClientName(activeSession.client_id)}</h3>
+            <div className="active-info">
+              <p>Currently with</p>
+              <h2>{getClientName(activeSession.client_id)}</h2>
               
               <div className="timer-display">
                 {formatElapsedTime(elapsedTime)}
               </div>
 
-              <p className="text-muted">
-                Started at {new Date(activeSession.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
-              </p>
+              <p>Started at {new Date(activeSession.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}</p>
 
               <button
-                className="btn btn-danger btn-block"
+                className="clock-btn clock-out"
                 onClick={handleClockOut}
               >
-                CLOCK OUT
+                🔴 CLOCK OUT
               </button>
-            </>
+            </div>
           )}
         </div>
 
         {/* Today's Schedule */}
         <div className="card">
-          <div className="card-title">Today's Schedule</div>
+          <div className="schedule-header">
+            <h3>📅 Today's Schedule</h3>
+            <span className="schedule-count">
+              {todaySchedules.length} shift{todaySchedules.length !== 1 ? 's' : ''}
+            </span>
+          </div>
           
           {todaySchedules.length === 0 ? (
             <p className="text-muted text-center">No shifts scheduled for today</p>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Client</th>
-                  <th>Hours</th>
-                </tr>
-              </thead>
-              <tbody>
-                {todaySchedules.map((schedule, idx) => (
-                  <tr key={schedule.id || idx}>
-                    <td>{formatTime(schedule.start_time)} - {formatTime(schedule.end_time)}</td>
-                    <td>{getClientName(schedule.client_id)}</td>
-                    <td>{calculateHours(schedule.start_time, schedule.end_time)}h</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="schedule-list">
+              {todaySchedules.map((schedule, idx) => (
+                <div key={schedule.id || idx} className="schedule-item">
+                  <div className="schedule-time">
+                    <div className="schedule-time-start">{formatTime(schedule.start_time)}</div>
+                    <div className="schedule-time-end">{formatTime(schedule.end_time)}</div>
+                  </div>
+                  <div className="schedule-details">
+                    <div className="schedule-client">{getClientName(schedule.client_id)}</div>
+                    <div className="schedule-meta">
+                      {calculateHours(schedule.start_time, schedule.end_time)}h
+                      {schedule.day_of_week !== null && (
+                        <span className="badge-weekly">Weekly</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
+        </div>
+
+        {/* Quick Stats */}
+        <div className="stats-grid-2">
+          <div className="card text-center">
+            <div className="stat-value-large stat-value-green">
+              {todaySchedules.reduce((total, s) => total + parseFloat(calculateHours(s.start_time, s.end_time)), 0).toFixed(1)}h
+            </div>
+            <div className="stat-label">Today's Hours</div>
+          </div>
+          <div className="card text-center">
+            <div className="stat-value-large stat-value-blue">
+              {weeklyHours.toFixed(1)}h
+            </div>
+            <div className="stat-label">This Week</div>
+          </div>
         </div>
       </>
     );
@@ -434,40 +435,51 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
     return (
       <>
-        <div className="card">
-          <div className="card-title">Upcoming Schedule (Next 7 Days)</div>
-          
-          {upcoming.length === 0 ? (
-            <p className="text-muted text-center">No upcoming shifts scheduled</p>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Day</th>
-                  <th>Time</th>
-                  <th>Client</th>
-                  <th>Hours</th>
-                </tr>
-              </thead>
-              <tbody>
-                {upcoming.map((day, dayIdx) => 
-                  day.schedules.map((schedule, idx) => (
-                    <tr key={`${dayIdx}-${schedule.id || idx}`}>
-                      <td>
-                        {idx === 0 ? (
-                          dayIdx === 0 ? 'Today' : day.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-                        ) : ''}
-                      </td>
-                      <td>{formatTime(schedule.start_time)} - {formatTime(schedule.end_time)}</td>
-                      <td>{getClientName(schedule.client_id)}</td>
-                      <td>{calculateHours(schedule.start_time, schedule.end_time)}h</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          )}
+        <div className="schedule-header">
+          <h3>📅 Upcoming Schedule</h3>
         </div>
+
+        {upcoming.length === 0 ? (
+          <div className="card text-center">
+            <p className="text-muted">No upcoming shifts scheduled</p>
+          </div>
+        ) : (
+          <div className="schedule-list">
+            {upcoming.map((day, idx) => (
+              <div key={idx} className="card schedule-day-card">
+                <div className={`schedule-day-header ${idx === 0 ? 'today' : ''}`}>
+                  <div>
+                    <span className="schedule-day-name">
+                      {idx === 0 ? 'Today' : day.date.toLocaleDateString('en-US', { weekday: 'long' })}
+                    </span>
+                    <span className="schedule-day-date">
+                      {day.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
+                  <span className="schedule-day-hours">
+                    {day.schedules.reduce((t, s) => t + parseFloat(calculateHours(s.start_time, s.end_time)), 0).toFixed(1)}h
+                  </span>
+                </div>
+                <div className="schedule-day-list">
+                  {day.schedules.map((schedule, sIdx) => (
+                    <div key={schedule.id || sIdx} className="schedule-day-item">
+                      <div className="schedule-time">
+                        <div className="schedule-time-start">{formatTime(schedule.start_time)}</div>
+                        <div className="schedule-time-end">{formatTime(schedule.end_time)}</div>
+                      </div>
+                      <div className="schedule-details">
+                        <div className="schedule-client">{getClientName(schedule.client_id)}</div>
+                        {schedule.notes && (
+                          <div className="schedule-meta">{schedule.notes}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </>
     );
   };
