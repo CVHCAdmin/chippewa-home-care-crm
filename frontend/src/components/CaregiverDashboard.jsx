@@ -580,12 +580,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return (
       <div style={{ maxWidth: '600px', margin: '0 auto' }}>
         <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
-          📆 Upcoming Schedule
+          Upcoming Schedule
         </h2>
 
         {upcoming.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-            <p style={{ fontSize: '2rem', margin: '0 0 0.5rem 0' }}>📭</p>
             <p style={{ color: '#6B7280' }}>No upcoming shifts scheduled</p>
           </div>
         ) : (
@@ -663,12 +662,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const renderHistoryPage = () => (
     <div style={{ maxWidth: '600px', margin: '0 auto' }}>
       <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
-        📋 Recent Visits
+        Recent Visits
       </h2>
 
       {recentVisits.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-          <p style={{ fontSize: '2rem', margin: '0 0 0.5rem 0' }}>📝</p>
           <p style={{ color: '#6B7280' }}>No recent visits</p>
         </div>
       ) : (
@@ -709,7 +707,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const renderSettingsPage = () => (
     <div style={{ maxWidth: '600px', margin: '0 auto' }}>
       <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
-        ⚙️ Settings
+        Settings
       </h2>
 
       <div className="card">
@@ -791,7 +789,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       {/* Sidebar */}
       <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-logo">
-          🏥 CVHC
+          CVHC CRM
         </div>
         <ul className="sidebar-nav">
           <li>
@@ -800,7 +798,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'home' ? 'active' : ''}
               onClick={(e) => { e.preventDefault(); setCurrentPage('home'); }}
             >
-              🏠 Home
+              Home
             </a>
           </li>
           <li>
@@ -809,7 +807,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'schedule' ? 'active' : ''}
               onClick={(e) => { e.preventDefault(); setCurrentPage('schedule'); }}
             >
-              📆 Schedule
+              My Schedule
             </a>
           </li>
           <li>
@@ -818,7 +816,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'history' ? 'active' : ''}
               onClick={(e) => { e.preventDefault(); setCurrentPage('history'); }}
             >
-              📋 History
+              Visit History
             </a>
           </li>
           <li>
@@ -827,7 +825,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'settings' ? 'active' : ''}
               onClick={(e) => { e.preventDefault(); setCurrentPage('settings'); }}
             >
-              ⚙️ Settings
+              Settings
             </a>
           </li>
         </ul>
@@ -845,21 +843,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       <div className="main-content">
         <div className="header">
           <div>
-            <h1 style={{ fontSize: '1.25rem', margin: 0 }}>
-              {currentPage === 'home' && '👋 Welcome Back'}
-              {currentPage === 'schedule' && '📆 My Schedule'}
-              {currentPage === 'history' && '📋 Visit History'}
-              {currentPage === 'settings' && '⚙️ Settings'}
-            </h1>
-            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem' }}>
-              {user.name || `${user.first_name} ${user.last_name}`}
-            </p>
+            <h1>Chippewa Valley Home Care</h1>
+            <p>Caregiver Portal</p>
           </div>
           <button
             className="hamburger-btn"
             onClick={() => setSidebarOpen(!sidebarOpen)}
           >
-            ☰ Menu
+            Menu
           </button>
         </div>
 
@@ -895,7 +886,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             width: '100%',
             maxWidth: '400px'
           }}>
-            <h3 style={{ margin: '0 0 1rem 0' }}>📝 Visit Notes</h3>
+            <h3 style={{ margin: '0 0 1rem 0' }}>Visit Notes</h3>
             <p style={{ color: '#6B7280', fontSize: '0.9rem', marginBottom: '1rem' }}>
               Add any notes about this visit (optional)
             </p>
