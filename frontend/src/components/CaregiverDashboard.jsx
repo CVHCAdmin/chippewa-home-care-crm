@@ -1,6 +1,7 @@
 // src/components/CaregiverDashboard.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../config';
+import CaregiverClientModal from './CaregiverClientModal';
 
 const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('home');
@@ -16,6 +17,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [visitNote, setVisitNote] = useState('');
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [recentVisits, setRecentVisits] = useState([]);
+  const [viewingClientId, setViewingClientId] = useState(null);
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -207,7 +209,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             })
           });
         } catch (error) {
-          // Silent fail for GPS tracking
+          // Silent fail
         }
       }
     }, 60000);
@@ -222,7 +224,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     }
   };
 
-  // Helper functions
   const getClientName = (clientId) => {
     const client = clients.find(c => c.id === clientId);
     return client ? `${client.first_name} ${client.last_name}` : 'Unknown Client';
@@ -308,6 +309,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return upcoming;
   };
 
+  const handleClientClick = (clientId, e) => {
+    e.stopPropagation();
+    setViewingClientId(clientId);
+  };
+
   // Render Home Page
   const renderHomePage = () => {
     const todaySchedules = getTodaySchedules();
@@ -338,6 +344,16 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 </select>
               </div>
 
+              {selectedClient && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => setViewingClientId(selectedClient)}
+                  style={{ marginBottom: '1rem' }}
+                >
+                  📋 View Client Info
+                </button>
+              )}
+
               <div className="gps-status">
                 <span className={`gps-dot ${location ? '' : 'inactive'}`}></span>
                 {location ? (
@@ -358,7 +374,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           ) : (
             <div className="active-info">
               <p>Currently with</p>
-              <h2>{getClientName(activeSession.client_id)}</h2>
+              <h2 
+                onClick={() => setViewingClientId(activeSession.client_id)}
+                style={{ cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                {getClientName(activeSession.client_id)}
+              </h2>
+              <small style={{ color: 'rgba(255,255,255,0.8)' }}>Tap name for client info</small>
               
               <div className="timer-display">
                 {formatElapsedTime(elapsedTime)}
@@ -396,7 +418,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                     <div className="schedule-time-end">{formatTime(schedule.end_time)}</div>
                   </div>
                   <div className="schedule-details">
-                    <div className="schedule-client">{getClientName(schedule.client_id)}</div>
+                    <div 
+                      className="schedule-client"
+                      onClick={(e) => handleClientClick(schedule.client_id, e)}
+                      style={{ cursor: 'pointer', color: '#007bff', textDecoration: 'underline' }}
+                    >
+                      {getClientName(schedule.client_id)}
+                    </div>
                     <div className="schedule-meta">
                       {calculateHours(schedule.start_time, schedule.end_time)}h
                       {schedule.day_of_week !== null && (
@@ -468,7 +496,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                         <div className="schedule-time-end">{formatTime(schedule.end_time)}</div>
                       </div>
                       <div className="schedule-details">
-                        <div className="schedule-client">{getClientName(schedule.client_id)}</div>
+                        <div 
+                          className="schedule-client"
+                          onClick={(e) => handleClientClick(schedule.client_id, e)}
+                          style={{ cursor: 'pointer', color: '#007bff', textDecoration: 'underline' }}
+                        >
+                          {getClientName(schedule.client_id)}
+                        </div>
                         {schedule.notes && (
                           <div className="schedule-meta">{schedule.notes}</div>
                         )}
@@ -505,7 +539,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             {recentVisits.map((visit, idx) => (
               <tr key={visit.id || idx}>
                 <td>{formatDate(visit.start_time)}</td>
-                <td>{visit.client_name || getClientName(visit.client_id)}</td>
+                <td>
+                  <span 
+                    onClick={() => setViewingClientId(visit.client_id)}
+                    style={{ cursor: 'pointer', color: '#007bff', textDecoration: 'underline' }}
+                  >
+                    {visit.client_name || getClientName(visit.client_id)}
+                  </span>
+                </td>
                 <td>
                   {new Date(visit.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
                   {visit.end_time && ` - ${new Date(visit.end_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}`}
@@ -518,6 +559,47 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       )}
     </div>
   );
+
+  // Render Clients Page
+  const renderClientsPage = () => {
+    const myClientIds = [...new Set(schedules.map(s => s.client_id))];
+    const myClients = clients.filter(c => myClientIds.includes(c.id));
+
+    return (
+      <>
+        <div className="schedule-header">
+          <h3>👥 My Clients</h3>
+        </div>
+
+        {myClients.length === 0 ? (
+          <div className="card text-center">
+            <p className="text-muted">No clients assigned yet</p>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            {myClients.map(client => (
+              <div 
+                key={client.id} 
+                className="card"
+                onClick={() => setViewingClientId(client.id)}
+                style={{ cursor: 'pointer' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <h4 style={{ margin: 0 }}>{client.first_name} {client.last_name}</h4>
+                    <p style={{ margin: '0.25rem 0 0 0', color: '#666', fontSize: '0.9rem' }}>
+                      📞 {client.phone || 'No phone'} • 📍 {client.city || 'No city'}
+                    </p>
+                  </div>
+                  <span style={{ color: '#007bff', fontSize: '1.2rem' }}>→</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
 
   // Render Settings Page
   const renderSettingsPage = () => (
@@ -575,43 +657,30 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       )}
 
       <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-logo">
-          CVHC CRM
-        </div>
+        <div className="sidebar-logo">CVHC CRM</div>
         <ul className="sidebar-nav">
           <li>
-            <a
-              href="#home"
-              className={currentPage === 'home' ? 'active' : ''}
-              onClick={() => handlePageClick('home')}
-            >
+            <a href="#home" className={currentPage === 'home' ? 'active' : ''} onClick={() => handlePageClick('home')}>
               Home
             </a>
           </li>
           <li>
-            <a
-              href="#schedule"
-              className={currentPage === 'schedule' ? 'active' : ''}
-              onClick={() => handlePageClick('schedule')}
-            >
+            <a href="#schedule" className={currentPage === 'schedule' ? 'active' : ''} onClick={() => handlePageClick('schedule')}>
               My Schedule
             </a>
           </li>
           <li>
-            <a
-              href="#history"
-              className={currentPage === 'history' ? 'active' : ''}
-              onClick={() => handlePageClick('history')}
-            >
+            <a href="#clients" className={currentPage === 'clients' ? 'active' : ''} onClick={() => handlePageClick('clients')}>
+              My Clients
+            </a>
+          </li>
+          <li>
+            <a href="#history" className={currentPage === 'history' ? 'active' : ''} onClick={() => handlePageClick('history')}>
               Visit History
             </a>
           </li>
           <li>
-            <a
-              href="#settings"
-              className={currentPage === 'settings' ? 'active' : ''}
-              onClick={() => handlePageClick('settings')}
-            >
+            <a href="#settings" className={currentPage === 'settings' ? 'active' : ''} onClick={() => handlePageClick('settings')}>
               Settings
             </a>
           </li>
@@ -620,9 +689,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         <div className="sidebar-user">
           <div className="sidebar-user-name">{user.name || `${user.first_name || ''} ${user.last_name || ''}`}</div>
           <div className="sidebar-user-role">Caregiver</div>
-          <button className="btn-logout" onClick={onLogout}>
-            Logout
-          </button>
+          <button className="btn-logout" onClick={onLogout}>Logout</button>
         </div>
       </div>
 
@@ -632,11 +699,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <h1>Chippewa Valley Home Care</h1>
             <p>Caregiver Portal</p>
           </div>
-          <button
-            className="hamburger-btn"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            title="Menu"
-          >
+          <button className="hamburger-btn" onClick={() => setSidebarOpen(!sidebarOpen)} title="Menu">
             Menu
           </button>
         </div>
@@ -644,6 +707,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         <div className="container">
           {currentPage === 'home' && renderHomePage()}
           {currentPage === 'schedule' && renderSchedulePage()}
+          {currentPage === 'clients' && renderClientsPage()}
           {currentPage === 'history' && renderHistoryPage()}
           {currentPage === 'settings' && renderSettingsPage()}
         </div>
@@ -670,16 +734,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             </div>
 
             <div className="form-actions">
-              <button className="btn btn-secondary" onClick={() => setShowNoteModal(false)}>
-                Cancel
-              </button>
-              <button className="btn btn-primary" onClick={completeClockOut}>
-                Complete Clock Out
-              </button>
+              <button className="btn btn-secondary" onClick={() => setShowNoteModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={completeClockOut}>Complete Clock Out</button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Client Info Modal */}
+      <CaregiverClientModal
+        clientId={viewingClientId}
+        isOpen={!!viewingClientId}
+        onClose={() => setViewingClientId(null)}
+        token={token}
+      />
     </div>
   );
 };
