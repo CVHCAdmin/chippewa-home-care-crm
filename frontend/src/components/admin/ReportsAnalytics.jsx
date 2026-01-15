@@ -285,24 +285,29 @@ const ReportsAnalytics = ({ token }) => {
                 </tr>
               </thead>
               <tbody>
-                {caregiverBreakdown.map(cg => (
-                  <tr key={cg.id}>
-                    <td><strong>{cg.first_name} {cg.last_name}</strong></td>
-                    <td>{cg.regular_hours.toFixed(1)}</td>
-                    <td className={cg.overtime_hours > 0 ? 'value-warning' : ''}>{cg.overtime_hours.toFixed(1)}</td>
-                    <td><strong>{cg.total_hours.toFixed(1)}</strong></td>
-                    <td>
-                      <div style={{ width: '100px', height: '6px', background: '#e0e0e0', borderRadius: '3px', overflow: 'hidden' }}>
-                        <div style={{ 
-                          width: `${Math.min((cg.total_hours / 40) * 100, 100)}%`, 
-                          height: '100%', 
-                          background: cg.total_hours > 40 ? '#ff9800' : '#4caf50' 
-                        }}></div>
-                      </div>
-                      <small>{((cg.total_hours / 40) * 100).toFixed(0)}%</small>
-                    </td>
-                  </tr>
-                ))}
+                {caregiverBreakdown.map(cg => {
+                  const regularHours = parseFloat(cg.regular_hours) || 0;
+                  const overtimeHours = parseFloat(cg.overtime_hours) || 0;
+                  const totalHours = parseFloat(cg.total_hours) || 0;
+                  return (
+                    <tr key={cg.id}>
+                      <td><strong>{cg.first_name} {cg.last_name}</strong></td>
+                      <td>{regularHours.toFixed(1)}</td>
+                      <td className={overtimeHours > 0 ? 'value-warning' : ''}>{overtimeHours.toFixed(1)}</td>
+                      <td><strong>{totalHours.toFixed(1)}</strong></td>
+                      <td>
+                        <div style={{ width: '100px', height: '6px', background: '#e0e0e0', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ 
+                            width: `${Math.min((totalHours / 40) * 100, 100)}%`, 
+                            height: '100%', 
+                            background: totalHours > 40 ? '#ff9800' : '#4caf50' 
+                          }}></div>
+                        </div>
+                        <small>{((totalHours / 40) * 100).toFixed(0)}%</small>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (
