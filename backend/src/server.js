@@ -39,7 +39,16 @@ app.use(limiter);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+// Strict rate limiting for auth routes (prevent brute force)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per 15 min
+  message: { error: 'Too many login attempts. Try again in 15 minutes.' }
+});
 
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register-caregiver', authLimiter);
+app.use('/api/auth/register-admin', authLimiter);
 // ============ DATABASE CONNECTION ============
 app.use(auditLogger(db.pool));
 
