@@ -329,7 +329,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     const todaySchedules = getTodaySchedules();
 
     return (
-      <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+      <div >
         {/* Clock In/Out Card - The Hero */}
         <div style={{
           background: activeSession 
@@ -578,7 +578,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     const upcoming = getUpcomingSchedules();
 
     return (
-      <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+      <div >
         <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
           Upcoming Schedule
         </h2>
@@ -660,7 +660,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   // Render History Page
   const renderHistoryPage = () => (
-    <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+    <div >
       <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
         Recent Visits
       </h2>
@@ -705,7 +705,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   // Render Settings Page
   const renderSettingsPage = () => (
-    <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+    <div >
       <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
         Settings
       </h2>
