@@ -101,7 +101,7 @@ const ReportsAnalytics = ({ token }) => {
 
   const renderOverviewReport = () => {
     if (!reportData) return null;
-    const { summary, topCaregivers, topClients } = reportData;
+    const { summary = {}, topCaregivers, topClients } = reportData;
 
     return (
       <div>
@@ -109,25 +109,25 @@ const ReportsAnalytics = ({ token }) => {
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))' }}>
           <div className="stat-card">
             <h3>Total Hours</h3>
-            <div className="value">{summary.totalHours.toFixed(1)}</div>
+            <div className="value">{(parseFloat(summary.totalHours) || 0).toFixed(1)}</div>
             <p className="stat-subtext">Across all caregivers</p>
           </div>
           <div className="stat-card">
             <h3>Total Revenue</h3>
             <div className="value value-success">
-              ${summary.totalRevenue.toFixed(2)}
+              ${(parseFloat(summary.totalRevenue) || 0).toFixed(2)}
             </div>
             <p className="stat-subtext">Billable hours</p>
           </div>
           <div className="stat-card">
             <h3>Active Shifts</h3>
-            <div className="value">{summary.totalShifts}</div>
+            <div className="value">{summary.totalShifts || 0}</div>
             <p className="stat-subtext">Completed</p>
           </div>
           <div className="stat-card">
             <h3>Avg Satisfaction</h3>
             <div className="value">
-              {summary.avgSatisfaction ? `${summary.avgSatisfaction.toFixed(1)}⭐` : 'N/A'}
+              {summary.avgSatisfaction ? `${parseFloat(summary.avgSatisfaction).toFixed(1)}⭐` : 'N/A'}
             </div>
             <p className="stat-subtext">Client ratings</p>
           </div>
@@ -151,16 +151,16 @@ const ReportsAnalytics = ({ token }) => {
                 {topCaregivers.map(cg => (
                   <tr key={cg.id}>
                     <td><strong>{cg.first_name} {cg.last_name}</strong></td>
-                    <td>{cg.total_hours.toFixed(1)} hrs</td>
-                    <td>${cg.total_revenue.toFixed(2)}</td>
+                    <td>{(parseFloat(cg.total_hours) || 0).toFixed(1)} hrs</td>
+                    <td>${(parseFloat(cg.total_revenue) || 0).toFixed(2)}</td>
                     <td>
                       {cg.avg_satisfaction ? (
-                        <span>⭐ {cg.avg_satisfaction.toFixed(1)}</span>
+                        <span>⭐ {parseFloat(cg.avg_satisfaction).toFixed(1)}</span>
                       ) : (
                         'N/A'
                       )}
                     </td>
-                    <td>{cg.clients_served}</td>
+                    <td>{cg.clients_served || 0}</td>
                   </tr>
                 ))}
               </tbody>
@@ -190,12 +190,12 @@ const ReportsAnalytics = ({ token }) => {
                     <td><strong>{cl.first_name} {cl.last_name}</strong></td>
                     <td>
                       <span className="badge badge-success">
-                        {cl.service_type?.replace('_', ' ').toUpperCase()}
+                        {cl.service_type?.replace('_', ' ').toUpperCase() || 'N/A'}
                       </span>
                     </td>
-                    <td>{cl.total_hours.toFixed(1)} hrs</td>
-                    <td>${cl.total_cost.toFixed(2)}</td>
-                    <td>{cl.caregiver_count}</td>
+                    <td>{(parseFloat(cl.total_hours) || 0).toFixed(1)} hrs</td>
+                    <td>${(parseFloat(cl.total_cost) || 0).toFixed(2)}</td>
+                    <td>{cl.caregiver_count || 0}</td>
                   </tr>
                 ))}
               </tbody>
@@ -229,13 +229,13 @@ const ReportsAnalytics = ({ token }) => {
                 <tbody>
                   {hoursByType.map((type, idx) => (
                     <tr key={idx}>
-                      <td>{type.service_type?.replace('_', ' ').toUpperCase()}</td>
-                      <td>{type.hours.toFixed(1)}</td>
+                      <td>{type.service_type?.replace('_', ' ').toUpperCase() || 'N/A'}</td>
+                      <td>{(parseFloat(type.hours) || 0).toFixed(1)}</td>
                       <td>
                         <div style={{ width: '100px', height: '6px', background: '#e0e0e0', borderRadius: '3px', overflow: 'hidden' }}>
-                          <div style={{ width: `${type.percentage}%`, height: '100%', background: '#2196f3' }}></div>
+                          <div style={{ width: `${parseFloat(type.percentage) || 0}%`, height: '100%', background: '#2196f3' }}></div>
                         </div>
-                        <small>{type.percentage.toFixed(1)}%</small>
+                        <small>{(parseFloat(type.percentage) || 0).toFixed(1)}%</small>
                       </td>
                     </tr>
                   ))}
@@ -260,7 +260,7 @@ const ReportsAnalytics = ({ token }) => {
                   {hoursByWeek.map((week, idx) => (
                     <tr key={idx}>
                       <td>{week.week}</td>
-                      <td>{week.hours.toFixed(1)}</td>
+                      <td>{(parseFloat(week.hours) || 0).toFixed(1)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -339,38 +339,44 @@ const ReportsAnalytics = ({ token }) => {
                 </tr>
               </thead>
               <tbody>
-                {performance.map(perf => (
-                  <tr key={perf.id}>
-                    <td><strong>{perf.first_name} {perf.last_name}</strong></td>
-                    <td>
-                      {perf.avg_rating ? (
-                        <span style={{ fontSize: '1.1em' }}>
-                          ⭐ {perf.avg_rating.toFixed(1)} ({perf.rating_count})
+                {performance.map(perf => {
+                  const avgRating = parseFloat(perf.avg_rating) || 0;
+                  const attendanceRate = parseFloat(perf.attendance_rate) || 0;
+                  const trainingHours = parseFloat(perf.training_hours) || 0;
+                  const performanceScore = parseFloat(perf.performance_score) || 0;
+                  return (
+                    <tr key={perf.id}>
+                      <td><strong>{perf.first_name} {perf.last_name}</strong></td>
+                      <td>
+                        {perf.avg_rating ? (
+                          <span style={{ fontSize: '1.1em' }}>
+                            ⭐ {avgRating.toFixed(1)} ({perf.rating_count || 0})
+                          </span>
+                        ) : (
+                          'N/A'
+                        )}
+                      </td>
+                      <td>
+                        <span className={attendanceRate >= 95 ? 'value-success' : 'value-warning'}>
+                          {attendanceRate.toFixed(1)}%
                         </span>
-                      ) : (
-                        'N/A'
-                      )}
-                    </td>
-                    <td>
-                      <span className={perf.attendance_rate >= 95 ? 'value-success' : 'value-warning'}>
-                        {perf.attendance_rate.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td>
-                      {perf.incident_count > 0 ? (
-                        <span className="value-danger">{perf.incident_count}</span>
-                      ) : (
-                        '0 ✓'
-                      )}
-                    </td>
-                    <td>{perf.training_hours.toFixed(1)}</td>
-                    <td>
-                      <span className={`badge ${perf.performance_score >= 85 ? 'badge-success' : perf.performance_score >= 70 ? 'badge-warning' : 'badge-danger'}`}>
-                        {perf.performance_score.toFixed(0)}/100
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>
+                        {(perf.incident_count || 0) > 0 ? (
+                          <span className="value-danger">{perf.incident_count}</span>
+                        ) : (
+                          '0 ✓'
+                        )}
+                      </td>
+                      <td>{trainingHours.toFixed(1)}</td>
+                      <td>
+                        <span className={`badge ${performanceScore >= 85 ? 'badge-success' : performanceScore >= 70 ? 'badge-warning' : 'badge-danger'}`}>
+                          {performanceScore.toFixed(0)}/100
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (
@@ -383,7 +389,8 @@ const ReportsAnalytics = ({ token }) => {
 
   const renderSatisfactionReport = () => {
     if (!reportData) return null;
-    const { satisfaction, trends } = reportData;
+    const { satisfaction = {}, trends } = reportData;
+    const distribution = satisfaction.distribution || {};
 
     return (
       <div>
@@ -391,19 +398,19 @@ const ReportsAnalytics = ({ token }) => {
           <div className="stat-card">
             <h3>Overall Satisfaction</h3>
             <div className="value" style={{ fontSize: '3rem' }}>
-              {satisfaction.overall.toFixed(1)}⭐
+              {satisfaction.overall ? (parseFloat(satisfaction.overall) || 0).toFixed(1) : 'N/A'}⭐
             </div>
-            <p className="stat-subtext">{satisfaction.total_ratings} ratings</p>
+            <p className="stat-subtext">{satisfaction.total_ratings || 0} ratings</p>
           </div>
 
           <div className="stat-card">
             <h3>Satisfaction Distribution</h3>
             <div style={{ fontSize: '0.9rem' }}>
-              <p>5 ⭐: {satisfaction.distribution[5] || 0}</p>
-              <p>4 ⭐: {satisfaction.distribution[4] || 0}</p>
-              <p>3 ⭐: {satisfaction.distribution[3] || 0}</p>
-              <p>2 ⭐: {satisfaction.distribution[2] || 0}</p>
-              <p>1 ⭐: {satisfaction.distribution[1] || 0}</p>
+              <p>5 ⭐: {distribution[5] || 0}</p>
+              <p>4 ⭐: {distribution[4] || 0}</p>
+              <p>3 ⭐: {distribution[3] || 0}</p>
+              <p>2 ⭐: {distribution[2] || 0}</p>
+              <p>1 ⭐: {distribution[1] || 0}</p>
             </div>
           </div>
         </div>
@@ -421,22 +428,26 @@ const ReportsAnalytics = ({ token }) => {
                 </tr>
               </thead>
               <tbody>
-                {trends.map((trend, idx) => (
-                  <tr key={idx}>
-                    <td>{trend.period}</td>
-                    <td>⭐ {trend.rating.toFixed(2)}</td>
-                    <td>
-                      {trend.change > 0 ? (
-                        <span style={{ color: '#4caf50' }}>↑ {trend.change.toFixed(2)}</span>
-                      ) : trend.change < 0 ? (
-                        <span style={{ color: '#f44336' }}>↓ {Math.abs(trend.change).toFixed(2)}</span>
-                      ) : (
-                        <span style={{ color: '#999' }}>→ Stable</span>
-                      )}
-                    </td>
-                    <td>{trend.count}</td>
-                  </tr>
-                ))}
+                {trends.map((trend, idx) => {
+                  const rating = parseFloat(trend.rating) || 0;
+                  const change = parseFloat(trend.change) || 0;
+                  return (
+                    <tr key={idx}>
+                      <td>{trend.period}</td>
+                      <td>⭐ {rating.toFixed(2)}</td>
+                      <td>
+                        {change > 0 ? (
+                          <span style={{ color: '#4caf50' }}>↑ {change.toFixed(2)}</span>
+                        ) : change < 0 ? (
+                          <span style={{ color: '#f44336' }}>↓ {Math.abs(change).toFixed(2)}</span>
+                        ) : (
+                          <span style={{ color: '#999' }}>→ Stable</span>
+                        )}
+                      </td>
+                      <td>{trend.count || 0}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (
@@ -446,13 +457,13 @@ const ReportsAnalytics = ({ token }) => {
 
         <div className="card">
           <h3>Feedback Themes</h3>
-          {satisfaction.feedback_themes ? (
+          {satisfaction.feedback_themes && satisfaction.feedback_themes.length > 0 ? (
             <div style={{ display: 'grid', gap: '1rem' }}>
               {satisfaction.feedback_themes.map((theme, idx) => (
                 <div key={idx} style={{ padding: '1rem', background: '#f5f5f5', borderRadius: '6px' }}>
                   <strong>{theme.theme}</strong>
                   <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', color: '#666' }}>
-                    Mentioned {theme.count} times
+                    Mentioned {theme.count || 0} times
                   </p>
                 </div>
               ))}
@@ -467,7 +478,8 @@ const ReportsAnalytics = ({ token }) => {
 
   const renderRevenueReport = () => {
     if (!reportData) return null;
-    const { revenue, byClient, byServiceType } = reportData;
+    const { revenue = {}, byClient, byServiceType } = reportData;
+    const revenueTotal = parseFloat(revenue.total) || 0;
 
     return (
       <div>
@@ -475,19 +487,19 @@ const ReportsAnalytics = ({ token }) => {
           <div className="stat-card">
             <h3>Total Revenue</h3>
             <div className="value value-success">
-              ${revenue.total.toFixed(2)}
+              ${revenueTotal.toFixed(2)}
             </div>
           </div>
           <div className="stat-card">
             <h3>Avg Per Hour</h3>
             <div className="value">
-              ${revenue.avgPerHour.toFixed(2)}
+              ${(parseFloat(revenue.avgPerHour) || 0).toFixed(2)}
             </div>
           </div>
           <div className="stat-card">
             <h3>Billable Hours</h3>
             <div className="value">
-              {revenue.billableHours.toFixed(1)}
+              {(parseFloat(revenue.billableHours) || 0).toFixed(1)}
             </div>
           </div>
         </div>
@@ -506,14 +518,17 @@ const ReportsAnalytics = ({ token }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {byServiceType.map((st, idx) => (
-                    <tr key={idx}>
-                      <td>{st.service_type?.replace('_', ' ').toUpperCase()}</td>
-                      <td>{st.hours.toFixed(1)}</td>
-                      <td><strong>${st.revenue.toFixed(2)}</strong></td>
-                      <td>{((st.revenue / revenue.total) * 100).toFixed(1)}%</td>
-                    </tr>
-                  ))}
+                  {byServiceType.map((st, idx) => {
+                    const stRevenue = parseFloat(st.revenue) || 0;
+                    return (
+                      <tr key={idx}>
+                        <td>{st.service_type?.replace('_', ' ').toUpperCase() || 'N/A'}</td>
+                        <td>{(parseFloat(st.hours) || 0).toFixed(1)}</td>
+                        <td><strong>${stRevenue.toFixed(2)}</strong></td>
+                        <td>{revenueTotal > 0 ? ((stRevenue / revenueTotal) * 100).toFixed(1) : 0}%</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             ) : (
@@ -535,7 +550,7 @@ const ReportsAnalytics = ({ token }) => {
                   {byClient.slice(0, 10).map(cl => (
                     <tr key={cl.id}>
                       <td>{cl.first_name} {cl.last_name}</td>
-                      <td><strong>${cl.revenue.toFixed(2)}</strong></td>
+                      <td><strong>${(parseFloat(cl.revenue) || 0).toFixed(2)}</strong></td>
                     </tr>
                   ))}
                 </tbody>
