@@ -1,23 +1,44 @@
 // src/components/admin/CaregiverManagement.jsx
 import React, { useState, useEffect } from 'react';
-import { getCaregivers, convertToAdmin } from '../../config';
+import { API_BASE_URL } from '../../config';
 import AddCaregiverModal from './AddCaregiverModal';
 
-const CaregiverManagement = ({ token, onViewProfile })=> {
+const CaregiverManagement = ({ token, onViewProfile }) => {
   const [caregivers, setCaregivers] = useState([]);
+  const [careTypes, setCareTypes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showRatesModal, setShowRatesModal] = useState(false);
+  const [selectedCaregiver, setSelectedCaregiver] = useState(null);
+  const [caregiverRates, setCaregiverRates] = useState([]);
+  
+  const [editData, setEditData] = useState({
+    firstName: '',
+    lastName: '',
+    phone: '',
+    payRate: ''
+  });
+
+  const [rateFormData, setRateFormData] = useState({
+    careTypeId: '',
+    hourlyRate: ''
+  });
 
   useEffect(() => {
-    loadCaregivers();
+    loadData();
   }, []);
 
-  const loadCaregivers = async () => {
+  const loadData = async () => {
     try {
-      const data = await getCaregivers(token);
-      setCaregivers(data);
+      const [cgRes, ctRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/care-types`, { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
+      setCaregivers(await cgRes.json());
+      setCareTypes(await ctRes.json());
     } catch (error) {
-      console.error('Failed to load caregivers:', error);
+      console.error('Failed to load data:', error);
     } finally {
       setLoading(false);
     }
@@ -26,8 +47,16 @@ const CaregiverManagement = ({ token, onViewProfile })=> {
   const handlePromoteToAdmin = async (userId) => {
     if (window.confirm('Promote this caregiver to admin?')) {
       try {
-        await convertToAdmin(userId, token);
-        loadCaregivers();
+        const response = await fetch(`${API_BASE_URL}/api/users/convert-to-admin`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ userId })
+        });
+        if (!response.ok) throw new Error('Failed to promote');
+        loadData();
         alert('Caregiver promoted to admin!');
       } catch (error) {
         alert('Failed to promote: ' + error.message);
@@ -35,10 +64,120 @@ const CaregiverManagement = ({ token, onViewProfile })=> {
     }
   };
 
+  const handleOpenEdit = (caregiver) => {
+    setSelectedCaregiver(caregiver);
+    setEditData({
+      firstName: caregiver.first_name || '',
+      lastName: caregiver.last_name || '',
+      phone: caregiver.phone || '',
+      payRate: caregiver.default_pay_rate || ''
+    });
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/caregivers/${selectedCaregiver.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          firstName: editData.firstName,
+          lastName: editData.lastName,
+          phone: editData.phone,
+          payRate: parseFloat(editData.payRate) || null
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to update caregiver');
+
+      setShowEditModal(false);
+      setSelectedCaregiver(null);
+      loadData();
+      alert('Caregiver updated!');
+    } catch (error) {
+      alert('Failed to update: ' + error.message);
+    }
+  };
+
+  const handleOpenRates = async (caregiver) => {
+    setSelectedCaregiver(caregiver);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${caregiver.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      setCaregiverRates(await response.json());
+      setShowRatesModal(true);
+    } catch (error) {
+      alert('Failed to load rates: ' + error.message);
+    }
+  };
+
+  const handleAddRate = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          caregiverId: selectedCaregiver.id,
+          careTypeId: rateFormData.careTypeId,
+          hourlyRate: parseFloat(rateFormData.hourlyRate)
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to add rate');
+
+      setRateFormData({ careTypeId: '', hourlyRate: '' });
+      
+      // Reload rates
+      const ratesRes = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${selectedCaregiver.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      setCaregiverRates(await ratesRes.json());
+    } catch (error) {
+      alert('Failed to add rate: ' + error.message);
+    }
+  };
+
+  const handleDeleteRate = async (rateId) => {
+    if (!window.confirm('Remove this rate?')) return;
+    
+    try {
+      await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates/${rateId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const ratesRes = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${selectedCaregiver.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      setCaregiverRates(await ratesRes.json());
+    } catch (error) {
+      alert('Failed to delete rate: ' + error.message);
+    }
+  };
+
+  // Get care types not yet assigned to this caregiver
+  const getAvailableCareTypes = () => {
+    const assignedIds = caregiverRates.map(r => r.care_type_id);
+    return careTypes.filter(ct => !assignedIds.includes(ct.id));
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
+  };
+
   return (
     <div>
       <div className="page-header">
-        <h2>👔 Caregiver Management</h2>
+        <h2>👤 Caregiver Management</h2>
         <button 
           className="btn btn-primary"
           onClick={() => setShowModal(true)}
@@ -60,7 +199,7 @@ const CaregiverManagement = ({ token, onViewProfile })=> {
               <th>Name</th>
               <th>Email</th>
               <th>Phone</th>
-              <th>Hire Date</th>
+              <th>Default Rate</th>
               <th>Role</th>
               <th>Actions</th>
             </tr>
@@ -71,23 +210,39 @@ const CaregiverManagement = ({ token, onViewProfile })=> {
                 <td><strong>{caregiver.first_name} {caregiver.last_name}</strong></td>
                 <td>{caregiver.email}</td>
                 <td><a href={`tel:${caregiver.phone}`}>{caregiver.phone || 'N/A'}</a></td>
-                <td>{caregiver.hire_date || 'N/A'}</td>
+                <td>
+                  <strong>{formatCurrency(caregiver.default_pay_rate)}</strong>/hr
+                </td>
                 <td>
                   <span className={`badge ${caregiver.role === 'admin' ? 'badge-danger' : 'badge-info'}`}>
                     {caregiver.role.toUpperCase()}
                   </span>
                 </td>
                 <td>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <button 
                       className="btn btn-sm btn-primary"
-                      onClick={() => onViewProfile && onViewProfile(caregiver.id)}
+                      onClick={() => handleOpenEdit(caregiver)}
                     >
-                      View Profile
+                      Edit
                     </button>
+                    <button 
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => handleOpenRates(caregiver)}
+                    >
+                      💰 Pay Rates
+                    </button>
+                    {onViewProfile && (
+                      <button 
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => onViewProfile(caregiver.id)}
+                      >
+                        Profile
+                      </button>
+                    )}
                     {caregiver.role !== 'admin' && (
                       <button 
-                        className="btn btn-sm btn-primary"
+                        className="btn btn-sm btn-warning"
                         onClick={() => handlePromoteToAdmin(caregiver.id)}
                       >
                         Make Admin
@@ -100,13 +255,177 @@ const CaregiverManagement = ({ token, onViewProfile })=> {
           </tbody>
         </table>
       )}
+
       <AddCaregiverModal 
         isOpen={showModal}
         onClose={() => setShowModal(false)}
-        onSuccess={loadCaregivers}
+        onSuccess={loadData}
         token={token}
       />
+
+      {/* Edit Caregiver Modal */}
+      {showEditModal && selectedCaregiver && (
+        <div className="modal active">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h2>Edit Caregiver</h2>
+              <button className="close-btn" onClick={() => setShowEditModal(false)}>×</button>
+            </div>
+
+            <form onSubmit={handleSaveEdit}>
+              <div className="form-group">
+                <label>First Name</label>
+                <input
+                  type="text"
+                  value={editData.firstName}
+                  onChange={(e) => setEditData({ ...editData, firstName: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Last Name</label>
+                <input
+                  type="text"
+                  value={editData.lastName}
+                  onChange={(e) => setEditData({ ...editData, lastName: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Phone</label>
+                <input
+                  type="tel"
+                  value={editData.phone}
+                  onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Default Hourly Pay Rate</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={editData.payRate}
+                  onChange={(e) => setEditData({ ...editData, payRate: e.target.value })}
+                  placeholder="15.00"
+                />
+                <small className="text-muted">Used when no care-type-specific rate is set</small>
+              </div>
+
+              <div className="modal-actions">
+                <button type="submit" className="btn btn-primary">Save Changes</button>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Pay Rates by Care Type Modal */}
+      {showRatesModal && selectedCaregiver && (
+        <div className="modal active">
+          <div className="modal-content modal-large">
+            <div className="modal-header">
+              <h2>💰 Pay Rates - {selectedCaregiver.first_name} {selectedCaregiver.last_name}</h2>
+              <button className="close-btn" onClick={() => setShowRatesModal(false)}>×</button>
+            </div>
+
+            <div className="card" style={{ background: '#f9f9f9', marginBottom: '1.5rem' }}>
+              <p style={{ margin: 0 }}>
+                <strong>Default Rate:</strong> {formatCurrency(selectedCaregiver.default_pay_rate)}/hr
+              </p>
+              <small className="text-muted">
+                Used when no care-type-specific rate is set for a client's care type
+              </small>
+            </div>
+
+            <h4>Care Type Rates</h4>
+            <p className="text-muted" style={{ marginBottom: '1rem' }}>
+              Set different pay rates based on the type of care being provided. 
+              When this caregiver works with a client, we look at the client's care type 
+              and use the matching rate below.
+            </p>
+
+            {getAvailableCareTypes().length > 0 && (
+              <form onSubmit={handleAddRate} style={{ marginBottom: '1.5rem' }}>
+                <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr auto' }}>
+                  <div className="form-group">
+                    <label>Care Type</label>
+                    <select
+                      value={rateFormData.careTypeId}
+                      onChange={(e) => setRateFormData({ ...rateFormData, careTypeId: e.target.value })}
+                      required
+                    >
+                      <option value="">Select care type...</option>
+                      {getAvailableCareTypes().map(ct => (
+                        <option key={ct.id} value={ct.id}>{ct.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Hourly Rate</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={rateFormData.hourlyRate}
+                      onChange={(e) => setRateFormData({ ...rateFormData, hourlyRate: e.target.value })}
+                      placeholder="15.00"
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
+                    <button type="submit" className="btn btn-primary">Add Rate</button>
+                  </div>
+                </div>
+              </form>
+            )}
+
+            {caregiverRates.length === 0 ? (
+              <div className="card card-centered">
+                <p>No care-type-specific rates set. Default rate will be used for all care types.</p>
+              </div>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Care Type</th>
+                    <th>Hourly Rate</th>
+                    <th>Effective Date</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {caregiverRates.map(rate => (
+                    <tr key={rate.id}>
+                      <td><strong>{rate.care_type_name}</strong></td>
+                      <td><strong>{formatCurrency(rate.hourly_rate)}</strong>/hr</td>
+                      <td>{new Date(rate.effective_date).toLocaleDateString()}</td>
+                      <td>
+                        <button 
+                          className="btn btn-sm btn-danger"
+                          onClick={() => handleDeleteRate(rate.id)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setShowRatesModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
 export default CaregiverManagement;

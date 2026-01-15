@@ -9,6 +9,7 @@ const AddCaregiverModal = ({ isOpen, onClose, onSuccess, token }) => {
     firstName: '',
     lastName: '',
     phone: '',
+    payRate: '15.00'
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -30,16 +31,18 @@ const AddCaregiverModal = ({ isOpen, onClose, onSuccess, token }) => {
           password: formData.password,
           firstName: formData.firstName,
           lastName: formData.lastName,
-          phone: formData.phone
+          phone: formData.phone,
+          payRate: parseFloat(formData.payRate) || 15.00
         })
       });
 
       if (!response.ok) {
-        throw new Error('Failed to add caregiver');
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to add caregiver');
       }
 
       alert('Caregiver added successfully!');
-      setFormData({ email: '', password: '', firstName: '', lastName: '', phone: '' });
+      setFormData({ email: '', password: '', firstName: '', lastName: '', phone: '', payRate: '15.00' });
       onSuccess();
       onClose();
     } catch (err) {
@@ -109,6 +112,20 @@ const AddCaregiverModal = ({ isOpen, onClose, onSuccess, token }) => {
               value={formData.phone}
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
             />
+          </div>
+
+          <div className="form-group">
+            <label>Default Hourly Pay Rate *</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={formData.payRate}
+              onChange={(e) => setFormData({ ...formData, payRate: e.target.value })}
+              placeholder="15.00"
+              required
+            />
+            <small className="text-muted">Can set different rates per care type after adding</small>
           </div>
 
           <div className="modal-actions">

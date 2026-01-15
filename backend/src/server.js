@@ -139,7 +139,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/register-caregiver', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { email, password, firstName, lastName, phone } = req.body;
+    const { email, password, firstName, lastName, phone, payRate } = req.body;
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = uuidv4();
@@ -148,10 +148,10 @@ app.post('/api/auth/register-caregiver', verifyToken, requireAdmin, async (req, 
     await pool.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
 
     const result = await pool.query(
-      `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role)
-       VALUES ($1, $2, $3, $4, $5, $6, 'caregiver')
-       RETURNING id, email, first_name, last_name, role`,
-      [userId, email, hashedPassword, firstName, lastName, phone]
+      `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role, default_pay_rate)
+       VALUES ($1, $2, $3, $4, $5, $6, 'caregiver', $7)
+       RETURNING id, email, first_name, last_name, role, default_pay_rate`,
+      [userId, email, hashedPassword, firstName, lastName, phone, payRate || 15.00]
     );
 
     res.status(201).json(result.rows[0]);
@@ -195,10 +195,51 @@ app.post('/api/auth/register-admin', verifyToken, requireAdmin, async (req, res)
 app.get('/api/users/caregivers', verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role
+      `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate
        FROM users WHERE role = 'caregiver' ORDER BY first_name`
     );
     res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Also support /api/caregivers for backwards compatibility
+app.get('/api/caregivers', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate
+       FROM users WHERE role = 'caregiver' AND is_active = true ORDER BY first_name`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/caregivers/:id - Update caregiver info including pay rate
+app.put('/api/caregivers/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { firstName, lastName, phone, payRate } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE users SET 
+        first_name = COALESCE($1, first_name),
+        last_name = COALESCE($2, last_name),
+        phone = COALESCE($3, phone),
+        default_pay_rate = COALESCE($4, default_pay_rate),
+        updated_at = NOW()
+       WHERE id = $5 AND role = 'caregiver'
+       RETURNING id, email, first_name, last_name, phone, default_pay_rate`,
+      [firstName, lastName, phone, payRate, req.params.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Caregiver not found' });
+    }
+    
+    await auditLog(req.user.id, 'UPDATE', 'users', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -4125,32 +4166,29 @@ app.delete('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (r
   }
 });
 
-// ============ CAREGIVER CLIENT RATES ============
-app.get('/api/caregiver-client-rates', verifyToken, async (req, res) => {
+// ============ CAREGIVER CARE TYPE RATES (PAYROLL) ============
+app.get('/api/caregiver-care-type-rates', verifyToken, async (req, res) => {
   try {
-    const { caregiverId, clientId } = req.query;
+    const { caregiverId } = req.query;
     
     let query = `
-      SELECT ccr.*, 
+      SELECT cctr.*, 
              u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
-             c.first_name as client_first_name, c.last_name as client_last_name
-      FROM caregiver_client_rates ccr
-      JOIN users u ON ccr.caregiver_id = u.id
-      JOIN clients c ON ccr.client_id = c.id
-      WHERE (ccr.end_date IS NULL OR ccr.end_date >= CURRENT_DATE)
+             ct.name as care_type_name
+      FROM caregiver_care_type_rates cctr
+      JOIN users u ON cctr.caregiver_id = u.id
+      JOIN care_types ct ON cctr.care_type_id = ct.id
+      WHERE cctr.is_active = true
+        AND (cctr.end_date IS NULL OR cctr.end_date >= CURRENT_DATE)
     `;
     const params = [];
     
     if (caregiverId) {
       params.push(caregiverId);
-      query += ` AND ccr.caregiver_id = $${params.length}`;
-    }
-    if (clientId) {
-      params.push(clientId);
-      query += ` AND ccr.client_id = $${params.length}`;
+      query += ` AND cctr.caregiver_id = $${params.length}`;
     }
     
-    query += ` ORDER BY u.last_name, c.last_name`;
+    query += ` ORDER BY u.last_name, ct.name`;
     
     const result = await pool.query(query, params);
     res.json(result.rows);
@@ -4159,56 +4197,56 @@ app.get('/api/caregiver-client-rates', verifyToken, async (req, res) => {
   }
 });
 
-app.post('/api/caregiver-client-rates', verifyToken, requireAdmin, async (req, res) => {
+app.post('/api/caregiver-care-type-rates', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { caregiverId, clientId, hourlyRate, effectiveDate, notes } = req.body;
+    const { caregiverId, careTypeId, hourlyRate } = req.body;
     const id = uuidv4();
     
-    // End any existing rate for this combo
+    // Deactivate any existing rate for this combo
     await pool.query(
-      `UPDATE caregiver_client_rates SET end_date = $1, updated_at = NOW()
-       WHERE caregiver_id = $2 AND client_id = $3 AND end_date IS NULL`,
-      [effectiveDate || new Date(), caregiverId, clientId]
+      `UPDATE caregiver_care_type_rates SET is_active = false, end_date = CURRENT_DATE, updated_at = NOW()
+       WHERE caregiver_id = $1 AND care_type_id = $2 AND is_active = true`,
+      [caregiverId, careTypeId]
     );
     
     const result = await pool.query(
-      `INSERT INTO caregiver_client_rates (id, caregiver_id, client_id, hourly_rate, effective_date, notes)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, caregiverId, clientId, hourlyRate, effectiveDate || new Date(), notes]
+      `INSERT INTO caregiver_care_type_rates (id, caregiver_id, care_type_id, hourly_rate)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [id, caregiverId, careTypeId, hourlyRate]
     );
     
-    await auditLog(req.user.id, 'CREATE', 'caregiver_client_rates', id, null, result.rows[0]);
+    await auditLog(req.user.id, 'CREATE', 'caregiver_care_type_rates', id, null, result.rows[0]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.put('/api/caregiver-client-rates/:id', verifyToken, requireAdmin, async (req, res) => {
+app.put('/api/caregiver-care-type-rates/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { hourlyRate, notes } = req.body;
+    const { hourlyRate } = req.body;
     
     const result = await pool.query(
-      `UPDATE caregiver_client_rates SET hourly_rate = $1, notes = $2, updated_at = NOW()
-       WHERE id = $3 RETURNING *`,
-      [hourlyRate, notes, req.params.id]
+      `UPDATE caregiver_care_type_rates SET hourly_rate = $1, updated_at = NOW()
+       WHERE id = $2 RETURNING *`,
+      [hourlyRate, req.params.id]
     );
     
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Rate not found' });
     }
     
-    await auditLog(req.user.id, 'UPDATE', 'caregiver_client_rates', req.params.id, null, result.rows[0]);
+    await auditLog(req.user.id, 'UPDATE', 'caregiver_care_type_rates', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.delete('/api/caregiver-client-rates/:id', verifyToken, requireAdmin, async (req, res) => {
+app.delete('/api/caregiver-care-type-rates/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `UPDATE caregiver_client_rates SET end_date = CURRENT_DATE, updated_at = NOW()
+      `UPDATE caregiver_care_type_rates SET is_active = false, end_date = CURRENT_DATE, updated_at = NOW()
        WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -4217,8 +4255,41 @@ app.delete('/api/caregiver-client-rates/:id', verifyToken, requireAdmin, async (
       return res.status(404).json({ error: 'Rate not found' });
     }
     
-    await auditLog(req.user.id, 'DELETE', 'caregiver_client_rates', req.params.id, null, result.rows[0]);
+    await auditLog(req.user.id, 'DELETE', 'caregiver_care_type_rates', req.params.id, null, result.rows[0]);
     res.json({ message: 'Rate ended' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get caregiver's pay rate for a specific client (based on client's care type)
+app.get('/api/caregivers/:id/pay-rate-for-client/:clientId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        cctr.hourly_rate,
+        ct.name as care_type_name,
+        u.default_pay_rate
+      FROM clients c
+      JOIN users u ON u.id = $1
+      LEFT JOIN care_types ct ON c.care_type_id = ct.id
+      LEFT JOIN caregiver_care_type_rates cctr ON 
+        cctr.caregiver_id = $1 
+        AND cctr.care_type_id = c.care_type_id
+        AND cctr.is_active = true
+      WHERE c.id = $2
+    `, [req.params.id, req.params.clientId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    
+    const row = result.rows[0];
+    res.json({
+      hourlyRate: row.hourly_rate || row.default_pay_rate || 15.00,
+      careTypeName: row.care_type_name,
+      isDefaultRate: !row.hourly_rate
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
