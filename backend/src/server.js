@@ -4591,7 +4591,8 @@ function getWeekStart(date) {
   return d;
 }
 
-// GET /api/scheduling/suggest-caregivers - Smart caregiver suggestions
+// GET /api/scheduling/suggest-caregivers - Smart caregiver suggestions with distance + skills
+// REPLACES lines 4594-4702 in server.js
 app.get('/api/scheduling/suggest-caregivers', verifyToken, async (req, res) => {
   try {
     const { clientId, date, startTime, endTime } = req.query;
@@ -4600,25 +4601,38 @@ app.get('/api/scheduling/suggest-caregivers', verifyToken, async (req, res) => {
       return res.status(400).json({ error: 'Client ID required' });
     }
 
-    const client = await db.query(
-      `SELECT id, first_name, last_name, care_type_id FROM clients WHERE id = $1`,
-      [clientId]
-    );
+    // Get client with care type and location
+    const client = await db.query(`
+      SELECT c.id, c.first_name, c.last_name, c.care_type_id, c.latitude, c.longitude,
+             ct.name as care_type_name, ct.required_certifications
+      FROM clients c
+      LEFT JOIN care_types ct ON c.care_type_id = ct.id
+      WHERE c.id = $1
+    `, [clientId]);
     
     if (client.rows.length === 0) {
       return res.status(404).json({ error: 'Client not found' });
     }
 
+    const clientData = client.rows[0];
+    const requiredCerts = clientData.required_certifications || [];
+
     const shiftHours = startTime && endTime ? 
       (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60) : 4;
 
-    // Get caregivers with availability
+    // Get caregivers with availability AND certifications AND location
     const caregivers = await db.query(`
       SELECT u.id, u.first_name, u.last_name, u.phone, u.default_pay_rate,
-             ca.status as availability_status, ca.max_hours_per_week
+             u.latitude, u.longitude, u.certifications,
+             ca.status as availability_status, ca.max_hours_per_week,
+             ARRAY_AGG(DISTINCT cc.certification_type) FILTER (WHERE cc.certification_type IS NOT NULL AND (cc.expiration_date IS NULL OR cc.expiration_date > CURRENT_DATE)) as active_certifications
       FROM users u
       LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
+      LEFT JOIN caregiver_certifications cc ON u.id = cc.caregiver_id
       WHERE u.role = 'caregiver' AND u.is_active = true
+      GROUP BY u.id, u.first_name, u.last_name, u.phone, u.default_pay_rate,
+               u.latitude, u.longitude, u.certifications,
+               ca.status, ca.max_hours_per_week
       ORDER BY u.first_name
     `);
 
@@ -4659,6 +4673,27 @@ app.get('/api/scheduling/suggest-caregivers', verifyToken, async (req, res) => {
       conflictingCaregivers = conflicts.rows.map(r => r.caregiver_id);
     }
 
+    // Haversine distance calculation (returns miles)
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+      if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+      const R = 3959; // Earth's radius in miles
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    };
+
+    // Check if caregiver has required certifications
+    const hasRequiredCerts = (caregiverCerts, required) => {
+      if (!required || required.length === 0) return { hasAll: true, missing: [] };
+      const certs = caregiverCerts || [];
+      const missing = required.filter(req => !certs.includes(req));
+      return { hasAll: missing.length === 0, missing };
+    };
+
     // Score caregivers
     const ranked = caregivers.rows.map(cg => {
       const weeklyHours = hoursMap[cg.id] || 0;
@@ -4669,38 +4704,340 @@ app.get('/api/scheduling/suggest-caregivers', verifyToken, async (req, res) => {
       const wouldExceedHours = (weeklyHours + shiftHours) > maxHours;
       const approachingOvertime = (weeklyHours + shiftHours) > 40;
 
+      // Distance calculation
+      const distance = calculateDistance(
+        cg.latitude, cg.longitude,
+        clientData.latitude, clientData.longitude
+      );
+      const estimatedDriveTime = distance ? Math.round(distance * 2) : null;
+
+      // Skills matching
+      const certCheck = hasRequiredCerts(cg.active_certifications, requiredCerts);
+      const hasRequiredSkills = certCheck.hasAll;
+      const missingCerts = certCheck.missing;
+
+      // Calculate score
       let score = 100;
+      
+      // Familiarity bonus (max +30)
       score += Math.min(visitCount * 3, 30);
+      
+      // Availability penalties
       if (!isAvailable) score -= 100;
       if (hasConflict) score -= 100;
+      
+      // Hours penalties
       score -= (weeklyHours / maxHours) * 20;
       if (wouldExceedHours) score -= 50;
       if (approachingOvertime) score -= 10;
 
+      // Distance scoring
+      if (distance !== null) {
+        if (distance <= 5) score += 20;
+        else if (distance <= 10) score += 10;
+        else if (distance <= 20) score += 5;
+        else if (distance > 30) score -= 15;
+      }
+
+      // Skills matching
+      if (!hasRequiredSkills) {
+        score -= 40;
+      }
+
+      // Build reason strings
       const reasons = [];
-      if (visitCount > 5) reasons.push(`Familiar (${visitCount} visits)`);
+      
+      if (visitCount > 5) reasons.push(`✓ Familiar (${visitCount} visits)`);
       else if (visitCount > 0) reasons.push(`${visitCount} prior visits`);
+      
       if (hasConflict) reasons.push('⚠️ Conflict');
       if (!isAvailable) reasons.push('⚠️ Unavailable');
+      
       if (wouldExceedHours) reasons.push('⚠️ Exceeds max hours');
-      if (approachingOvertime) reasons.push(`⚠️ ${weeklyHours.toFixed(0)}h this week`);
-      if (weeklyHours < 20) reasons.push('Has availability');
+      else if (approachingOvertime) reasons.push(`⚠️ ${weeklyHours.toFixed(0)}h this week`);
+      else if (weeklyHours < 20) reasons.push('✓ Has availability');
+
+      if (distance !== null) {
+        if (distance <= 5) reasons.push(`✓ Nearby (${distance.toFixed(1)} mi)`);
+        else if (distance <= 15) reasons.push(`${distance.toFixed(1)} mi away`);
+        else if (distance > 20) reasons.push(`⚠️ Far (${distance.toFixed(1)} mi)`);
+      }
+
+      if (!hasRequiredSkills) {
+        reasons.push(`⚠️ Missing: ${missingCerts.join(', ')}`);
+      } else if (requiredCerts.length > 0) {
+        reasons.push('✓ Has required certs');
+      }
 
       return {
-        ...cg, weeklyHours: weeklyHours.toFixed(1), maxHours, visitCount,
-        hasConflict, isAvailable, wouldExceedHours, approachingOvertime,
-        score: Math.round(score), reasons
+        ...cg,
+        weeklyHours: weeklyHours.toFixed(1),
+        maxHours,
+        visitCount,
+        hasConflict,
+        isAvailable,
+        wouldExceedHours,
+        approachingOvertime,
+        distance: distance ? distance.toFixed(1) : null,
+        estimatedDriveTime,
+        hasRequiredSkills,
+        missingCertifications: missingCerts,
+        score: Math.round(score),
+        reasons
       };
     });
 
     ranked.sort((a, b) => b.score - a.score);
-    res.json({ client: client.rows[0], suggestions: ranked, shiftHours });
+    
+    res.json({ 
+      client: clientData, 
+      suggestions: ranked, 
+      shiftHours,
+      requiredCertifications: requiredCerts
+    });
   } catch (error) {
     console.error('Suggest caregivers error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// POST /api/scheduling/auto-fill - Automatically fill all open shifts with best caregivers
+app.post('/api/scheduling/auto-fill', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate, dryRun = false } = req.body;
+    
+    const start = startDate || new Date().toISOString().split('T')[0];
+    const end = endDate || (() => {
+      const d = new Date();
+      d.setDate(d.getDate() + 7);
+      return d.toISOString().split('T')[0];
+    })();
+
+    // Get all open shifts in date range
+    const openShifts = await db.query(`
+      SELECT os.*, 
+        c.first_name as client_first, c.last_name as client_last,
+        c.care_type_id, c.latitude as client_lat, c.longitude as client_lng,
+        ct.required_certifications
+      FROM open_shifts os
+      JOIN clients c ON os.client_id = c.id
+      LEFT JOIN care_types ct ON c.care_type_id = ct.id
+      WHERE os.status = 'open'
+        AND os.shift_date >= $1 AND os.shift_date <= $2
+      ORDER BY os.urgency DESC, os.shift_date ASC, os.start_time ASC
+    `, [start, end]);
+
+    if (openShifts.rows.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'No open shifts to fill',
+        filled: 0,
+        failed: 0,
+        results: []
+      });
+    }
+
+    // Get all active caregivers
+    const caregivers = await db.query(`
+      SELECT u.id, u.first_name, u.last_name, u.latitude, u.longitude,
+             ca.status as availability_status, ca.max_hours_per_week,
+             ARRAY_AGG(DISTINCT cc.certification_type) FILTER (WHERE cc.certification_type IS NOT NULL AND (cc.expiration_date IS NULL OR cc.expiration_date > CURRENT_DATE)) as active_certifications
+      FROM users u
+      LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
+      LEFT JOIN caregiver_certifications cc ON u.id = cc.caregiver_id
+      WHERE u.role = 'caregiver' AND u.is_active = true
+        AND (ca.status IS NULL OR ca.status != 'unavailable')
+      GROUP BY u.id, u.first_name, u.last_name, u.latitude, u.longitude,
+               ca.status, ca.max_hours_per_week
+    `);
+
+    // Get weekly hours
+    const weekStart = getWeekStart(new Date(start));
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+
+    const hoursResult = await db.query(`
+      SELECT caregiver_id, SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time)) / 3600) as weekly_hours
+      FROM schedules
+      WHERE is_active = true AND (date >= $1 AND date <= $2 OR day_of_week IS NOT NULL)
+      GROUP BY caregiver_id
+    `, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
+
+    const hoursMap = {};
+    hoursResult.rows.forEach(r => hoursMap[r.caregiver_id] = parseFloat(r.weekly_hours) || 0);
+
+    // Get visit history
+    const historyResult = await db.query(`
+      SELECT caregiver_id, client_id, COUNT(*) as visit_count
+      FROM time_entries WHERE is_complete = true
+      GROUP BY caregiver_id, client_id
+    `);
+
+    const historyMap = {};
+    historyResult.rows.forEach(r => {
+      if (!historyMap[r.client_id]) historyMap[r.client_id] = {};
+      historyMap[r.client_id][r.caregiver_id] = parseInt(r.visit_count) || 0;
+    });
+
+    const newAssignments = [];
+
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+      if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+      const R = 3959;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    };
+
+    const timesOverlap = (start1, end1, start2, end2) => {
+      return !(end1 <= start2 || start1 >= end2);
+    };
+
+    const hasRequiredCerts = (caregiverCerts, required) => {
+      if (!required || required.length === 0) return true;
+      const certs = caregiverCerts || [];
+      return required.every(req => certs.includes(req));
+    };
+
+    const results = [];
+    let filled = 0;
+    let failed = 0;
+
+    for (const shift of openShifts.rows) {
+      const shiftHours = (new Date(`2000-01-01T${shift.end_time}`) - new Date(`2000-01-01T${shift.start_time}`)) / (1000 * 60 * 60);
+      const requiredCerts = shift.required_certifications || [];
+      const clientHistory = historyMap[shift.client_id] || {};
+
+      const existingConflicts = await db.query(`
+        SELECT DISTINCT caregiver_id FROM schedules
+        WHERE is_active = true AND date = $1
+          AND NOT (end_time <= $2 OR start_time >= $3)
+      `, [shift.shift_date, shift.start_time, shift.end_time]);
+      const conflictingIds = existingConflicts.rows.map(r => r.caregiver_id);
+
+      const scored = caregivers.rows.map(cg => {
+        const weeklyHours = hoursMap[cg.id] || 0;
+        const maxHours = cg.max_hours_per_week || 40;
+        const visitCount = clientHistory[cg.id] || 0;
+
+        const hasExistingConflict = conflictingIds.includes(cg.id);
+        const hasNewConflict = newAssignments.some(a => 
+          a.caregiverId === cg.id && 
+          a.date === shift.shift_date &&
+          timesOverlap(a.startTime, a.endTime, shift.start_time, shift.end_time)
+        );
+        const hasConflict = hasExistingConflict || hasNewConflict;
+
+        const additionalHours = newAssignments
+          .filter(a => a.caregiverId === cg.id)
+          .reduce((sum, a) => {
+            const h = (new Date(`2000-01-01T${a.endTime}`) - new Date(`2000-01-01T${a.startTime}`)) / (1000 * 60 * 60);
+            return sum + h;
+          }, 0);
+        const projectedHours = weeklyHours + additionalHours;
+
+        const wouldExceedHours = (projectedHours + shiftHours) > maxHours;
+        const wouldExceedOvertime = (projectedHours + shiftHours) > 40;
+
+        const distance = calculateDistance(cg.latitude, cg.longitude, shift.client_lat, shift.client_lng);
+        const hasCerts = hasRequiredCerts(cg.active_certifications, requiredCerts);
+
+        if (hasConflict || wouldExceedHours || !hasCerts) {
+          return { ...cg, score: -1000, disqualified: true, reason: hasConflict ? 'conflict' : !hasCerts ? 'missing_certs' : 'exceeds_hours' };
+        }
+
+        let score = 100;
+        score += Math.min(visitCount * 3, 30);
+        score -= (projectedHours / maxHours) * 20;
+        if (wouldExceedOvertime) score -= 15;
+        
+        if (distance !== null) {
+          if (distance <= 5) score += 20;
+          else if (distance <= 10) score += 10;
+          else if (distance <= 20) score += 5;
+          else if (distance > 30) score -= 15;
+        }
+
+        return { ...cg, score, disqualified: false, distance, visitCount, projectedHours };
+      });
+
+      scored.sort((a, b) => b.score - a.score);
+      const bestMatch = scored.find(s => !s.disqualified);
+
+      if (bestMatch) {
+        const shiftResult = {
+          shiftId: shift.id,
+          client: `${shift.client_first} ${shift.client_last}`,
+          date: shift.shift_date,
+          time: `${shift.start_time} - ${shift.end_time}`,
+          assignedTo: `${bestMatch.first_name} ${bestMatch.last_name}`,
+          caregiverId: bestMatch.id,
+          score: Math.round(bestMatch.score),
+          distance: bestMatch.distance ? `${bestMatch.distance.toFixed(1)} mi` : 'N/A',
+          familiarity: bestMatch.visitCount > 0 ? `${bestMatch.visitCount} visits` : 'New'
+        };
+
+        if (!dryRun) {
+          const scheduleId = uuidv4();
+          await db.query(`
+            INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, date, start_time, end_time, notes)
+            VALUES ($1, $2, $3, 'one-time', $4, $5, $6, $7)
+          `, [scheduleId, bestMatch.id, shift.client_id, shift.shift_date, shift.start_time, shift.end_time, 'Auto-assigned']);
+
+          await db.query(`
+            UPDATE open_shifts SET status = 'filled', filled_by = $1, filled_at = NOW()
+            WHERE id = $2
+          `, [bestMatch.id, shift.id]);
+
+          shiftResult.scheduleId = scheduleId;
+        }
+
+        newAssignments.push({
+          caregiverId: bestMatch.id,
+          date: shift.shift_date,
+          startTime: shift.start_time,
+          endTime: shift.end_time
+        });
+
+        hoursMap[bestMatch.id] = (hoursMap[bestMatch.id] || 0) + shiftHours;
+        results.push({ ...shiftResult, status: 'filled' });
+        filled++;
+      } else {
+        const topDisqualified = scored.filter(s => s.disqualified).slice(0, 3);
+        results.push({
+          shiftId: shift.id,
+          client: `${shift.client_first} ${shift.client_last}`,
+          date: shift.shift_date,
+          time: `${shift.start_time} - ${shift.end_time}`,
+          status: 'unfilled',
+          reason: 'No available caregivers',
+          candidates: topDisqualified.map(c => ({ name: `${c.first_name} ${c.last_name}`, reason: c.reason }))
+        });
+        failed++;
+      }
+    }
+
+    res.json({
+      success: true,
+      dryRun,
+      message: dryRun 
+        ? `Preview: Would fill ${filled} of ${openShifts.rows.length} shifts`
+        : `Filled ${filled} of ${openShifts.rows.length} shifts`,
+      filled,
+      failed,
+      total: openShifts.rows.length,
+      results
+    });
+
+  } catch (error) {
+    console.error('Auto-fill error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 // POST /api/scheduling/check-conflicts
 app.post('/api/scheduling/check-conflicts', verifyToken, async (req, res) => {
   try {
@@ -4959,6 +5296,7 @@ app.get('/api/scheduling/caregiver-hours/:caregiverId', verifyToken, async (req,
     res.status(500).json({ error: error.message });
   }
 });
+
 // Start server
 app.listen(port, () => {
   console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
