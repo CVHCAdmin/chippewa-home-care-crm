@@ -31,6 +31,7 @@ const SmartScheduling = ({ token }) => {
   // Week view state
   const [weekData, setWeekData] = useState(null);
   const [weekOf, setWeekOf] = useState(getWeekStart(new Date()).toISOString().split('T')[0]);
+  const [reassignModal, setReassignModal] = useState(null);
 
   // Availability state
   const [availabilityCaregiver, setAvailabilityCaregiver] = useState('');
@@ -603,6 +604,10 @@ const SmartScheduling = ({ token }) => {
             <button className="btn btn-secondary" onClick={() => navigateWeek(1)}>Next →</button>
           </div>
 
+          <p style={{ fontSize: '0.85rem', color: '#6B7280', marginBottom: '1rem' }}>
+            💡 Click any shift to reassign it to a different caregiver
+          </p>
+
           {/* Week Grid */}
           {weekData ? (
             <div style={{ overflowX: 'auto' }}>
@@ -613,10 +618,11 @@ const SmartScheduling = ({ token }) => {
                     {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => {
                       const date = new Date(weekData.weekStart);
                       date.setDate(date.getDate() + idx);
+                      const isToday = new Date().toDateString() === date.toDateString();
                       return (
-                        <th key={day} style={{ textAlign: 'center', minWidth: '100px' }}>
+                        <th key={day} style={{ textAlign: 'center', minWidth: '100px', background: isToday ? '#EFF6FF' : undefined }}>
                           <div>{day}</div>
-                          <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>
+                          <div style={{ fontSize: '0.75rem', color: isToday ? '#2563EB' : '#6B7280', fontWeight: isToday ? '700' : '400' }}>
                             {date.getDate()}
                           </div>
                         </th>
@@ -636,32 +642,43 @@ const SmartScheduling = ({ token }) => {
                           <strong>{caregiver.first_name} {caregiver.last_name?.[0]}.</strong>
                         </div>
                       </td>
-                      {[0, 1, 2, 3, 4, 5, 6].map(dayIdx => (
-                        <td key={dayIdx} style={{ padding: '0.25rem', verticalAlign: 'top' }}>
-                          {days[dayIdx].map(sched => (
-                            <div
-                              key={sched.id}
-                              style={{
-                                fontSize: '0.7rem',
-                                padding: '0.25rem 0.5rem',
-                                marginBottom: '0.25rem',
-                                borderRadius: '4px',
-                                background: sched.isRecurring ? '#DBEAFE' : '#D1FAE5',
-                                borderLeft: `3px solid ${getCaregiverColor(caregiver.id)}`,
-                                cursor: 'pointer'
-                              }}
-                              title={`${getClientName(sched.client_id)}\n${formatTime(sched.start_time)} - ${formatTime(sched.end_time)}`}
-                            >
-                              <div style={{ fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {getClientName(sched.client_id).split(' ')[0]}
+                      {[0, 1, 2, 3, 4, 5, 6].map(dayIdx => {
+                        const isToday = (() => {
+                          const date = new Date(weekData.weekStart);
+                          date.setDate(date.getDate() + dayIdx);
+                          return new Date().toDateString() === date.toDateString();
+                        })();
+                        return (
+                          <td key={dayIdx} style={{ padding: '0.25rem', verticalAlign: 'top', background: isToday ? '#F0F9FF' : undefined }}>
+                            {days[dayIdx].map(sched => (
+                              <div
+                                key={sched.id}
+                                onClick={() => setReassignModal({ schedule: sched, currentCaregiver: caregiver })}
+                                style={{
+                                  fontSize: '0.7rem',
+                                  padding: '0.25rem 0.5rem',
+                                  marginBottom: '0.25rem',
+                                  borderRadius: '4px',
+                                  background: sched.isRecurring ? '#DBEAFE' : '#D1FAE5',
+                                  borderLeft: `3px solid ${getCaregiverColor(caregiver.id)}`,
+                                  cursor: 'pointer',
+                                  transition: 'transform 0.1s, box-shadow 0.1s'
+                                }}
+                                onMouseEnter={(e) => { e.target.style.transform = 'scale(1.02)'; e.target.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)'; }}
+                                onMouseLeave={(e) => { e.target.style.transform = 'scale(1)'; e.target.style.boxShadow = 'none'; }}
+                                title={`Click to reassign\n${getClientName(sched.client_id)}\n${formatTime(sched.start_time)} - ${formatTime(sched.end_time)}`}
+                              >
+                                <div style={{ fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {getClientName(sched.client_id).split(' ')[0]}
+                                </div>
+                                <div style={{ color: '#6B7280' }}>
+                                  {formatTime(sched.start_time)}
+                                </div>
                               </div>
-                              <div style={{ color: '#6B7280' }}>
-                                {formatTime(sched.start_time)}
-                              </div>
-                            </div>
-                          ))}
-                        </td>
-                      ))}
+                            ))}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -672,6 +689,55 @@ const SmartScheduling = ({ token }) => {
               Loading week view...
             </div>
           )}
+        </div>
+      )}
+
+      {/* Reassign Modal */}
+      {reassignModal && (
+        <div className="modal active" onClick={() => setReassignModal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+            <div className="modal-header">
+              <h2>Reassign Shift</h2>
+              <button className="close-btn" onClick={() => setReassignModal(null)}>×</button>
+            </div>
+
+            <div style={{ marginBottom: '1rem', padding: '1rem', background: '#F3F4F6', borderRadius: '8px' }}>
+              <div style={{ fontWeight: '600' }}>{getClientName(reassignModal.schedule.client_id)}</div>
+              <div style={{ fontSize: '0.9rem', color: '#6B7280' }}>
+                {formatTime(reassignModal.schedule.start_time)} - {formatTime(reassignModal.schedule.end_time)}
+              </div>
+              <div style={{ fontSize: '0.85rem', color: '#6B7280', marginTop: '0.5rem' }}>
+                Currently: <strong>{reassignModal.currentCaregiver.first_name} {reassignModal.currentCaregiver.last_name}</strong>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Reassign to:</label>
+              <select
+                onChange={(e) => {
+                  if (e.target.value) {
+                    handleReassign(reassignModal.schedule.id, e.target.value);
+                    setReassignModal(null);
+                  }
+                }}
+                defaultValue=""
+              >
+                <option value="">Select caregiver...</option>
+                {caregivers
+                  .filter(cg => cg.id !== reassignModal.currentCaregiver.id)
+                  .map(cg => (
+                    <option key={cg.id} value={cg.id}>
+                      {cg.first_name} {cg.last_name}
+                    </option>
+                  ))
+                }
+              </select>
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setReassignModal(null)}>Cancel</button>
+            </div>
+          </div>
         </div>
       )}
 
