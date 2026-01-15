@@ -1,0 +1,788 @@
+// src/components/admin/SmartScheduling.jsx
+// Professional scheduling with AI-powered suggestions, conflict detection, and drag-and-drop
+import React, { useState, useEffect, useCallback } from 'react';
+import { API_BASE_URL } from '../../config';
+
+const SmartScheduling = ({ token }) => {
+  // Core state
+  const [caregivers, setCaregivers] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('create'); // 'create', 'week', 'availability'
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Create schedule state
+  const [selectedClient, setSelectedClient] = useState('');
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('13:00');
+  const [notes, setNotes] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [selectedCaregiver, setSelectedCaregiver] = useState(null);
+  const [conflicts, setConflicts] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  // Recurring template state
+  const [showRecurring, setShowRecurring] = useState(false);
+  const [recurringTemplate, setRecurringTemplate] = useState([]);
+  const [recurringWeeks, setRecurringWeeks] = useState(4);
+
+  // Week view state
+  const [weekData, setWeekData] = useState(null);
+  const [weekOf, setWeekOf] = useState(getWeekStart(new Date()).toISOString().split('T')[0]);
+
+  // Availability state
+  const [availabilityCaregiver, setAvailabilityCaregiver] = useState('');
+  const [availability, setAvailability] = useState({
+    status: 'available',
+    maxHoursPerWeek: 40,
+    weeklyAvailability: {},
+    notes: ''
+  });
+
+  // Message state
+  const [message, setMessage] = useState({ text: '', type: '' });
+
+  useEffect(() => {
+    loadData();
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'week') loadWeekView();
+  }, [activeTab, weekOf]);
+
+  const loadData = async () => {
+    try {
+      const [cgRes, clRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/clients`, { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
+      setCaregivers(await cgRes.json());
+      setClients(await clRes.json());
+    } catch (error) {
+      console.error('Failed to load data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadWeekView = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/scheduling/week-view?weekOf=${weekOf}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) setWeekData(await res.json());
+    } catch (error) {
+      console.error('Failed to load week view:', error);
+    }
+  };
+
+  // Fetch smart suggestions when client/date/time changes
+  const fetchSuggestions = useCallback(async () => {
+    if (!selectedClient) {
+      setSuggestions([]);
+      return;
+    }
+
+    setSuggestionsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        clientId: selectedClient,
+        date: selectedDate,
+        startTime,
+        endTime
+      });
+      
+      const res = await fetch(`${API_BASE_URL}/api/scheduling/suggest-caregivers?${params}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setSuggestions(data.suggestions || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch suggestions:', error);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  }, [selectedClient, selectedDate, startTime, endTime, token]);
+
+  useEffect(() => {
+    const timer = setTimeout(fetchSuggestions, 300);
+    return () => clearTimeout(timer);
+  }, [fetchSuggestions]);
+
+  // Check conflicts when caregiver selected
+  const checkConflicts = async (caregiverId) => {
+    if (!caregiverId) {
+      setConflicts([]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/scheduling/check-conflicts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          caregiverId,
+          date: selectedDate,
+          startTime,
+          endTime
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setConflicts(data.conflicts || []);
+      }
+    } catch (error) {
+      console.error('Failed to check conflicts:', error);
+    }
+  };
+
+  const handleCaregiverSelect = (caregiver) => {
+    setSelectedCaregiver(caregiver);
+    checkConflicts(caregiver.id);
+  };
+
+  const showMessage = (text, type = 'success') => {
+    setMessage({ text, type });
+    setTimeout(() => setMessage({ text: '', type: '' }), 4000);
+  };
+
+  // Create single schedule
+  const handleCreateSchedule = async () => {
+    if (!selectedClient || !selectedCaregiver) {
+      showMessage('Please select client and caregiver', 'error');
+      return;
+    }
+
+    if (conflicts.length > 0) {
+      if (!window.confirm('This schedule conflicts with existing shifts. Create anyway?')) {
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/schedules`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          caregiverId: selectedCaregiver.id,
+          clientId: selectedClient,
+          scheduleType: 'one-time',
+          date: selectedDate,
+          startTime,
+          endTime,
+          notes
+        })
+      });
+
+      if (!res.ok) throw new Error('Failed to create schedule');
+
+      showMessage('Schedule created successfully!');
+      setSelectedCaregiver(null);
+      setNotes('');
+      fetchSuggestions();
+    } catch (error) {
+      showMessage('Error: ' + error.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Create recurring schedules
+  const handleCreateRecurring = async () => {
+    if (!selectedClient || !selectedCaregiver || recurringTemplate.length === 0) {
+      showMessage('Please select client, caregiver, and at least one day', 'error');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/scheduling/bulk-create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          caregiverId: selectedCaregiver.id,
+          clientId: selectedClient,
+          template: recurringTemplate,
+          weeks: recurringWeeks,
+          startDate: selectedDate,
+          notes
+        })
+      });
+
+      if (!res.ok) throw new Error('Failed to create schedules');
+
+      const data = await res.json();
+      showMessage(`Created ${data.created} schedules! ${data.skippedConflicts > 0 ? `(${data.skippedConflicts} skipped due to conflicts)` : ''}`);
+      setRecurringTemplate([]);
+      setShowRecurring(false);
+    } catch (error) {
+      showMessage('Error: ' + error.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Toggle day in recurring template
+  const toggleRecurringDay = (dayOfWeek) => {
+    const existing = recurringTemplate.find(t => t.dayOfWeek === dayOfWeek);
+    if (existing) {
+      setRecurringTemplate(recurringTemplate.filter(t => t.dayOfWeek !== dayOfWeek));
+    } else {
+      setRecurringTemplate([...recurringTemplate, { dayOfWeek, startTime, endTime }]);
+    }
+  };
+
+  // Week navigation
+  const navigateWeek = (direction) => {
+    const current = new Date(weekOf);
+    current.setDate(current.getDate() + (direction * 7));
+    setWeekOf(current.toISOString().split('T')[0]);
+  };
+
+  // Reassign schedule (drag-drop simulation via click)
+  const handleReassign = async (scheduleId, newCaregiverId) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/schedules/${scheduleId}/reassign`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ newCaregiverId })
+      });
+
+      if (res.ok) {
+        showMessage('Schedule reassigned!');
+        loadWeekView();
+      }
+    } catch (error) {
+      showMessage('Failed to reassign', 'error');
+    }
+  };
+
+  // Presets
+  const shiftPresets = [
+    { label: 'Morning', start: '08:00', end: '12:00' },
+    { label: 'Afternoon', start: '12:00', end: '16:00' },
+    { label: 'Evening', start: '16:00', end: '20:00' },
+    { label: 'Full Day', start: '08:00', end: '16:00' },
+  ];
+
+  const formatTime = (t) => {
+    if (!t) return '';
+    const [h, m] = t.split(':');
+    const hour = parseInt(h);
+    return `${hour % 12 || 12}:${m}${hour >= 12 ? 'pm' : 'am'}`;
+  };
+
+  const getClientName = (id) => {
+    const c = clients.find(cl => cl.id === id);
+    return c ? `${c.first_name} ${c.last_name}` : 'Unknown';
+  };
+
+  const getCaregiverColor = (id) => {
+    const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
+    const idx = caregivers.findIndex(c => c.id === id);
+    return colors[idx % colors.length];
+  };
+
+  if (loading) {
+    return <div className="loading"><div className="spinner"></div></div>;
+  }
+
+  return (
+    <div className="smart-scheduling">
+      {/* Header */}
+      <div className="page-header" style={{ marginBottom: '1rem' }}>
+        <h2 style={{ margin: 0 }}>🧠 Smart Scheduling</h2>
+      </div>
+
+      {/* Message Toast */}
+      {message.text && (
+        <div style={{
+          position: 'fixed', top: '1rem', right: '1rem', padding: '1rem 1.5rem',
+          borderRadius: '8px', zIndex: 1000,
+          background: message.type === 'error' ? '#FEE2E2' : '#D1FAE5',
+          color: message.type === 'error' ? '#DC2626' : '#059669',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+        }}>
+          {message.text}
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        {[
+          { id: 'create', label: '➕ Create Schedule', icon: '📝' },
+          { id: 'week', label: '📅 Week View', icon: '📊' },
+          { id: 'availability', label: '⏰ Availability', icon: '👤' }
+        ].map(tab => (
+          <button
+            key={tab.id}
+            className={`btn ${activeTab === tab.id ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {isMobile ? tab.icon : tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* CREATE SCHEDULE TAB */}
+      {activeTab === 'create' && (
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '1rem' }}>
+          {/* Left: Form */}
+          <div className="card">
+            <h3 style={{ margin: '0 0 1rem 0' }}>Schedule Details</h3>
+
+            {/* Client Selection */}
+            <div className="form-group">
+              <label>Client *</label>
+              <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}>
+                <option value="">Select client...</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Date */}
+            <div className="form-group">
+              <label>Date *</label>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                min={new Date().toISOString().split('T')[0]}
+              />
+            </div>
+
+            {/* Time Presets */}
+            <div className="form-group">
+              <label>Quick Presets</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {shiftPresets.map(preset => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => { setStartTime(preset.start); setEndTime(preset.end); }}
+                    style={{
+                      background: startTime === preset.start && endTime === preset.end ? '#3B82F6' : undefined,
+                      color: startTime === preset.start && endTime === preset.end ? '#fff' : undefined
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Time Inputs */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div className="form-group">
+                <label>Start Time</label>
+                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>End Time</label>
+                <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows="2"
+                placeholder="Optional notes..."
+              />
+            </div>
+
+            {/* Recurring Toggle */}
+            <div className="form-group">
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showRecurring}
+                  onChange={(e) => setShowRecurring(e.target.checked)}
+                  style={{ width: 'auto' }}
+                />
+                Create recurring schedule (multiple weeks)
+              </label>
+            </div>
+
+            {/* Recurring Options */}
+            {showRecurring && (
+              <div style={{ background: '#F3F4F6', padding: '1rem', borderRadius: '8px', marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                  Select days of the week:
+                </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                    <button
+                      key={day}
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => toggleRecurringDay(idx)}
+                      style={{
+                        background: recurringTemplate.some(t => t.dayOfWeek === idx) ? '#3B82F6' : '#E5E7EB',
+                        color: recurringTemplate.some(t => t.dayOfWeek === idx) ? '#fff' : '#374151'
+                      }}
+                    >
+                      {day}
+                    </button>
+                  ))}
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Number of weeks: {recurringWeeks}</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="12"
+                    value={recurringWeeks}
+                    onChange={(e) => setRecurringWeeks(parseInt(e.target.value))}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right: Caregiver Suggestions */}
+          <div className="card">
+            <h3 style={{ margin: '0 0 1rem 0' }}>
+              {suggestionsLoading ? '⏳ Finding best matches...' : '✨ Recommended Caregivers'}
+            </h3>
+
+            {!selectedClient ? (
+              <p style={{ color: '#6B7280', textAlign: 'center', padding: '2rem' }}>
+                Select a client to see caregiver recommendations
+              </p>
+            ) : suggestionsLoading ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <div className="spinner" style={{ margin: '0 auto' }}></div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '500px', overflowY: 'auto' }}>
+                {suggestions.map((cg, idx) => {
+                  const isSelected = selectedCaregiver?.id === cg.id;
+                  const isTop = idx < 3 && cg.score > 80;
+                  const hasIssue = cg.hasConflict || !cg.isAvailable || cg.wouldExceedHours;
+
+                  return (
+                    <div
+                      key={cg.id}
+                      onClick={() => handleCaregiverSelect(cg)}
+                      style={{
+                        padding: '1rem',
+                        borderRadius: '8px',
+                        border: isSelected ? '2px solid #3B82F6' : '1px solid #E5E7EB',
+                        background: isSelected ? '#EFF6FF' : hasIssue ? '#FEF2F2' : isTop ? '#F0FDF4' : '#fff',
+                        cursor: 'pointer',
+                        opacity: hasIssue ? 0.7 : 1
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            {cg.first_name} {cg.last_name}
+                            {isTop && !hasIssue && <span style={{ fontSize: '0.8rem' }}>⭐</span>}
+                          </div>
+                          <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>
+                            {cg.weeklyHours}h this week • Max {cg.maxHours}h
+                          </div>
+                        </div>
+                        <div style={{
+                          padding: '0.25rem 0.5rem',
+                          borderRadius: '12px',
+                          fontSize: '0.75rem',
+                          fontWeight: '600',
+                          background: cg.score > 80 ? '#D1FAE5' : cg.score > 50 ? '#FEF3C7' : '#FEE2E2',
+                          color: cg.score > 80 ? '#059669' : cg.score > 50 ? '#D97706' : '#DC2626'
+                        }}>
+                          {cg.score}%
+                        </div>
+                      </div>
+
+                      {/* Reasons */}
+                      {cg.reasons && cg.reasons.length > 0 && (
+                        <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                          {cg.reasons.map((reason, i) => (
+                            <span
+                              key={i}
+                              style={{
+                                fontSize: '0.7rem',
+                                padding: '0.125rem 0.5rem',
+                                borderRadius: '10px',
+                                background: reason.includes('⚠️') ? '#FEE2E2' : '#E5E7EB',
+                                color: reason.includes('⚠️') ? '#DC2626' : '#374151'
+                              }}
+                            >
+                              {reason}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Conflicts Warning */}
+            {conflicts.length > 0 && (
+              <div style={{
+                marginTop: '1rem',
+                padding: '1rem',
+                background: '#FEF2F2',
+                borderRadius: '8px',
+                border: '1px solid #FCA5A5'
+              }}>
+                <div style={{ fontWeight: '600', color: '#DC2626', marginBottom: '0.5rem' }}>
+                  ⚠️ Schedule Conflicts
+                </div>
+                {conflicts.map((c, i) => (
+                  <div key={i} style={{ fontSize: '0.85rem', color: '#7F1D1D' }}>
+                    {c.clientName}: {formatTime(c.startTime)} - {formatTime(c.endTime)}
+                    {c.isRecurring && ' (recurring)'}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Create Button */}
+            {selectedCaregiver && (
+              <div style={{ marginTop: '1rem' }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={showRecurring ? handleCreateRecurring : handleCreateSchedule}
+                  disabled={saving}
+                  style={{ width: '100%' }}
+                >
+                  {saving ? 'Creating...' : showRecurring
+                    ? `Create ${recurringWeeks} weeks of schedules`
+                    : `Schedule ${selectedCaregiver.first_name} for ${formatTime(startTime)}-${formatTime(endTime)}`
+                  }
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* WEEK VIEW TAB */}
+      {activeTab === 'week' && (
+        <div>
+          {/* Week Navigation */}
+          <div className="card" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <button className="btn btn-secondary" onClick={() => navigateWeek(-1)}>← Prev</button>
+            <div style={{ fontWeight: '600' }}>
+              Week of {new Date(weekOf).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            </div>
+            <button className="btn btn-secondary" onClick={() => navigateWeek(1)}>Next →</button>
+          </div>
+
+          {/* Week Grid */}
+          {weekData ? (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table" style={{ minWidth: '800px' }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: '150px' }}>Caregiver</th>
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => {
+                      const date = new Date(weekData.weekStart);
+                      date.setDate(date.getDate() + idx);
+                      return (
+                        <th key={day} style={{ textAlign: 'center', minWidth: '100px' }}>
+                          <div>{day}</div>
+                          <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>
+                            {date.getDate()}
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {weekData.caregivers.map(({ caregiver, days }) => (
+                    <tr key={caregiver.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <div style={{
+                            width: '10px', height: '10px', borderRadius: '50%',
+                            background: getCaregiverColor(caregiver.id)
+                          }} />
+                          <strong>{caregiver.first_name} {caregiver.last_name?.[0]}.</strong>
+                        </div>
+                      </td>
+                      {[0, 1, 2, 3, 4, 5, 6].map(dayIdx => (
+                        <td key={dayIdx} style={{ padding: '0.25rem', verticalAlign: 'top' }}>
+                          {days[dayIdx].map(sched => (
+                            <div
+                              key={sched.id}
+                              style={{
+                                fontSize: '0.7rem',
+                                padding: '0.25rem 0.5rem',
+                                marginBottom: '0.25rem',
+                                borderRadius: '4px',
+                                background: sched.isRecurring ? '#DBEAFE' : '#D1FAE5',
+                                borderLeft: `3px solid ${getCaregiverColor(caregiver.id)}`,
+                                cursor: 'pointer'
+                              }}
+                              title={`${getClientName(sched.client_id)}\n${formatTime(sched.start_time)} - ${formatTime(sched.end_time)}`}
+                            >
+                              <div style={{ fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {getClientName(sched.client_id).split(' ')[0]}
+                              </div>
+                              <div style={{ color: '#6B7280' }}>
+                                {formatTime(sched.start_time)}
+                              </div>
+                            </div>
+                          ))}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+              Loading week view...
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AVAILABILITY TAB */}
+      {activeTab === 'availability' && (
+        <div className="card">
+          <h3 style={{ margin: '0 0 1rem 0' }}>Caregiver Availability</h3>
+
+          <div className="form-group">
+            <label>Select Caregiver</label>
+            <select
+              value={availabilityCaregiver}
+              onChange={async (e) => {
+                setAvailabilityCaregiver(e.target.value);
+                if (e.target.value) {
+                  try {
+                    const res = await fetch(`${API_BASE_URL}/api/caregivers/${e.target.value}/availability`, {
+                      headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setAvailability({
+                        status: data.status || 'available',
+                        maxHoursPerWeek: data.max_hours_per_week || 40,
+                        weeklyAvailability: data.weekly_availability || {},
+                        notes: data.notes || ''
+                      });
+                    }
+                  } catch (err) {
+                    console.error(err);
+                  }
+                }
+              }}
+            >
+              <option value="">Choose caregiver...</option>
+              {caregivers.map(cg => (
+                <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {availabilityCaregiver && (
+            <>
+              <div className="form-group">
+                <label>Status</label>
+                <select
+                  value={availability.status}
+                  onChange={(e) => setAvailability({ ...availability, status: e.target.value })}
+                >
+                  <option value="available">Available</option>
+                  <option value="limited">Limited Availability</option>
+                  <option value="unavailable">Unavailable</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Max Hours Per Week: {availability.maxHoursPerWeek}</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="60"
+                  value={availability.maxHoursPerWeek}
+                  onChange={(e) => setAvailability({ ...availability, maxHoursPerWeek: parseInt(e.target.value) })}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Notes</label>
+                <textarea
+                  value={availability.notes}
+                  onChange={(e) => setAvailability({ ...availability, notes: e.target.value })}
+                  rows="3"
+                  placeholder="Any availability notes..."
+                />
+              </div>
+
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`${API_BASE_URL}/api/caregiver-availability/${availabilityCaregiver}`, {
+                      method: 'PUT',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                      },
+                      body: JSON.stringify(availability)
+                    });
+                    if (res.ok) showMessage('Availability updated!');
+                  } catch (err) {
+                    showMessage('Failed to update', 'error');
+                  }
+                }}
+              >
+                Save Availability
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Helper function
+function getWeekStart(date) {
+  const d = new Date(date);
+  d.setDate(d.getDate() - d.getDay());
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+export default SmartScheduling;

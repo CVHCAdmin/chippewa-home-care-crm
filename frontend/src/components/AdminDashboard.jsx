@@ -32,6 +32,7 @@ import BackgroundChecks from './admin/BackgroundChecks';
 import SMSManagement from './admin/SMSManagement';
 import FamilyPortalAdmin from './admin/FamilyPortalAdmin';
 import AlertsManagement from './admin/AlertsManagement';
+import SmartScheduling from './admin/SmartScheduling';
 
 const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -159,6 +160,8 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         return <FamilyPortalAdmin token={token} />;
       case 'alerts':
         return <AlertsManagement token={token} />;
+        case 'smart-scheduling':
+        return <SmartScheduling token={token} />;
       default:
         return <DashboardOverview summary={summary} token={token} />;
     }
@@ -241,6 +244,15 @@ const AdminDashboard = ({ user, token, onLogout }) => {
             <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#999', fontWeight: 'bold', display: 'block', padding: '0.5rem 1rem' }}>
               Scheduling
             </span>
+          </li>
+          <li>
+            <a
+              href="#smart-scheduling"
+              className={currentPage === 'smart-scheduling' ? 'active' : ''}
+              onClick={() => handlePageClick('smart-scheduling')}
+            >
+              🧠 Smart Scheduling
+            </a>
           </li>
           <li>
             <a
