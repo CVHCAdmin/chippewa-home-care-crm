@@ -4098,6 +4098,16 @@ app.use('/api/reports', verifyToken, require('./routes/reports'));
 app.use('/api/payroll', verifyToken, require('./routes/payroll'));
 app.use('/api/audit-logs', verifyToken, require('./routes/auditLogs'));
 app.use('/api/users', verifyToken, require('./routes/users'));
+app.use('/api/claims', verifyToken, require('./routes/claimsRoutes'));
+app.use('/api/sms', verifyToken, require('./routes/smsRoutes'));
+app.use('/api/open-shifts', verifyToken, require('./routes/openShiftsRoutes'));
+app.use('/api/medications', verifyToken, require('./routes/medicationsRoutes'));
+app.use('/api/documents', verifyToken, require('./routes/documentsRoutes'));
+app.use('/api/adl', verifyToken, require('./routes/adlRoutes'));
+app.use('/api/background-checks', verifyToken, require('./routes/backgroundChecksRoutes'));
+app.use('/api/family-portal', require('./routes/familyPortalRoutes')); // No verifyToken - has its own auth
+app.use('/api/shift-swaps', verifyToken, require('./routes/shiftSwapsRoutes'));
+app.use('/api/alerts', verifyToken, require('./routes/alertsRoutes'));
 
 // ============ CARE TYPES ============
 app.get('/api/care-types', verifyToken, async (req, res) => {

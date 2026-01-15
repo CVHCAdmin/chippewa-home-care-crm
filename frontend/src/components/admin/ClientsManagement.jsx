@@ -3,6 +3,26 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import EditClientModal from './EditClientModal';
 
+// AddressLink component - opens Google Maps
+const AddressLink = ({ address, city, state, zip }) => {
+  if (!address && !city) return <span>-</span>;
+  
+  const fullAddress = [address, city, state, zip].filter(Boolean).join(', ');
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`;
+  
+  return (
+    <a 
+      href={mapsUrl} 
+      target="_blank" 
+      rel="noopener noreferrer"
+      title={`Open in Google Maps: ${fullAddress}`}
+      style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+    >
+      📍 {city || address}
+    </a>
+  );
+};
+
 const ClientsManagement = ({ token }) => {
   const [clients, setClients] = useState([]);
   const [referralSources, setReferralSources] = useState([]);
@@ -435,7 +455,7 @@ const ClientsManagement = ({ token }) => {
             <tr>
               <th>Name</th>
               <th>Phone</th>
-              <th>City</th>
+              <th>Address</th>
               <th>Referral Source</th>
               <th>Care Type</th>
               <th>Status</th>
@@ -454,7 +474,14 @@ const ClientsManagement = ({ token }) => {
                   )}
                 </td>
                 <td><a href={`tel:${client.phone}`}>{client.phone || 'N/A'}</a></td>
-                <td>{client.city || '-'}</td>
+                <td>
+                  <AddressLink 
+                    address={client.address}
+                    city={client.city}
+                    state={client.state}
+                    zip={client.zip}
+                  />
+                </td>
                 <td>
                   {client.is_private_pay ? (
                     <span className="text-muted">-</span>

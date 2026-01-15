@@ -117,7 +117,17 @@ const CaregiverClientModal = ({ clientId, isOpen, onClose, token }) => {
                     <p><strong>Phone:</strong> <a href={`tel:${client.phone}`}>{client.phone || 'N/A'}</a></p>
                     <p><strong>DOB:</strong> {client.date_of_birth ? new Date(client.date_of_birth).toLocaleDateString() : 'N/A'}</p>
                     <p style={{ gridColumn: '1 / -1' }}>
-                      <strong>Address:</strong> {client.address ? `${client.address}, ${client.city}, ${client.state} ${client.zip}` : 'N/A'}
+                      <strong>Address:</strong>{' '}
+                      {client.address ? (
+                        <a 
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${client.address}, ${client.city}, ${client.state} ${client.zip}`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          📍 {client.address}, {client.city}, {client.state} {client.zip}
+                        </a>
+                      ) : 'N/A'}
                     </p>
                   </div>
                 </div>
