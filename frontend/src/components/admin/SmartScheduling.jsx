@@ -2,6 +2,7 @@
 // Professional scheduling with AI-powered suggestions, conflict detection, and drag-and-drop
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
+import AutoFillButton from './AutoFillButton';
 
 const SmartScheduling = ({ token }) => {
   // Core state
@@ -602,6 +603,7 @@ const SmartScheduling = ({ token }) => {
               Week of {new Date(weekOf).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
             </div>
             <button className="btn btn-secondary" onClick={() => navigateWeek(1)}>Next →</button>
+<AutoFillButton weekOf={weekOf} token={token} onComplete={loadWeekView} />
           </div>
 
           <p style={{ fontSize: '0.85rem', color: '#6B7280', marginBottom: '1rem' }}>
