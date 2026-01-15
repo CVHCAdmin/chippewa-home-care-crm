@@ -239,14 +239,24 @@ app.post('/api/users/convert-to-admin', verifyToken, requireAdmin, async (req, r
 // ---- CLIENTS ROUTES ----
 app.post('/api/clients', verifyToken, async (req, res) => {
   try {
-    const { firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, referredBy, serviceType } = req.body;
+    const { 
+      firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
+      referredBy, serviceType, referralSourceId, careTypeId, 
+      isPrivatePay, privatePayRate, privatePayRateType 
+    } = req.body;
     const clientId = uuidv4();
 
     const result = await pool.query(
-      `INSERT INTO clients (id, first_name, last_name, date_of_birth, phone, email, address, city, state, zip, referred_by, service_type, start_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE)
+      `INSERT INTO clients (
+        id, first_name, last_name, date_of_birth, phone, email, address, city, state, zip, 
+        referred_by, service_type, start_date, referral_source_id, care_type_id,
+        is_private_pay, private_pay_rate, private_pay_rate_type
+      )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16, $17)
        RETURNING *`,
-      [clientId, firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, referredBy, serviceType]
+      [clientId, firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
+       referredBy || referralSourceId, serviceType, referralSourceId, careTypeId,
+       isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly']
     );
 
     // Create onboarding checklist
@@ -265,7 +275,12 @@ app.post('/api/clients', verifyToken, async (req, res) => {
 app.get('/api/clients', verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM clients WHERE is_active = true ORDER BY first_name`
+      `SELECT c.*, rs.name as referral_source_name, ct.name as care_type_name
+       FROM clients c
+       LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+       LEFT JOIN care_types ct ON c.care_type_id = ct.id
+       WHERE c.is_active = true 
+       ORDER BY c.first_name`
     );
     res.json(result.rows);
   } catch (error) {
@@ -506,8 +521,10 @@ app.post('/api/invoices/generate', verifyToken, requireAdmin, async (req, res) =
 app.get('/api/invoices', verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT i.*, c.first_name, c.last_name FROM invoices i
+      `SELECT i.*, c.first_name, c.last_name, rs.name as referral_source_name
+       FROM invoices i
        JOIN clients c ON i.client_id = c.id
+       LEFT JOIN referral_sources rs ON i.referral_source_id = rs.id
        ORDER BY i.created_at DESC`
     );
     res.json(result.rows);
@@ -901,9 +918,11 @@ app.put('/api/caregiver-rates/:caregiverId', verifyToken, requireAdmin, async (r
 app.get('/api/invoices/:id', verifyToken, async (req, res) => {
   try {
     const invoiceResult = await pool.query(
-      `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.address, c.city, c.state, c.zip
+      `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.address, c.city, c.state, c.zip,
+              rs.name as referral_source_name
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
+       LEFT JOIN referral_sources rs ON i.referral_source_id = rs.id
        WHERE i.id = $1`,
       [req.params.id]
     );
@@ -913,9 +932,11 @@ app.get('/api/invoices/:id', verifyToken, async (req, res) => {
     }
 
     const lineItemsResult = await pool.query(
-      `SELECT ili.*, u.first_name, u.last_name
+      `SELECT ili.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
+              te.start_time as service_date
        FROM invoice_line_items ili
        LEFT JOIN users u ON ili.caregiver_id = u.id
+       LEFT JOIN time_entries te ON ili.time_entry_id = te.id
        WHERE ili.invoice_id = $1
        ORDER BY ili.created_at`,
       [req.params.id]
@@ -923,7 +944,7 @@ app.get('/api/invoices/:id', verifyToken, async (req, res) => {
 
     res.json({
       ...invoiceResult.rows[0],
-      lineItems: lineItemsResult.rows
+      line_items: lineItemsResult.rows
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3960,6 +3981,445 @@ app.use('/api/reports', verifyToken, require('./routes/reports'));
 app.use('/api/payroll', verifyToken, require('./routes/payroll'));
 app.use('/api/audit-logs', verifyToken, require('./routes/auditLogs'));
 app.use('/api/users', verifyToken, require('./routes/users'));
+
+// ============ CARE TYPES ============
+app.get('/api/care-types', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM care_types WHERE is_active = true ORDER BY name`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/care-types', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    const id = uuidv4();
+    
+    const result = await pool.query(
+      `INSERT INTO care_types (id, name, description) VALUES ($1, $2, $3) RETURNING *`,
+      [id, name, description]
+    );
+    
+    await auditLog(req.user.id, 'CREATE', 'care_types', id, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/care-types/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE care_types SET name = $1, description = $2, updated_at = NOW() 
+       WHERE id = $3 RETURNING *`,
+      [name, description, req.params.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Care type not found' });
+    }
+    
+    await auditLog(req.user.id, 'UPDATE', 'care_types', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ REFERRAL SOURCE RATES ============
+app.get('/api/referral-source-rates', verifyToken, async (req, res) => {
+  try {
+    const { referralSourceId } = req.query;
+    
+    let query = `
+      SELECT rsr.*, rs.name as referral_source_name, ct.name as care_type_name
+      FROM referral_source_rates rsr
+      JOIN referral_sources rs ON rsr.referral_source_id = rs.id
+      JOIN care_types ct ON rsr.care_type_id = ct.id
+      WHERE rsr.is_active = true
+    `;
+    const params = [];
+    
+    if (referralSourceId) {
+      params.push(referralSourceId);
+      query += ` AND rsr.referral_source_id = $${params.length}`;
+    }
+    
+    query += ` ORDER BY rs.name, ct.name`;
+    
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/referral-source-rates', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { referralSourceId, careTypeId, rateAmount, rateType, effectiveDate } = req.body;
+    const id = uuidv4();
+    
+    // Deactivate any existing rate for this combo
+    await pool.query(
+      `UPDATE referral_source_rates SET is_active = false, end_date = $1, updated_at = NOW()
+       WHERE referral_source_id = $2 AND care_type_id = $3 AND is_active = true`,
+      [effectiveDate || new Date(), referralSourceId, careTypeId]
+    );
+    
+    const result = await pool.query(
+      `INSERT INTO referral_source_rates (id, referral_source_id, care_type_id, rate_amount, rate_type, effective_date)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [id, referralSourceId, careTypeId, rateAmount, rateType || 'hourly', effectiveDate || new Date()]
+    );
+    
+    await auditLog(req.user.id, 'CREATE', 'referral_source_rates', id, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { rateAmount, rateType } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE referral_source_rates SET rate_amount = $1, rate_type = $2, updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [rateAmount, rateType, req.params.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Rate not found' });
+    }
+    
+    await auditLog(req.user.id, 'UPDATE', 'referral_source_rates', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE referral_source_rates SET is_active = false, end_date = CURRENT_DATE, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Rate not found' });
+    }
+    
+    await auditLog(req.user.id, 'DELETE', 'referral_source_rates', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Rate deactivated' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ CAREGIVER CLIENT RATES ============
+app.get('/api/caregiver-client-rates', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, clientId } = req.query;
+    
+    let query = `
+      SELECT ccr.*, 
+             u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
+             c.first_name as client_first_name, c.last_name as client_last_name
+      FROM caregiver_client_rates ccr
+      JOIN users u ON ccr.caregiver_id = u.id
+      JOIN clients c ON ccr.client_id = c.id
+      WHERE (ccr.end_date IS NULL OR ccr.end_date >= CURRENT_DATE)
+    `;
+    const params = [];
+    
+    if (caregiverId) {
+      params.push(caregiverId);
+      query += ` AND ccr.caregiver_id = $${params.length}`;
+    }
+    if (clientId) {
+      params.push(clientId);
+      query += ` AND ccr.client_id = $${params.length}`;
+    }
+    
+    query += ` ORDER BY u.last_name, c.last_name`;
+    
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/caregiver-client-rates', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { caregiverId, clientId, hourlyRate, effectiveDate, notes } = req.body;
+    const id = uuidv4();
+    
+    // End any existing rate for this combo
+    await pool.query(
+      `UPDATE caregiver_client_rates SET end_date = $1, updated_at = NOW()
+       WHERE caregiver_id = $2 AND client_id = $3 AND end_date IS NULL`,
+      [effectiveDate || new Date(), caregiverId, clientId]
+    );
+    
+    const result = await pool.query(
+      `INSERT INTO caregiver_client_rates (id, caregiver_id, client_id, hourly_rate, effective_date, notes)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [id, caregiverId, clientId, hourlyRate, effectiveDate || new Date(), notes]
+    );
+    
+    await auditLog(req.user.id, 'CREATE', 'caregiver_client_rates', id, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/caregiver-client-rates/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { hourlyRate, notes } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE caregiver_client_rates SET hourly_rate = $1, notes = $2, updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [hourlyRate, notes, req.params.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Rate not found' });
+    }
+    
+    await auditLog(req.user.id, 'UPDATE', 'caregiver_client_rates', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/caregiver-client-rates/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE caregiver_client_rates SET end_date = CURRENT_DATE, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Rate not found' });
+    }
+    
+    await auditLog(req.user.id, 'DELETE', 'caregiver_client_rates', req.params.id, null, result.rows[0]);
+    res.json({ message: 'Rate ended' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ CLIENT BILLING INFO ============
+app.get('/api/clients/:id/billing-rate', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        c.is_private_pay,
+        CASE 
+          WHEN c.is_private_pay THEN c.private_pay_rate
+          ELSE rsr.rate_amount
+        END as rate_amount,
+        CASE 
+          WHEN c.is_private_pay THEN c.private_pay_rate_type
+          ELSE rsr.rate_type
+        END as rate_type,
+        rs.name as referral_source_name,
+        ct.name as care_type_name
+      FROM clients c
+      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+      LEFT JOIN care_types ct ON c.care_type_id = ct.id
+      LEFT JOIN referral_source_rates rsr ON 
+        rsr.referral_source_id = c.referral_source_id 
+        AND rsr.care_type_id = c.care_type_id
+        AND rsr.is_active = true
+      WHERE c.id = $1
+    `, [req.params.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/clients/:id/billing', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes } = req.body;
+    
+    const result = await pool.query(`
+      UPDATE clients SET 
+        referral_source_id = $1,
+        care_type_id = $2,
+        is_private_pay = $3,
+        private_pay_rate = $4,
+        private_pay_rate_type = $5,
+        billing_notes = $6,
+        updated_at = NOW()
+      WHERE id = $7 RETURNING *
+    `, [referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes, req.params.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    
+    await auditLog(req.user.id, 'UPDATE', 'clients', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ ENHANCED INVOICE GENERATION ============
+app.post('/api/invoices/generate-with-rates', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { clientId, billingPeriodStart, billingPeriodEnd, notes } = req.body;
+    const invoiceId = uuidv4();
+    const invoiceNumber = `INV-${Date.now()}`;
+
+    // Get client billing info
+    const clientResult = await pool.query(`
+      SELECT c.*, 
+             rs.name as referral_source_name, rs.id as rs_id,
+             ct.name as care_type_name,
+             CASE 
+               WHEN c.is_private_pay THEN c.private_pay_rate
+               ELSE rsr.rate_amount
+             END as billing_rate,
+             CASE 
+               WHEN c.is_private_pay THEN c.private_pay_rate_type
+               ELSE rsr.rate_type
+             END as rate_type
+      FROM clients c
+      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+      LEFT JOIN care_types ct ON c.care_type_id = ct.id
+      LEFT JOIN referral_source_rates rsr ON 
+        rsr.referral_source_id = c.referral_source_id 
+        AND rsr.care_type_id = c.care_type_id
+        AND rsr.is_active = true
+      WHERE c.id = $1
+    `, [clientId]);
+
+    if (clientResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const client = clientResult.rows[0];
+    const billingRate = parseFloat(client.billing_rate) || 25;
+    const rateType = client.rate_type || 'hourly';
+
+    // Get time entries for billing period
+    const entriesResult = await pool.query(`
+      SELECT te.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
+             ccr.hourly_rate as caregiver_rate
+      FROM time_entries te
+      JOIN users u ON te.caregiver_id = u.id
+      LEFT JOIN caregiver_client_rates ccr ON 
+        ccr.caregiver_id = te.caregiver_id 
+        AND ccr.client_id = te.client_id
+        AND (ccr.end_date IS NULL OR ccr.end_date >= te.start_time::date)
+      WHERE te.client_id = $1 
+        AND te.start_time::date >= $2 
+        AND te.end_time::date <= $3 
+        AND te.is_complete = true
+      ORDER BY te.start_time
+    `, [clientId, billingPeriodStart, billingPeriodEnd]);
+
+    let subtotal = 0;
+    const lineItems = [];
+
+    for (const entry of entriesResult.rows) {
+      const hours = entry.duration_minutes / 60;
+      // Round to 15-minute increments
+      const roundedHours = Math.ceil(hours * 4) / 4;
+      
+      let amount;
+      if (rateType === '15min') {
+        amount = roundedHours * 4 * billingRate; // rate is per 15 minutes
+      } else {
+        amount = roundedHours * billingRate;
+      }
+      
+      subtotal += amount;
+      lineItems.push({
+        timeEntryId: entry.id,
+        caregiverId: entry.caregiver_id,
+        caregiverName: `${entry.caregiver_first_name} ${entry.caregiver_last_name}`,
+        serviceDate: entry.start_time,
+        hours: roundedHours,
+        rate: billingRate,
+        rateType,
+        amount,
+        caregiverPayRate: parseFloat(entry.caregiver_rate) || parseFloat(entry.pay_rate) || 15
+      });
+    }
+
+    // Create invoice
+    const invoiceResult = await pool.query(`
+      INSERT INTO invoices (
+        id, invoice_number, client_id, referral_source_id, invoice_type,
+        billing_period_start, billing_period_end, subtotal, total, 
+        payment_due_date, notes
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
+    `, [
+      invoiceId, invoiceNumber, clientId, 
+      client.is_private_pay ? null : client.rs_id,
+      client.is_private_pay ? 'private' : 'referral_source',
+      billingPeriodStart, billingPeriodEnd, 
+      subtotal, subtotal,
+      new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      notes
+    ]);
+
+    // Create line items
+    for (const item of lineItems) {
+      await pool.query(`
+        INSERT INTO invoice_line_items (
+          invoice_id, time_entry_id, caregiver_id, description, 
+          hours, rate, amount
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        invoiceId, item.timeEntryId, item.caregiverId,
+        `Care Services - ${new Date(item.serviceDate).toLocaleDateString()}`,
+        item.hours, item.rate, item.amount
+      ]);
+    }
+
+    await auditLog(req.user.id, 'CREATE', 'invoices', invoiceId, null, invoiceResult.rows[0]);
+    
+    res.status(201).json({
+      ...invoiceResult.rows[0],
+      line_items: lineItems,
+      client_name: `${client.first_name} ${client.last_name}`,
+      referral_source_name: client.referral_source_name,
+      care_type_name: client.care_type_name
+    });
+  } catch (error) {
+    console.error('Invoice generation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err);
