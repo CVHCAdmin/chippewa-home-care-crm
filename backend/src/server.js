@@ -757,8 +757,8 @@ app.get('/api/time-entries/active', verifyToken, async (req, res) => {
       `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te
        JOIN clients c ON te.client_id = c.id
-       WHERE te.caregiver_id = $1 AND te.clock_out IS NULL
-       ORDER BY te.clock_in DESC
+       WHERE te.caregiver_id = $1 AND te.end_time IS NULL
+       ORDER BY te.start_time DESC
        LIMIT 1`,
       [req.user.id]
     );
@@ -772,7 +772,7 @@ app.get('/api/time-entries/active', verifyToken, async (req, res) => {
     res.json({
       id: entry.id,
       client_id: entry.client_id,
-      start_time: entry.clock_in,
+      start_time: entry.start_time,
       client_name: `${entry.client_first_name} ${entry.client_last_name}`
     });
   } catch (error) {
@@ -788,8 +788,8 @@ app.get('/api/time-entries/recent', verifyToken, async (req, res) => {
       `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te
        JOIN clients c ON te.client_id = c.id
-       WHERE te.caregiver_id = $1 AND te.clock_out IS NOT NULL
-       ORDER BY te.clock_in DESC
+       WHERE te.caregiver_id = $1 AND te.end_time IS NOT NULL
+       ORDER BY te.start_time DESC
        LIMIT $2`,
       [req.user.id, limit]
     );
@@ -798,8 +798,8 @@ app.get('/api/time-entries/recent', verifyToken, async (req, res) => {
     const visits = result.rows.map(entry => ({
       id: entry.id,
       client_id: entry.client_id,
-      start_time: entry.clock_in,
-      end_time: entry.clock_out,
+      start_time: entry.start_time,
+      end_time: entry.end_time,
       notes: entry.notes,
       hours_worked: entry.hours_worked,
       client_name: `${entry.client_first_name} ${entry.client_last_name}`
@@ -818,7 +818,7 @@ app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
     const entryId = uuidv4();
 
     const result = await db.query(
-      `INSERT INTO time_entries (id, caregiver_id, client_id, clock_in, start_location)
+      `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, clock_in_location)
        VALUES ($1, $2, $3, NOW(), $4)
        RETURNING *`,
       [entryId, req.user.id, clientId, JSON.stringify({ lat: latitude, lng: longitude })]
@@ -830,7 +830,7 @@ app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
     res.status(201).json({
       id: result.rows[0].id,
       client_id: result.rows[0].client_id,
-      start_time: result.rows[0].clock_in
+      start_time: result.rows[0].start_time
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -843,19 +843,19 @@ app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
     const { latitude, longitude, notes } = req.body;
 
     // Calculate hours worked
-    const timeEntry = await db.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
+    const timeEntry = await db.query(`SELECT start_time FROM time_entries WHERE id = $1`, [req.params.id]);
     if (timeEntry.rows.length === 0) {
       return res.status(404).json({ error: 'Time entry not found' });
     }
     
-    const clockIn = new Date(timeEntry.rows[0].clock_in);
+    const clockIn = new Date(timeEntry.rows[0].start_time);
     const clockOut = new Date();
     const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
 
     const result = await db.query(
       `UPDATE time_entries SET 
-        clock_out = NOW(),
-        end_location = $1,
+        end_time = NOW(),
+        clock_out_location = $1,
         hours_worked = $2,
         notes = $3,
         updated_at = NOW()
@@ -882,7 +882,7 @@ app.post('/api/time-entries/:id/gps', verifyToken, async (req, res) => {
       `UPDATE time_entries SET 
         last_location = $1,
         updated_at = NOW()
-       WHERE id = $2 AND clock_out IS NULL
+       WHERE id = $2 AND end_time IS NULL
        RETURNING id`,
       [JSON.stringify({ lat: latitude, lng: longitude, accuracy, timestamp: new Date() }), req.params.id]
     );
@@ -903,15 +903,15 @@ app.patch('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
     const { latitude, longitude, notes } = req.body;
 
     // Calculate hours worked
-    const timeEntry = await db.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
-    const clockIn = new Date(timeEntry.rows[0].clock_in);
+    const timeEntry = await db.query(`SELECT start_time FROM time_entries WHERE id = $1`, [req.params.id]);
+    const clockIn = new Date(timeEntry.rows[0].start_time);
     const clockOut = new Date();
     const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
 
     const result = await db.query(
       `UPDATE time_entries SET 
-        clock_out = NOW(),
-        end_location = $1,
+        end_time = NOW(),
+        clock_out_location = $1,
         hours_worked = $2,
         notes = $3,
         updated_at = NOW()
@@ -939,7 +939,7 @@ app.get('/api/time-entries', verifyToken, async (req, res) => {
        FROM time_entries te
        JOIN users u ON te.caregiver_id = u.id
        JOIN clients c ON te.client_id = c.id
-       ORDER BY te.clock_in DESC`
+       ORDER BY te.start_time DESC`
     );
     res.json(result.rows);
   } catch (error) {
@@ -955,7 +955,7 @@ app.get('/api/time-entries/caregiver/:caregiverId', verifyToken, async (req, res
        FROM time_entries te
        JOIN clients c ON te.client_id = c.id
        WHERE te.caregiver_id = $1
-       ORDER BY te.clock_in DESC`,
+       ORDER BY te.start_time DESC`,
       [req.params.caregiverId]
     );
     res.json(result.rows);
@@ -1354,7 +1354,7 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
        FROM time_entries te
        JOIN users u ON te.caregiver_id = u.id
        LEFT JOIN caregiver_rates cr ON te.caregiver_id = cr.caregiver_id
-       WHERE te.clock_in >= $1 AND te.clock_in <= $2
+       WHERE te.start_time >= $1 AND te.start_time <= $2
        AND te.hours_worked > 0
        ORDER BY te.caregiver_id`,
       [payPeriodStart, payPeriodEnd]
@@ -1379,7 +1379,7 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
       caregiverPayroll[entry.caregiver_id].totalHours += parseFloat(entry.hours_worked);
       caregiverPayroll[entry.caregiver_id].lineItems.push({
         timeEntryId: entry.id,
-        date: entry.clock_in,
+        date: entry.start_time,
         hours: entry.hours_worked,
         rate: entry.base_hourly_rate || 18.50
       });
@@ -4578,3 +4578,5 @@ app.listen(port, () => {
   console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
   console.log(`📊 Admin Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
 });
+
+
