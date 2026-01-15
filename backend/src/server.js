@@ -626,6 +626,67 @@ app.get('/api/export/invoices-csv', verifyToken, requireAdmin, async (req, res) 
 
 // ---- TIME TRACKING ----
 
+// GET /api/time-entries/active - Get caregiver's active (non-clocked-out) session
+app.get('/api/time-entries/active', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
+       FROM time_entries te
+       JOIN clients c ON te.client_id = c.id
+       WHERE te.caregiver_id = $1 AND te.clock_out IS NULL
+       ORDER BY te.clock_in DESC
+       LIMIT 1`,
+      [req.user.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.json(null);
+    }
+    
+    // Map to expected format
+    const entry = result.rows[0];
+    res.json({
+      id: entry.id,
+      client_id: entry.client_id,
+      start_time: entry.clock_in,
+      client_name: `${entry.client_first_name} ${entry.client_last_name}`
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/time-entries/recent - Get recent completed visits for caregiver
+app.get('/api/time-entries/recent', verifyToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const result = await pool.query(
+      `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
+       FROM time_entries te
+       JOIN clients c ON te.client_id = c.id
+       WHERE te.caregiver_id = $1 AND te.clock_out IS NOT NULL
+       ORDER BY te.clock_in DESC
+       LIMIT $2`,
+      [req.user.id, limit]
+    );
+    
+    // Map to expected format
+    const visits = result.rows.map(entry => ({
+      id: entry.id,
+      client_id: entry.client_id,
+      start_time: entry.clock_in,
+      end_time: entry.clock_out,
+      notes: entry.notes,
+      hours_worked: entry.hours_worked,
+      client_name: `${entry.client_first_name} ${entry.client_last_name}`
+    }));
+    
+    res.json(visits);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/time-entries/clock-in
 app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
   try {
@@ -640,13 +701,79 @@ app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
     );
 
     await auditLog(req.user.id, 'CREATE', 'time_entries', entryId, null, result.rows[0]);
-    res.status(201).json(result.rows[0]);
+    
+    // Return in expected format
+    res.status(201).json({
+      id: result.rows[0].id,
+      client_id: result.rows[0].client_id,
+      start_time: result.rows[0].clock_in
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// PATCH /api/time-entries/:id/clock-out
+// POST /api/time-entries/:id/clock-out (also support POST, not just PATCH)
+app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
+  try {
+    const { latitude, longitude, notes } = req.body;
+
+    // Calculate hours worked
+    const timeEntry = await pool.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
+    if (timeEntry.rows.length === 0) {
+      return res.status(404).json({ error: 'Time entry not found' });
+    }
+    
+    const clockIn = new Date(timeEntry.rows[0].clock_in);
+    const clockOut = new Date();
+    const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
+
+    const result = await pool.query(
+      `UPDATE time_entries SET 
+        clock_out = NOW(),
+        end_location = $1,
+        hours_worked = $2,
+        notes = $3,
+        updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, hoursWorked.toFixed(2), notes || null, req.params.id]
+    );
+
+    await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/time-entries/:id/gps - Track GPS during active session
+app.post('/api/time-entries/:id/gps', verifyToken, async (req, res) => {
+  try {
+    const { latitude, longitude, accuracy } = req.body;
+    
+    // Store GPS point (you could create a separate gps_tracks table for full history)
+    // For now, we'll just update the last known location
+    const result = await pool.query(
+      `UPDATE time_entries SET 
+        last_location = $1,
+        updated_at = NOW()
+       WHERE id = $2 AND clock_out IS NULL
+       RETURNING id`,
+      [JSON.stringify({ lat: latitude, lng: longitude, accuracy, timestamp: new Date() }), req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Active time entry not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/time-entries/:id/clock-out (keep for backwards compatibility)
 app.patch('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
   try {
     const { latitude, longitude, notes } = req.body;
