@@ -4823,6 +4823,142 @@ app.post('/api/scheduling/bulk-create', verifyToken, requireAdmin, async (req, r
     res.status(500).json({ error: error.message });
   }
 });
+// GET /api/open-shifts/available - Get shifts available for pickup
+app.get('/api/open-shifts/available', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT os.*, c.first_name as client_first_name, c.last_name as client_last_name
+      FROM open_shifts os
+      LEFT JOIN clients c ON os.client_id = c.id
+      WHERE os.status = 'open' 
+        AND (os.date >= CURRENT_DATE OR os.date IS NULL)
+      ORDER BY os.date, os.start_time
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get available shifts error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/open-shifts/:shiftId/claim - Caregiver claims an open shift
+app.post('/api/open-shifts/:shiftId/claim', verifyToken, async (req, res) => {
+  try {
+    const { shiftId } = req.params;
+    const caregiverId = req.user.id;
+
+    // Get the open shift
+    const shiftResult = await db.query(
+      `SELECT * FROM open_shifts WHERE id = $1 AND status = 'open'`,
+      [shiftId]
+    );
+
+    if (shiftResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Shift not found or already claimed' });
+    }
+
+    const shift = shiftResult.rows[0];
+
+    // Check for conflicts
+    const conflictResult = await db.query(`
+      SELECT id FROM schedules 
+      WHERE caregiver_id = $1 AND is_active = true
+        AND date = $2
+        AND NOT (end_time <= $3 OR start_time >= $4)
+    `, [caregiverId, shift.date, shift.start_time, shift.end_time]);
+
+    if (conflictResult.rows.length > 0) {
+      return res.status(400).json({ error: 'You have a conflicting schedule' });
+    }
+
+    // Create the schedule
+    const scheduleId = uuidv4();
+    await db.query(`
+      INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, date, start_time, end_time, notes)
+      VALUES ($1, $2, $3, 'one-time', $4, $5, $6, $7)
+    `, [scheduleId, caregiverId, shift.client_id, shift.date, shift.start_time, shift.end_time, shift.notes]);
+
+    // Update open shift status
+    await db.query(`
+      UPDATE open_shifts SET status = 'filled', filled_by = $1, filled_at = NOW() WHERE id = $2
+    `, [caregiverId, shiftId]);
+
+    res.json({ success: true, scheduleId });
+  } catch (error) {
+    console.error('Claim shift error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/absences/my - Get current user's time off requests
+app.get('/api/absences/my', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT * FROM absences 
+      WHERE caregiver_id = $1 
+      ORDER BY created_at DESC
+    `, [req.user.id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get my absences error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/scheduling/caregiver-hours/:caregiverId - Get weekly hours (if not already added)
+app.get('/api/scheduling/caregiver-hours/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId } = req.params;
+    
+    // Get current week boundaries
+    const now = new Date();
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+    
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    // Get one-time schedules this week
+    const oneTimeResult = await db.query(`
+      SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time)) / 3600) as hours
+      FROM schedules
+      WHERE caregiver_id = $1 AND is_active = true
+        AND date >= $2 AND date <= $3
+    `, [caregiverId, weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
+
+    // Get recurring schedules
+    const recurringResult = await db.query(`
+      SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time)) / 3600) as hours
+      FROM schedules
+      WHERE caregiver_id = $1 AND is_active = true AND day_of_week IS NOT NULL
+    `, [caregiverId]);
+
+    const oneTimeHours = parseFloat(oneTimeResult.rows[0]?.hours) || 0;
+    const recurringHours = parseFloat(recurringResult.rows[0]?.hours) || 0;
+    const totalHours = oneTimeHours + recurringHours;
+
+    // Get max hours
+    const availResult = await db.query(
+      `SELECT max_hours_per_week FROM caregiver_availability WHERE caregiver_id = $1`,
+      [caregiverId]
+    );
+    const maxHours = availResult.rows[0]?.max_hours_per_week || 40;
+
+    res.json({
+      totalHours: totalHours.toFixed(1),
+      oneTimeHours: oneTimeHours.toFixed(1),
+      recurringHours: recurringHours.toFixed(1),
+      maxHours,
+      remainingHours: Math.max(0, maxHours - totalHours).toFixed(1),
+      approachingOvertime: totalHours > 35
+    });
+  } catch (error) {
+    console.error('Get caregiver hours error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 // Start server
 app.listen(port, () => {
   console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
