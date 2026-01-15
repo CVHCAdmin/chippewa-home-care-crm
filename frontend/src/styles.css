@@ -719,25 +719,6 @@ body {
     display: block;
 }
 
-/* Utility Classes */
-.text-muted {
-    color: #6B7280;
-    font-size: 0.9rem;
-}
-
-.text-center {
-    text-align: center;
-}
-
-.timer-display {
-    font-size: 2.5rem;
-    font-weight: 700;
-    font-family: monospace;
-    color: var(--color-teal);
-    text-align: center;
-    margin: 1rem 0;
-}
-
 /* Responsive */
 @media (max-width: 768px) {
     /* Sidebar: hidden off-screen by default on mobile */
