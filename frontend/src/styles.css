@@ -691,67 +691,197 @@ body {
     100% { transform: rotate(360deg); }
 }
 
+/* Hamburger Button - Hidden by default, shown on mobile */
+.hamburger-btn {
+    display: none;
+    padding: 0.5rem 1rem;
+    background: var(--color-teal);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* Sidebar Overlay - for mobile */
+.sidebar-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+}
+
+.sidebar-overlay.active {
+    display: block;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
+    /* Sidebar: hidden off-screen by default on mobile */
     .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 280px;
+        height: 100vh;
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+        z-index: 1000;
+    }
+
+    /* Sidebar visible when open */
+    .sidebar.open {
+        transform: translateX(0);
+    }
+
+    /* Main content takes full width on mobile */
+    .main-content {
+        margin-left: 0;
         width: 100%;
-        height: auto;
-        position: relative;
+    }
+
+    /* Show hamburger button on mobile */
+    .hamburger-btn {
+        display: block;
+    }
+
+    /* Header layout for mobile */
+    .header {
+        padding: 1rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .header h1 {
+        font-size: 1.2rem;
+    }
+
+    .header p {
+        font-size: 0.8rem;
+    }
+
+    /* Container padding on mobile */
+    .container {
         padding: 1rem;
     }
 
-    .main-content {
-        margin-left: 0;
+    /* Cards on mobile */
+    .card {
+        padding: 1rem;
+        margin-bottom: 1rem;
     }
 
-    .sidebar-user {
-        position: relative;
-        bottom: auto;
-        left: auto;
-        right: auto;
-        margin-top: 2rem;
-    }
-
+    /* Grid single column on mobile */
     .grid {
         grid-template-columns: 1fr;
     }
 
-    .header {
-        padding: 1.5rem;
-    }
-
-    .header h1 {
-        font-size: 1.5rem;
-    }
-
-    .container {
-        padding: 0 1rem 2rem;
-    }
-
-    .card {
-        padding: 1.5rem;
-    }
-
-    .table {
-        font-size: 0.9rem;
-    }
-
-    .table th,
-    .table td {
-        padding: 0.75rem 0.5rem;
-    }
-
+    /* Form grids single column */
     .form-grid-2,
     .form-grid-3 {
         grid-template-columns: 1fr;
     }
 
+    /* Tables scroll horizontally on mobile */
+    .table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .table {
+        font-size: 0.85rem;
+        min-width: 600px;
+    }
+
+    .table th,
+    .table td {
+        padding: 0.75rem 0.5rem;
+        white-space: nowrap;
+    }
+
+    /* Calendar on mobile */
     .calendar-grid {
         min-height: 300px;
     }
 
     .calendar-cell {
-        min-height: 80px;
+        min-height: 60px;
+        padding: 0.25rem;
+    }
+
+    .calendar-day-number {
+        font-size: 0.9rem;
+    }
+
+    .calendar-day-name {
         padding: 0.5rem;
+        font-size: 0.8rem;
+    }
+
+    /* Modals full width on mobile */
+    .modal-content {
+        width: 95%;
+        max-height: 85vh;
+        margin: 1rem;
+        padding: 1rem;
+    }
+
+    /* Buttons stack on mobile */
+    .form-actions {
+        flex-direction: column;
+    }
+
+    .form-actions .btn {
+        width: 100%;
+    }
+
+    /* Stat cards */
+    .stat-card .value {
+        font-size: 2rem;
+    }
+
+    /* Badge smaller on mobile */
+    .badge {
+        font-size: 0.7rem;
+        padding: 0.25rem 0.5rem;
+    }
+
+    /* Login card */
+    .login-card {
+        margin: 1rem;
+        padding: 2rem;
+    }
+}
+
+/* Small phones */
+@media (max-width: 480px) {
+    .header h1 {
+        font-size: 1rem;
+    }
+
+    .header p {
+        display: none;
+    }
+
+    .sidebar {
+        width: 260px;
+    }
+
+    .card {
+        padding: 0.75rem;
+    }
+
+    .btn {
+        padding: 0.6rem 1rem;
+        font-size: 0.85rem;
+    }
+
+    .calendar-cell {
+        min-height: 50px;
     }
 }
