@@ -13,9 +13,13 @@ const ScheduleCalendar = ({ token }) => {
   const [selectedDay, setSelectedDay] = useState(null);
   const [daySchedules, setDaySchedules] = useState([]);
   const [filterCaregiver, setFilterCaregiver] = useState('');
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
 
   useEffect(() => {
     loadData();
+    const handleResize = () => setIsMobile(window.innerWidth <= 640);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   const loadData = async () => {
@@ -224,7 +228,7 @@ const ScheduleCalendar = ({ token }) => {
       </div>
 
       {/* Calendar Grid */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
         {/* Day Headers */}
         <div style={{ 
           display: 'grid', 
@@ -232,12 +236,12 @@ const ScheduleCalendar = ({ token }) => {
           background: '#f8f9fa',
           borderBottom: '1px solid #e5e7eb'
         }}>
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-            <div key={day} style={{ 
-              padding: '0.75rem 0.5rem', 
+          {(isMobile ? ['S', 'M', 'T', 'W', 'T', 'F', 'S'] : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']).map((day, idx) => (
+            <div key={idx} style={{ 
+              padding: isMobile ? '0.5rem 0.25rem' : '0.75rem 0.5rem', 
               textAlign: 'center', 
               fontWeight: '600',
-              fontSize: '0.85rem',
+              fontSize: isMobile ? '0.75rem' : '0.85rem',
               color: '#374151'
             }}>
               {day}
@@ -249,7 +253,7 @@ const ScheduleCalendar = ({ token }) => {
         <div style={{ 
           display: 'grid', 
           gridTemplateColumns: 'repeat(7, 1fr)',
-          minHeight: '500px'
+          minHeight: isMobile ? '300px' : '500px'
         }}>
           {days.map((day, idx) => {
             if (day === null) {
@@ -270,30 +274,30 @@ const ScheduleCalendar = ({ token }) => {
                 key={day}
                 onClick={() => handleDayClick(day)}
                 style={{ 
-                  minHeight: '100px',
-                  padding: '0.5rem',
+                  minHeight: isMobile ? '60px' : '100px',
+                  padding: isMobile ? '0.25rem' : '0.5rem',
                   borderRight: '1px solid #e5e7eb',
                   borderBottom: '1px solid #e5e7eb',
                   cursor: 'pointer',
                   background: isToday(day) ? '#EFF6FF' : '#fff',
                   transition: 'background 0.15s'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = isToday(day) ? '#DBEAFE' : '#f3f4f6'}
-                onMouseLeave={(e) => e.currentTarget.style.background = isToday(day) ? '#EFF6FF' : '#fff'}
+                onMouseEnter={(e) => !isMobile && (e.currentTarget.style.background = isToday(day) ? '#DBEAFE' : '#f3f4f6')}
+                onMouseLeave={(e) => !isMobile && (e.currentTarget.style.background = isToday(day) ? '#EFF6FF' : '#fff')}
               >
                 {/* Day Number */}
                 <div style={{ 
                   display: 'flex', 
                   justifyContent: 'space-between', 
                   alignItems: 'center',
-                  marginBottom: '0.25rem'
+                  marginBottom: isMobile ? '0.125rem' : '0.25rem'
                 }}>
                   <span style={{ 
                     fontWeight: isToday(day) ? '700' : '500',
-                    fontSize: '0.9rem',
+                    fontSize: isMobile ? '0.75rem' : '0.9rem',
                     color: isToday(day) ? '#2563EB' : '#374151',
-                    width: '24px',
-                    height: '24px',
+                    width: isMobile ? '20px' : '24px',
+                    height: isMobile ? '20px' : '24px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -303,7 +307,7 @@ const ScheduleCalendar = ({ token }) => {
                   }}>
                     {day}
                   </span>
-                  {hasSchedules && (
+                  {hasSchedules && !isMobile && (
                     <span style={{ 
                       fontSize: '0.7rem', 
                       color: '#6B7280',
@@ -316,36 +320,57 @@ const ScheduleCalendar = ({ token }) => {
                   )}
                 </div>
 
-                {/* Schedule Pills - Show ALL, not just 2 */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  {dayScheds.slice(0, 4).map((schedule, i) => (
-                    <div
-                      key={schedule.id || i}
-                      style={{
-                        background: getCaregiverColor(schedule.caregiver_id),
-                        color: '#fff',
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                        fontSize: '0.7rem',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis'
-                      }}
-                    >
-                      {formatTime(schedule.start_time)} {getCaregiverInitials(schedule.caregiver_id)}
+                {/* Schedule Pills - Desktop: show details, Mobile: show dots */}
+                {isMobile ? (
+                  hasSchedules && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px', justifyContent: 'center' }}>
+                      {dayScheds.slice(0, 3).map((schedule, i) => (
+                        <div
+                          key={schedule.id || i}
+                          style={{
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            background: getCaregiverColor(schedule.caregiver_id)
+                          }}
+                        />
+                      ))}
+                      {dayScheds.length > 3 && (
+                        <span style={{ fontSize: '0.6rem', color: '#6B7280' }}>+{dayScheds.length - 3}</span>
+                      )}
                     </div>
-                  ))}
-                  {dayScheds.length > 4 && (
-                    <div style={{ 
-                      fontSize: '0.7rem', 
-                      color: '#6B7280',
-                      textAlign: 'center',
-                      fontWeight: '500'
-                    }}>
-                      +{dayScheds.length - 4} more
-                    </div>
-                  )}
-                </div>
+                  )
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    {dayScheds.slice(0, 4).map((schedule, i) => (
+                      <div
+                        key={schedule.id || i}
+                        style={{
+                          background: getCaregiverColor(schedule.caregiver_id),
+                          color: '#fff',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontSize: '0.7rem',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}
+                      >
+                        {formatTime(schedule.start_time)} {getCaregiverInitials(schedule.caregiver_id)}
+                      </div>
+                    ))}
+                    {dayScheds.length > 4 && (
+                      <div style={{ 
+                        fontSize: '0.7rem', 
+                        color: '#6B7280',
+                        textAlign: 'center',
+                        fontWeight: '500'
+                      }}>
+                        +{dayScheds.length - 4} more
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -554,14 +579,7 @@ const ScheduleCalendar = ({ token }) => {
         </div>
       )}
 
-      {/* Mobile-specific styles */}
-      <style>{`
-        @media (max-width: 640px) {
-          .schedule-calendar .card {
-            border-radius: 8px;
-          }
-        }
-      `}</style>
+      {/* Responsive handled via isMobile state */}
     </div>
   );
 };

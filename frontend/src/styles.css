@@ -576,6 +576,14 @@ body {
     border-right: 1px solid #eee;
 }
 
+.calendar-day-name .day-short {
+    display: none;
+}
+
+.calendar-day-name .day-full {
+    display: inline;
+}
+
 .calendar-day-name:last-child {
     border-right: none;
 }
@@ -837,33 +845,52 @@ body {
         white-space: nowrap;
     }
 
-    /* Calendar on mobile */
+    /* Calendar on mobile - fit all 7 days */
     .calendar-container {
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+        margin: 0 -0.5rem;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
     }
 
-    .calendar-header,
-    .calendar-grid {
-        min-width: 500px;
+    .calendar-day-name {
+        padding: 0.5rem 0.25rem;
+        font-size: 0.7rem;
+    }
+
+    .calendar-day-name .day-short {
+        display: inline;
+    }
+
+    .calendar-day-name .day-full {
+        display: none;
     }
 
     .calendar-grid {
-        min-height: 300px;
+        min-height: auto;
     }
 
     .calendar-cell {
-        min-height: 60px;
+        min-height: 50px;
         padding: 0.25rem;
     }
 
     .calendar-day-number {
-        font-size: 0.9rem;
+        font-size: 0.8rem;
+        margin-bottom: 0.25rem;
     }
 
-    .calendar-day-name {
-        padding: 0.5rem;
-        font-size: 0.8rem;
+    .schedule-preview {
+        font-size: 0.6rem;
+        padding: 1px 2px;
+        margin-bottom: 1px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .schedule-more {
+        font-size: 0.6rem;
     }
 
     .calendar-nav {
@@ -876,6 +903,7 @@ body {
         text-align: center;
         order: -1;
         margin-bottom: 0.5rem;
+        font-size: 1.1rem;
     }
 
     /* Modals full width on mobile */
@@ -937,6 +965,25 @@ body {
     }
 
     .calendar-cell {
-        min-height: 50px;
+        min-height: 45px;
+        padding: 2px;
+    }
+
+    .calendar-day-number {
+        font-size: 0.75rem;
+    }
+
+    .schedule-preview {
+        display: none;
+    }
+
+    .calendar-cell.has-schedules::after {
+        content: '';
+        display: block;
+        width: 6px;
+        height: 6px;
+        background: var(--color-teal);
+        border-radius: 50%;
+        margin: 2px auto 0;
     }
 }
