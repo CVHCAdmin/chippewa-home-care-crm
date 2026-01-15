@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../config';
 import CaregiverClientModal from './CaregiverClientModal';
+import MileageTracker from './MileageTracker';
 
 const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('home');
@@ -397,6 +398,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             </div>
           )}
         </div>
+
+        {/* Mileage Tracker */}
+        <MileageTracker token={token} caregiverId={user.id} />
 
         {/* Today's Schedule */}
         <div className="card">

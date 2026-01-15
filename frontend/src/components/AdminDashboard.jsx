@@ -22,6 +22,16 @@ import ComplianceTracking from './admin/ComplianceTracking';
 import ReportsAnalytics from './admin/ReportsAnalytics';
 import PayrollProcessing from './admin/PayrollProcessing';
 import AuditLogs from './admin/AuditLogs';
+import ClaimsManagement from './admin/ClaimsManagement';
+import OpenShifts from './admin/OpenShifts';
+import MedicationsManagement from './admin/MedicationsManagement';
+import ShiftSwaps from './admin/ShiftSwaps';
+import DocumentsManagement from './admin/DocumentsManagement';
+import ADLTracking from './admin/ADLTracking';
+import BackgroundChecks from './admin/BackgroundChecks';
+import SMSManagement from './admin/SMSManagement';
+import FamilyPortalAdmin from './admin/FamilyPortalAdmin';
+import AlertsManagement from './admin/AlertsManagement';
 
 const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -129,6 +139,26 @@ const AdminDashboard = ({ user, token, onLogout }) => {
             }}
           />
         ) : null;
+      case 'claims':
+        return <ClaimsManagement token={token} />;
+      case 'open-shifts':
+        return <OpenShifts token={token} />;
+      case 'medications':
+        return <MedicationsManagement token={token} />;
+      case 'shift-swaps':
+        return <ShiftSwaps token={token} />;
+      case 'documents':
+        return <DocumentsManagement token={token} />;
+      case 'adl':
+        return <ADLTracking token={token} />;
+      case 'background-checks':
+        return <BackgroundChecks token={token} />;
+      case 'sms':
+        return <SMSManagement token={token} />;
+      case 'family-portal':
+        return <FamilyPortalAdmin token={token} />;
+      case 'alerts':
+        return <AlertsManagement token={token} />;
       default:
         return <DashboardOverview summary={summary} token={token} />;
     }
@@ -232,6 +262,24 @@ const AdminDashboard = ({ user, token, onLogout }) => {
           </li>
           <li>
             <a
+              href="#open-shifts"
+              className={currentPage === 'open-shifts' ? 'active' : ''}
+              onClick={() => handlePageClick('open-shifts')}
+            >
+              Open Shifts
+            </a>
+          </li>
+          <li>
+            <a
+              href="#shift-swaps"
+              className={currentPage === 'shift-swaps' ? 'active' : ''}
+              onClick={() => handlePageClick('shift-swaps')}
+            >
+              Shift Swaps
+            </a>
+          </li>
+          <li>
+            <a
               href="#availability"
               className={currentPage === 'availability' ? 'active' : ''}
               onClick={() => handlePageClick('availability')}
@@ -246,6 +294,40 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               onClick={() => handlePageClick('absences')}
             >
               Absences
+            </a>
+          </li>
+
+          {/* Care Management Section */}
+          <li style={{ paddingTop: '1rem', borderTop: '1px solid #ddd', marginTop: '0.5rem' }}>
+            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#999', fontWeight: 'bold', display: 'block', padding: '0.5rem 1rem' }}>
+              Care Management
+            </span>
+          </li>
+          <li>
+            <a
+              href="#adl"
+              className={currentPage === 'adl' ? 'active' : ''}
+              onClick={() => handlePageClick('adl')}
+            >
+              ADL Tracking
+            </a>
+          </li>
+          <li>
+            <a
+              href="#medications"
+              className={currentPage === 'medications' ? 'active' : ''}
+              onClick={() => handlePageClick('medications')}
+            >
+              Medications
+            </a>
+          </li>
+          <li>
+            <a
+              href="#incidents"
+              className={currentPage === 'incidents' ? 'active' : ''}
+              onClick={() => handlePageClick('incidents')}
+            >
+              Incidents
             </a>
           </li>
 
@@ -275,15 +357,6 @@ const AdminDashboard = ({ user, token, onLogout }) => {
           </li>
           <li>
             <a
-              href="#incidents"
-              className={currentPage === 'incidents' ? 'active' : ''}
-              onClick={() => handlePageClick('incidents')}
-            >
-              Incidents
-            </a>
-          </li>
-          <li>
-            <a
               href="#applications"
               className={currentPage === 'applications' ? 'active' : ''}
               onClick={() => handlePageClick('applications')}
@@ -309,6 +382,15 @@ const AdminDashboard = ({ user, token, onLogout }) => {
           </li>
           <li>
             <a
+              href="#claims"
+              className={currentPage === 'claims' ? 'active' : ''}
+              onClick={() => handlePageClick('claims')}
+            >
+              Claims
+            </a>
+          </li>
+          <li>
+            <a
               href="#payroll"
               className={currentPage === 'payroll' ? 'active' : ''}
               onClick={() => handlePageClick('payroll')}
@@ -322,7 +404,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               className={currentPage === 'expenses' ? 'active' : ''}
               onClick={() => handlePageClick('expenses')}
             >
-              💰 Expenses
+              Expenses
             </a>
           </li>
           <li>
@@ -352,11 +434,63 @@ const AdminDashboard = ({ user, token, onLogout }) => {
           </li>
           <li>
             <a
+              href="#background-checks"
+              className={currentPage === 'background-checks' ? 'active' : ''}
+              onClick={() => handlePageClick('background-checks')}
+            >
+              Background Checks
+            </a>
+          </li>
+          <li>
+            <a
+              href="#documents"
+              className={currentPage === 'documents' ? 'active' : ''}
+              onClick={() => handlePageClick('documents')}
+            >
+              Documents
+            </a>
+          </li>
+          <li>
+            <a
               href="#audit-logs"
               className={currentPage === 'audit-logs' ? 'active' : ''}
               onClick={() => handlePageClick('audit-logs')}
             >
               Audit Logs
+            </a>
+          </li>
+
+          {/* Communication Section */}
+          <li style={{ paddingTop: '1rem', borderTop: '1px solid #ddd', marginTop: '0.5rem' }}>
+            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#999', fontWeight: 'bold', display: 'block', padding: '0.5rem 1rem' }}>
+              Communication
+            </span>
+          </li>
+          <li>
+            <a
+              href="#sms"
+              className={currentPage === 'sms' ? 'active' : ''}
+              onClick={() => handlePageClick('sms')}
+            >
+              SMS
+            </a>
+          </li>
+          <li>
+            <a
+              href="#family-portal"
+              className={currentPage === 'family-portal' ? 'active' : ''}
+              onClick={() => handlePageClick('family-portal')}
+            >
+              Family Portal
+            </a>
+          </li>
+          <li>
+            <a
+              href="#alerts"
+              className={currentPage === 'alerts' ? 'active' : ''}
+              onClick={() => handlePageClick('alerts')}
+            >
+              Alerts
             </a>
           </li>
           <li>
