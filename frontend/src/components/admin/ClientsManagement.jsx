@@ -11,33 +11,38 @@ const ClientsManagement = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [selectedClient, setSelectedClient] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [showBillingModal, setShowBillingModal] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterReferral, setFilterReferral] = useState('');
+  const [filterCareType, setFilterCareType] = useState('');
   
-  const [formData, setFormData] = useState({
+  const initialFormData = {
+    // Basic Info
     firstName: '',
     lastName: '',
     dateOfBirth: '',
+    gender: '',
     phone: '',
     email: '',
+    // Address
     address: '',
     city: '',
     state: 'WI',
     zip: '',
-    referralSourceId: '',
-    careTypeId: '',
-    isPrivatePay: false,
-    privatePayRate: '',
-    privatePayRateType: 'hourly'
-  });
-
-  const [billingData, setBillingData] = useState({
+    // Billing/Referral
     referralSourceId: '',
     careTypeId: '',
     isPrivatePay: false,
     privatePayRate: '',
     privatePayRateType: 'hourly',
-    billingNotes: ''
-  });
+    // Emergency Contact
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    emergencyContactRelationship: '',
+    // Notes
+    notes: ''
+  };
+
+  const [formData, setFormData] = useState(initialFormData);
 
   useEffect(() => {
     loadData();
@@ -68,6 +73,7 @@ const ClientsManagement = ({ token }) => {
         firstName: formData.firstName,
         lastName: formData.lastName,
         dateOfBirth: formData.dateOfBirth || null,
+        gender: formData.gender || null,
         phone: formData.phone || null,
         email: formData.email || null,
         address: formData.address || null,
@@ -77,8 +83,12 @@ const ClientsManagement = ({ token }) => {
         referralSourceId: formData.referralSourceId || null,
         careTypeId: formData.careTypeId || null,
         isPrivatePay: formData.isPrivatePay,
-        privatePayRate: formData.isPrivatePay ? formData.privatePayRate : null,
-        privatePayRateType: formData.privatePayRateType
+        privatePayRate: formData.isPrivatePay ? parseFloat(formData.privatePayRate) : null,
+        privatePayRateType: formData.privatePayRateType,
+        emergencyContactName: formData.emergencyContactName || null,
+        emergencyContactPhone: formData.emergencyContactPhone || null,
+        emergencyContactRelationship: formData.emergencyContactRelationship || null,
+        notes: formData.notes || null
       };
 
       const response = await fetch(`${API_BASE_URL}/api/clients`, {
@@ -92,14 +102,10 @@ const ClientsManagement = ({ token }) => {
 
       if (!response.ok) throw new Error('Failed to create client');
 
-      setFormData({
-        firstName: '', lastName: '', dateOfBirth: '', phone: '', email: '',
-        address: '', city: '', state: 'WI', zip: '',
-        referralSourceId: '', careTypeId: '', isPrivatePay: false,
-        privatePayRate: '', privatePayRateType: 'hourly'
-      });
+      setFormData(initialFormData);
       setShowForm(false);
       loadData();
+      alert('Client added successfully!');
     } catch (error) {
       alert('Failed to create client: ' + error.message);
     }
@@ -108,41 +114,6 @@ const ClientsManagement = ({ token }) => {
   const handleViewClient = (client) => {
     setSelectedClient(client);
     setShowEditModal(true);
-  };
-
-  const handleOpenBilling = (client) => {
-    setSelectedClient(client);
-    setBillingData({
-      referralSourceId: client.referral_source_id || '',
-      careTypeId: client.care_type_id || '',
-      isPrivatePay: client.is_private_pay || false,
-      privatePayRate: client.private_pay_rate || '',
-      privatePayRateType: client.private_pay_rate_type || 'hourly',
-      billingNotes: client.billing_notes || ''
-    });
-    setShowBillingModal(true);
-  };
-
-  const handleSaveBilling = async (e) => {
-    e.preventDefault();
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/clients/${selectedClient.id}/billing`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(billingData)
-      });
-
-      if (!response.ok) throw new Error('Failed to update billing');
-
-      setShowBillingModal(false);
-      loadData();
-      alert('Billing settings updated!');
-    } catch (error) {
-      alert('Failed to update billing: ' + error.message);
-    }
   };
 
   const getReferralSourceName = (id) => {
@@ -154,6 +125,19 @@ const ClientsManagement = ({ token }) => {
     const ct = careTypes.find(c => c.id === id);
     return ct ? ct.name : '-';
   };
+
+  // Filter clients
+  const filteredClients = clients.filter(client => {
+    const matchesSearch = !searchTerm || 
+      `${client.first_name} ${client.last_name}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (client.phone && client.phone.includes(searchTerm)) ||
+      (client.email && client.email.toLowerCase().includes(searchTerm.toLowerCase()));
+    
+    const matchesReferral = !filterReferral || client.referral_source_id === filterReferral;
+    const matchesCareType = !filterCareType || client.care_type_id === filterCareType;
+    
+    return matchesSearch && matchesReferral && matchesCareType;
+  });
 
   return (
     <div>
@@ -167,10 +151,14 @@ const ClientsManagement = ({ token }) => {
         </button>
       </div>
 
+      {/* Add Client Form */}
       {showForm && (
         <div className="card card-form">
-          <h3>New Client Onboarding</h3>
+          <h3>Add New Client</h3>
           <form onSubmit={handleSubmit}>
+            
+            {/* Basic Information */}
+            <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>📋 Basic Information</h4>
             <div className="form-grid">
               <div className="form-group">
                 <label>First Name *</label>
@@ -181,7 +169,6 @@ const ClientsManagement = ({ token }) => {
                   required
                 />
               </div>
-
               <div className="form-group">
                 <label>Last Name *</label>
                 <input
@@ -191,7 +178,6 @@ const ClientsManagement = ({ token }) => {
                   required
                 />
               </div>
-
               <div className="form-group">
                 <label>Date of Birth</label>
                 <input
@@ -200,7 +186,18 @@ const ClientsManagement = ({ token }) => {
                   onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
                 />
               </div>
-
+              <div className="form-group">
+                <label>Gender</label>
+                <select
+                  value={formData.gender}
+                  onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                >
+                  <option value="">Select...</option>
+                  <option value="M">Male</option>
+                  <option value="F">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
               <div className="form-group">
                 <label>Phone</label>
                 <input
@@ -209,7 +206,6 @@ const ClientsManagement = ({ token }) => {
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 />
               </div>
-
               <div className="form-group">
                 <label>Email</label>
                 <input
@@ -218,16 +214,19 @@ const ClientsManagement = ({ token }) => {
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 />
               </div>
+            </div>
 
-              <div className="form-group">
-                <label>Address</label>
+            {/* Address */}
+            <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>🏠 Address</h4>
+            <div className="form-grid">
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                <label>Street Address</label>
                 <input
                   type="text"
                   value={formData.address}
                   onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                 />
               </div>
-
               <div className="form-group">
                 <label>City</label>
                 <input
@@ -236,7 +235,6 @@ const ClientsManagement = ({ token }) => {
                   onChange={(e) => setFormData({ ...formData, city: e.target.value })}
                 />
               </div>
-
               <div className="form-group">
                 <label>State</label>
                 <input
@@ -246,9 +244,8 @@ const ClientsManagement = ({ token }) => {
                   maxLength="2"
                 />
               </div>
-
               <div className="form-group">
-                <label>Zip</label>
+                <label>Zip Code</label>
                 <input
                   type="text"
                   value={formData.zip}
@@ -257,194 +254,28 @@ const ClientsManagement = ({ token }) => {
               </div>
             </div>
 
-            <h4 style={{ marginTop: '1.5rem', marginBottom: '1rem', borderTop: '1px solid #eee', paddingTop: '1rem' }}>
-              💰 Billing Information
-            </h4>
-
+            {/* Billing & Referral */}
+            <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>💰 Billing & Referral</h4>
             <div className="form-grid">
-              <div className="form-group">
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <input
                     type="checkbox"
                     checked={formData.isPrivatePay}
                     onChange={(e) => setFormData({ ...formData, isPrivatePay: e.target.checked })}
                   />
-                  Private Pay (No Referral Source)
-                </label>
-              </div>
-            </div>
-
-            {!formData.isPrivatePay ? (
-              <div className="form-grid">
-                <div className="form-group">
-                  <label>Referral Source *</label>
-                  <select
-                    value={formData.referralSourceId}
-                    onChange={(e) => setFormData({ ...formData, referralSourceId: e.target.value })}
-                    required={!formData.isPrivatePay}
-                  >
-                    <option value="">Select referral source...</option>
-                    {referralSources.map(rs => (
-                      <option key={rs.id} value={rs.id}>{rs.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Care Type *</label>
-                  <select
-                    value={formData.careTypeId}
-                    onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
-                    required={!formData.isPrivatePay}
-                  >
-                    <option value="">Select care type...</option>
-                    {careTypes.map(ct => (
-                      <option key={ct.id} value={ct.id}>{ct.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            ) : (
-              <div className="form-grid">
-                <div className="form-group">
-                  <label>Care Type</label>
-                  <select
-                    value={formData.careTypeId}
-                    onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
-                  >
-                    <option value="">Select care type...</option>
-                    {careTypes.map(ct => (
-                      <option key={ct.id} value={ct.id}>{ct.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Rate Type</label>
-                  <select
-                    value={formData.privatePayRateType}
-                    onChange={(e) => setFormData({ ...formData, privatePayRateType: e.target.value })}
-                  >
-                    <option value="hourly">Per Hour</option>
-                    <option value="15min">Per 15 Minutes</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Rate Amount *</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={formData.privatePayRate}
-                    onChange={(e) => setFormData({ ...formData, privatePayRate: e.target.value })}
-                    placeholder={formData.privatePayRateType === '15min' ? 'e.g., 6.25' : 'e.g., 25.00'}
-                    required={formData.isPrivatePay}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="form-actions">
-              <button type="submit" className="btn btn-primary">Add Client</button>
-              <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="loading"><div className="spinner"></div></div>
-      ) : clients.length === 0 ? (
-        <div className="card card-centered">
-          <p>No clients yet. Create one to get started.</p>
-        </div>
-      ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Phone</th>
-              <th>Referral Source</th>
-              <th>Care Type</th>
-              <th>Pay Type</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {clients.map(client => (
-              <tr key={client.id}>
-                <td><strong>{client.first_name} {client.last_name}</strong></td>
-                <td><a href={`tel:${client.phone}`}>{client.phone || 'N/A'}</a></td>
-                <td>{client.is_private_pay ? '-' : getReferralSourceName(client.referral_source_id)}</td>
-                <td>{getCareTypeName(client.care_type_id)}</td>
-                <td>
-                  {client.is_private_pay ? (
-                    <span className="badge badge-info">Private Pay</span>
-                  ) : (
-                    <span className="badge badge-success">Referral</span>
-                  )}
-                </td>
-                <td>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <button 
-                      className="btn btn-sm btn-primary"
-                      onClick={() => handleViewClient(client)}
-                    >
-                      Edit
-                    </button>
-                    <button 
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => handleOpenBilling(client)}
-                    >
-                      💰 Billing
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      <EditClientModal
-        client={selectedClient}
-        isOpen={showEditModal}
-        onClose={() => {
-          setShowEditModal(false);
-          setSelectedClient(null);
-        }}
-        onSuccess={loadData}
-        token={token}
-      />
-
-      {/* Billing Settings Modal */}
-      {showBillingModal && selectedClient && (
-        <div className="modal active">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2>💰 Billing Settings - {selectedClient.first_name} {selectedClient.last_name}</h2>
-              <button className="close-btn" onClick={() => setShowBillingModal(false)}>×</button>
-            </div>
-
-            <form onSubmit={handleSaveBilling}>
-              <div className="form-group">
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input
-                    type="checkbox"
-                    checked={billingData.isPrivatePay}
-                    onChange={(e) => setBillingData({ ...billingData, isPrivatePay: e.target.checked })}
-                  />
-                  Private Pay (No Referral Source)
+                  Private Pay (Client pays directly, no referral source)
                 </label>
               </div>
 
-              {!billingData.isPrivatePay ? (
+              {!formData.isPrivatePay ? (
                 <>
                   <div className="form-group">
-                    <label>Referral Source</label>
+                    <label>Referral Source *</label>
                     <select
-                      value={billingData.referralSourceId}
-                      onChange={(e) => setBillingData({ ...billingData, referralSourceId: e.target.value })}
+                      value={formData.referralSourceId}
+                      onChange={(e) => setFormData({ ...formData, referralSourceId: e.target.value })}
+                      required={!formData.isPrivatePay}
                     >
                       <option value="">Select referral source...</option>
                       {referralSources.map(rs => (
@@ -452,12 +283,12 @@ const ClientsManagement = ({ token }) => {
                       ))}
                     </select>
                   </div>
-
                   <div className="form-group">
-                    <label>Care Type</label>
+                    <label>Care Type *</label>
                     <select
-                      value={billingData.careTypeId}
-                      onChange={(e) => setBillingData({ ...billingData, careTypeId: e.target.value })}
+                      value={formData.careTypeId}
+                      onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
+                      required={!formData.isPrivatePay}
                     >
                       <option value="">Select care type...</option>
                       {careTypes.map(ct => (
@@ -471,8 +302,8 @@ const ClientsManagement = ({ token }) => {
                   <div className="form-group">
                     <label>Care Type</label>
                     <select
-                      value={billingData.careTypeId}
-                      onChange={(e) => setBillingData({ ...billingData, careTypeId: e.target.value })}
+                      value={formData.careTypeId}
+                      onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
                     >
                       <option value="">Select care type...</option>
                       {careTypes.map(ct => (
@@ -480,55 +311,198 @@ const ClientsManagement = ({ token }) => {
                       ))}
                     </select>
                   </div>
-
                   <div className="form-group">
                     <label>Rate Type</label>
                     <select
-                      value={billingData.privatePayRateType}
-                      onChange={(e) => setBillingData({ ...billingData, privatePayRateType: e.target.value })}
+                      value={formData.privatePayRateType}
+                      onChange={(e) => setFormData({ ...formData, privatePayRateType: e.target.value })}
                     >
                       <option value="hourly">Per Hour</option>
                       <option value="15min">Per 15 Minutes</option>
                     </select>
                   </div>
-
                   <div className="form-group">
-                    <label>Rate Amount</label>
+                    <label>Rate Amount *</label>
                     <input
                       type="number"
                       step="0.01"
-                      value={billingData.privatePayRate}
-                      onChange={(e) => setBillingData({ ...billingData, privatePayRate: e.target.value })}
-                      placeholder="e.g., 25.00"
+                      min="0"
+                      value={formData.privatePayRate}
+                      onChange={(e) => setFormData({ ...formData, privatePayRate: e.target.value })}
+                      placeholder={formData.privatePayRateType === '15min' ? 'e.g., 6.25' : 'e.g., 25.00'}
+                      required={formData.isPrivatePay}
                     />
                   </div>
                 </>
               )}
+            </div>
 
+            {/* Emergency Contact */}
+            <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>🚨 Emergency Contact</h4>
+            <div className="form-grid">
               <div className="form-group">
-                <label>Billing Notes</label>
-                <textarea
-                  value={billingData.billingNotes}
-                  onChange={(e) => setBillingData({ ...billingData, billingNotes: e.target.value })}
-                  rows="3"
-                  placeholder="Any special billing instructions..."
+                <label>Contact Name</label>
+                <input
+                  type="text"
+                  value={formData.emergencyContactName}
+                  onChange={(e) => setFormData({ ...formData, emergencyContactName: e.target.value })}
                 />
               </div>
-
-              <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-                <strong>Note:</strong> Caregiver pay rates are set by care type in Caregiver Management, 
-                not per client. When a caregiver works with this client, they'll be paid based on the 
-                care type rate you select above.
+              <div className="form-group">
+                <label>Phone</label>
+                <input
+                  type="tel"
+                  value={formData.emergencyContactPhone}
+                  onChange={(e) => setFormData({ ...formData, emergencyContactPhone: e.target.value })}
+                />
               </div>
-
-              <div className="modal-actions">
-                <button type="submit" className="btn btn-primary">Save Billing Settings</button>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowBillingModal(false)}>Cancel</button>
+              <div className="form-group">
+                <label>Relationship</label>
+                <input
+                  type="text"
+                  value={formData.emergencyContactRelationship}
+                  onChange={(e) => setFormData({ ...formData, emergencyContactRelationship: e.target.value })}
+                  placeholder="e.g., Spouse, Son, Daughter"
+                />
               </div>
-            </form>
-          </div>
+            </div>
+
+            {/* Notes */}
+            <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>📝 Notes</h4>
+            <div className="form-group">
+              <textarea
+                value={formData.notes}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                placeholder="Any initial notes about the client..."
+                rows="3"
+              />
+            </div>
+
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary">Add Client</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
+            </div>
+          </form>
         </div>
       )}
+
+      {/* Search and Filters */}
+      <div className="card" style={{ marginBottom: '1rem', padding: '1rem' }}>
+        <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr', gap: '1rem' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <input
+              type="text"
+              placeholder="🔍 Search by name, phone, or email..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <select
+              value={filterReferral}
+              onChange={(e) => setFilterReferral(e.target.value)}
+            >
+              <option value="">All Referral Sources</option>
+              {referralSources.map(rs => (
+                <option key={rs.id} value={rs.id}>{rs.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <select
+              value={filterCareType}
+              onChange={(e) => setFilterCareType(e.target.value)}
+            >
+              <option value="">All Care Types</option>
+              {careTypes.map(ct => (
+                <option key={ct.id} value={ct.id}>{ct.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Clients Table */}
+      {loading ? (
+        <div className="loading"><div className="spinner"></div></div>
+      ) : filteredClients.length === 0 ? (
+        <div className="card card-centered">
+          <p>{clients.length === 0 ? 'No clients yet. Add one to get started.' : 'No clients match your filters.'}</p>
+        </div>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Phone</th>
+              <th>City</th>
+              <th>Referral Source</th>
+              <th>Care Type</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredClients.map(client => (
+              <tr key={client.id}>
+                <td>
+                  <strong>{client.first_name} {client.last_name}</strong>
+                  {client.date_of_birth && (
+                    <small style={{ display: 'block', color: '#666' }}>
+                      DOB: {new Date(client.date_of_birth).toLocaleDateString()}
+                    </small>
+                  )}
+                </td>
+                <td><a href={`tel:${client.phone}`}>{client.phone || 'N/A'}</a></td>
+                <td>{client.city || '-'}</td>
+                <td>
+                  {client.is_private_pay ? (
+                    <span className="text-muted">-</span>
+                  ) : (
+                    getReferralSourceName(client.referral_source_id)
+                  )}
+                </td>
+                <td>{getCareTypeName(client.care_type_id)}</td>
+                <td>
+                  {client.is_private_pay ? (
+                    <span className="badge badge-info">Private Pay</span>
+                  ) : (
+                    <span className="badge badge-success">Referred</span>
+                  )}
+                </td>
+                <td>
+                  <button 
+                    className="btn btn-sm btn-primary"
+                    onClick={() => handleViewClient(client)}
+                  >
+                    View / Edit
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/* Summary */}
+      {!loading && clients.length > 0 && (
+        <div style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#666' }}>
+          Showing {filteredClients.length} of {clients.length} clients
+        </div>
+      )}
+
+      <EditClientModal
+        client={selectedClient}
+        referralSources={referralSources}
+        careTypes={careTypes}
+        isOpen={showEditModal}
+        onClose={() => {
+          setShowEditModal(false);
+          setSelectedClient(null);
+        }}
+        onSuccess={loadData}
+        token={token}
+      />
     </div>
   );
 };

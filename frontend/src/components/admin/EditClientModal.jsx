@@ -1,37 +1,16 @@
 // src/components/admin/EditClientModal.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+
 const formatDateForInput = (dateString) => {
   if (!dateString) return '';
   const date = new Date(dateString);
   return date.toISOString().split('T')[0];
 };
-const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    dateOfBirth: '',
-    gender: '',
-    phone: '',
-    email: '',
-    address: '',
-    city: '',
-    state: 'WI',
-    zip: '',
-    serviceType: 'personal_care',
-    emergencyContactName: '',
-    emergencyContactPhone: '',
-    emergencyContactRelationship: '',
-    medicalConditions: '',
-    medications: '',
-    allergies: '',
-    notes: '',
-    preferredCaregivers: '',
-    doNotUseCaregivers: '',
-    insuranceProvider: '',
-    insuranceId: '',
-    insuranceGroup: ''
-  });
+
+const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen, onClose, onSuccess, token }) => {
+  const [activeTab, setActiveTab] = useState('basic');
+  const [formData, setFormData] = useState({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -39,30 +18,45 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
   useEffect(() => {
     if (client && isOpen) {
       setFormData({
+        // Basic Info
         firstName: client.first_name || '',
         lastName: client.last_name || '',
         dateOfBirth: formatDateForInput(client.date_of_birth),
         gender: client.gender || '',
         phone: client.phone || '',
         email: client.email || '',
+        // Address
         address: client.address || '',
         city: client.city || '',
         state: client.state || 'WI',
         zip: client.zip || '',
-        serviceType: client.service_type || 'personal_care',
+        // Billing/Referral
+        referralSourceId: client.referral_source_id || '',
+        careTypeId: client.care_type_id || '',
+        isPrivatePay: client.is_private_pay || false,
+        privatePayRate: client.private_pay_rate || '',
+        privatePayRateType: client.private_pay_rate_type || 'hourly',
+        billingNotes: client.billing_notes || '',
+        // Emergency Contact
         emergencyContactName: client.emergency_contact_name || '',
         emergencyContactPhone: client.emergency_contact_phone || '',
         emergencyContactRelationship: client.emergency_contact_relationship || '',
+        // Medical
         medicalConditions: client.medical_conditions || '',
         medications: client.medications || '',
         allergies: client.allergies || '',
-        notes: client.notes || '',
-        preferredCaregivers: client.preferred_caregivers || '',
-        doNotUseCaregivers: client.do_not_use_caregivers || '',
+        medicalNotes: client.medical_notes || '',
+        // Insurance
         insuranceProvider: client.insurance_provider || '',
         insuranceId: client.insurance_id || '',
-        insuranceGroup: client.insurance_group || ''
+        insuranceGroup: client.insurance_group || '',
+        // Caregiver Preferences
+        preferredCaregivers: client.preferred_caregivers || '',
+        doNotUseCaregivers: client.do_not_use_caregivers || '',
+        // Notes
+        notes: client.notes || ''
       });
+      setActiveTab('basic');
       setDeleteConfirm(false);
       setMessage('');
     }
@@ -74,39 +68,43 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
     setMessage('');
 
     try {
-      const cleanedData = {
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        serviceType: formData.serviceType,
-        dateOfBirth: formData.dateOfBirth || null,
-        gender: formData.gender || null,
-        phone: formData.phone || null,
-        email: formData.email || null,
-        address: formData.address || null,
-        city: formData.city || null,
-        state: formData.state || null,
-        zip: formData.zip || null,
-        emergencyContactName: formData.emergencyContactName || null,
-        emergencyContactPhone: formData.emergencyContactPhone || null,
-        emergencyContactRelationship: formData.emergencyContactRelationship || null,
-        medicalConditions: formData.medicalConditions || null,
-        medications: formData.medications || null,
-        allergies: formData.allergies || null,
-        notes: formData.notes || null,
-        preferredCaregivers: formData.preferredCaregivers || null,
-        doNotUseCaregivers: formData.doNotUseCaregivers || null,
-        insuranceProvider: formData.insuranceProvider || null,
-        insuranceId: formData.insuranceId || null,
-        insuranceGroup: formData.insuranceGroup || null
-      };
-
       const response = await fetch(`${API_BASE_URL}/api/clients/${client.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(cleanedData)
+        body: JSON.stringify({
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          dateOfBirth: formData.dateOfBirth || null,
+          gender: formData.gender || null,
+          phone: formData.phone || null,
+          email: formData.email || null,
+          address: formData.address || null,
+          city: formData.city || null,
+          state: formData.state || null,
+          zip: formData.zip || null,
+          referralSourceId: formData.referralSourceId || null,
+          careTypeId: formData.careTypeId || null,
+          isPrivatePay: formData.isPrivatePay,
+          privatePayRate: formData.isPrivatePay ? parseFloat(formData.privatePayRate) : null,
+          privatePayRateType: formData.privatePayRateType,
+          billingNotes: formData.billingNotes || null,
+          emergencyContactName: formData.emergencyContactName || null,
+          emergencyContactPhone: formData.emergencyContactPhone || null,
+          emergencyContactRelationship: formData.emergencyContactRelationship || null,
+          medicalConditions: formData.medicalConditions || null,
+          medications: formData.medications || null,
+          allergies: formData.allergies || null,
+          medicalNotes: formData.medicalNotes || null,
+          insuranceProvider: formData.insuranceProvider || null,
+          insuranceId: formData.insuranceId || null,
+          insuranceGroup: formData.insuranceGroup || null,
+          preferredCaregivers: formData.preferredCaregivers || null,
+          doNotUseCaregivers: formData.doNotUseCaregivers || null,
+          notes: formData.notes || null
+        })
       });
 
       if (!response.ok) {
@@ -118,7 +116,7 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
       setTimeout(() => {
         onSuccess();
         onClose();
-      }, 1500);
+      }, 1000);
     } catch (error) {
       setMessage('Error: ' + error.message);
     } finally {
@@ -133,24 +131,19 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
     }
 
     setLoading(true);
-
     try {
       const response = await fetch(`${API_BASE_URL}/api/clients/${client.id}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to delete client');
-      }
+      if (!response.ok) throw new Error('Failed to delete client');
 
-      setMessage('Client deleted. Closing...');
+      setMessage('Client deleted.');
       setTimeout(() => {
         onSuccess();
         onClose();
-      }, 1500);
+      }, 1000);
     } catch (error) {
       setMessage('Error: ' + error.message);
       setDeleteConfirm(false);
@@ -161,11 +154,18 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
 
   if (!isOpen || !client) return null;
 
+  const tabs = [
+    { id: 'basic', label: '📋 Basic Info' },
+    { id: 'billing', label: '💰 Billing' },
+    { id: 'medical', label: '🏥 Medical' },
+    { id: 'caregivers', label: '👤 Caregivers' }
+  ];
+
   return (
     <div className="modal active">
-      <div className="modal-content">
+      <div className="modal-content modal-large">
         <div className="modal-header">
-          <h2>Edit Client: {client.first_name} {client.last_name}</h2>
+          <h2>Edit: {client.first_name} {client.last_name}</h2>
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
 
@@ -175,279 +175,369 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
           </div>
         )}
 
+        {/* Tabs */}
+        <div className="tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '2px solid #eee', paddingBottom: '0.5rem' }}>
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`btn ${activeTab === tab.id ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setActiveTab(tab.id)}
+              style={{ flex: 1 }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
         <form onSubmit={handleSave}>
-          {/* Basic Information */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-              Basic Information
-            </h4>
-            <div className="form-grid-2">
-              <div className="form-group">
-                <label>First Name *</label>
-                <input
-                  type="text"
-                  value={formData.firstName}
-                  onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                  required
-                />
+          
+          {/* Basic Info Tab */}
+          {activeTab === 'basic' && (
+            <div>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Personal Information</h4>
+              <div className="form-grid-2">
+                <div className="form-group">
+                  <label>First Name *</label>
+                  <input
+                    type="text"
+                    value={formData.firstName}
+                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Last Name *</label>
+                  <input
+                    type="text"
+                    value={formData.lastName}
+                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Date of Birth</label>
+                  <input
+                    type="date"
+                    value={formData.dateOfBirth}
+                    onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Gender</label>
+                  <select
+                    value={formData.gender}
+                    onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                  >
+                    <option value="">Select...</option>
+                    <option value="M">Male</option>
+                    <option value="F">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Phone</label>
+                  <input
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Email</label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  />
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>Last Name *</label>
-                <input
-                  type="text"
-                  value={formData.lastName}
-                  onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                  required
-                />
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Address</h4>
+              <div className="form-grid-2">
+                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                  <label>Street Address</label>
+                  <input
+                    type="text"
+                    value={formData.address}
+                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>City</label>
+                  <input
+                    type="text"
+                    value={formData.city}
+                    onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>State</label>
+                  <input
+                    type="text"
+                    value={formData.state}
+                    onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+                    maxLength="2"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Zip Code</label>
+                  <input
+                    type="text"
+                    value={formData.zip}
+                    onChange={(e) => setFormData({ ...formData, zip: e.target.value })}
+                  />
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>Date of Birth</label>
-                <input
-                  type="date"
-                  value={formData.dateOfBirth}
-                  onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
-                />
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Emergency Contact</h4>
+              <div className="form-grid-2">
+                <div className="form-group">
+                  <label>Contact Name</label>
+                  <input
+                    type="text"
+                    value={formData.emergencyContactName}
+                    onChange={(e) => setFormData({ ...formData, emergencyContactName: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Phone</label>
+                  <input
+                    type="tel"
+                    value={formData.emergencyContactPhone}
+                    onChange={(e) => setFormData({ ...formData, emergencyContactPhone: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Relationship</label>
+                  <input
+                    type="text"
+                    value={formData.emergencyContactRelationship}
+                    onChange={(e) => setFormData({ ...formData, emergencyContactRelationship: e.target.value })}
+                    placeholder="e.g., Spouse, Son, Daughter"
+                  />
+                </div>
               </div>
 
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Notes</h4>
               <div className="form-group">
-                <label>Gender</label>
-                <select
-                  value={formData.gender}
-                  onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-                >
-                  <option value="">Select...</option>
-                  <option value="M">Male</option>
-                  <option value="F">Female</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Service Type *</label>
-                <select
-                  value={formData.serviceType}
-                  onChange={(e) => setFormData({ ...formData, serviceType: e.target.value })}
-                  required
-                >
-                  <option value="personal_care">Personal Care</option>
-                  <option value="companionship">Companionship</option>
-                  <option value="respite_care">Respite Care</option>
-                  <option value="medication_management">Medication Management</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Contact Information */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-              Contact Information
-            </h4>
-            <div className="form-grid-2">
-              <div className="form-group">
-                <label>Phone</label>
-                <input
-                  type="tel"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Email</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Address</label>
-                <input
-                  type="text"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>City</label>
-                <input
-                  type="text"
-                  value={formData.city}
-                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>State</label>
-                <input
-                  type="text"
-                  value={formData.state}
-                  onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                  maxLength="2"
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Zip</label>
-                <input
-                  type="text"
-                  value={formData.zip}
-                  onChange={(e) => setFormData({ ...formData, zip: e.target.value })}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Emergency Contact */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-              Emergency Contact
-            </h4>
-            <div className="form-grid-2">
-              <div className="form-group">
-                <label>Contact Name</label>
-                <input
-                  type="text"
-                  value={formData.emergencyContactName}
-                  onChange={(e) => setFormData({ ...formData, emergencyContactName: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Phone</label>
-                <input
-                  type="tel"
-                  value={formData.emergencyContactPhone}
-                  onChange={(e) => setFormData({ ...formData, emergencyContactPhone: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Relationship</label>
-                <input
-                  type="text"
-                  value={formData.emergencyContactRelationship}
-                  onChange={(e) => setFormData({ ...formData, emergencyContactRelationship: e.target.value })}
-                  placeholder="e.g., Spouse, Son, Daughter"
+                <textarea
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  placeholder="General notes about the client..."
+                  rows="3"
                 />
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Medical Information */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-              Medical Information
-            </h4>
-            <div className="form-group">
-              <label>Medical Conditions</label>
-              <textarea
-                value={formData.medicalConditions}
-                onChange={(e) => setFormData({ ...formData, medicalConditions: e.target.value })}
-                placeholder="List any medical conditions..."
-                rows="2"
-              ></textarea>
-            </div>
-
-            <div className="form-group">
-              <label>Medications</label>
-              <textarea
-                value={formData.medications}
-                onChange={(e) => setFormData({ ...formData, medications: e.target.value })}
-                placeholder="List current medications..."
-                rows="2"
-              ></textarea>
-            </div>
-
-            <div className="form-group">
-              <label>Allergies</label>
-              <textarea
-                value={formData.allergies}
-                onChange={(e) => setFormData({ ...formData, allergies: e.target.value })}
-                placeholder="List any allergies..."
-                rows="2"
-              ></textarea>
-            </div>
-
-            <div className="form-group">
-              <label>Medical Notes</label>
-              <textarea
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                placeholder="General medical notes and care instructions..."
-                rows="3"
-              ></textarea>
-            </div>
-          </div>
-
-          {/* Insurance Information */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-              Insurance Information
-            </h4>
-            <div className="form-grid-2">
+          {/* Billing Tab */}
+          {activeTab === 'billing' && (
+            <div>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Billing Type</h4>
               <div className="form-group">
-                <label>Insurance Provider</label>
-                <input
-                  type="text"
-                  value={formData.insuranceProvider}
-                  onChange={(e) => setFormData({ ...formData, insuranceProvider: e.target.value })}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={formData.isPrivatePay}
+                    onChange={(e) => setFormData({ ...formData, isPrivatePay: e.target.checked })}
+                  />
+                  Private Pay (Client pays directly, no referral source)
+                </label>
+              </div>
+
+              {!formData.isPrivatePay ? (
+                <>
+                  <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Referral Information</h4>
+                  <div className="form-grid-2">
+                    <div className="form-group">
+                      <label>Referral Source</label>
+                      <select
+                        value={formData.referralSourceId}
+                        onChange={(e) => setFormData({ ...formData, referralSourceId: e.target.value })}
+                      >
+                        <option value="">Select referral source...</option>
+                        {referralSources.map(rs => (
+                          <option key={rs.id} value={rs.id}>{rs.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Care Type</label>
+                      <select
+                        value={formData.careTypeId}
+                        onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
+                      >
+                        <option value="">Select care type...</option>
+                        {careTypes.map(ct => (
+                          <option key={ct.id} value={ct.id}>{ct.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="alert alert-info">
+                    <strong>Rate:</strong> Billing rate is determined by the Referral Source + Care Type combination. 
+                    Manage rates in the Billing Dashboard.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Private Pay Rate</h4>
+                  <div className="form-grid-2">
+                    <div className="form-group">
+                      <label>Care Type</label>
+                      <select
+                        value={formData.careTypeId}
+                        onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
+                      >
+                        <option value="">Select care type...</option>
+                        {careTypes.map(ct => (
+                          <option key={ct.id} value={ct.id}>{ct.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Rate Type</label>
+                      <select
+                        value={formData.privatePayRateType}
+                        onChange={(e) => setFormData({ ...formData, privatePayRateType: e.target.value })}
+                      >
+                        <option value="hourly">Per Hour</option>
+                        <option value="15min">Per 15 Minutes</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Rate Amount</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.privatePayRate}
+                        onChange={(e) => setFormData({ ...formData, privatePayRate: e.target.value })}
+                        placeholder="e.g., 25.00"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Insurance Information</h4>
+              <div className="form-grid-2">
+                <div className="form-group">
+                  <label>Insurance Provider</label>
+                  <input
+                    type="text"
+                    value={formData.insuranceProvider}
+                    onChange={(e) => setFormData({ ...formData, insuranceProvider: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Policy Number</label>
+                  <input
+                    type="text"
+                    value={formData.insuranceId}
+                    onChange={(e) => setFormData({ ...formData, insuranceId: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Group Number</label>
+                  <input
+                    type="text"
+                    value={formData.insuranceGroup}
+                    onChange={(e) => setFormData({ ...formData, insuranceGroup: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Billing Notes</h4>
+              <div className="form-group">
+                <textarea
+                  value={formData.billingNotes}
+                  onChange={(e) => setFormData({ ...formData, billingNotes: e.target.value })}
+                  placeholder="Any special billing instructions..."
+                  rows="3"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Medical Tab */}
+          {activeTab === 'medical' && (
+            <div>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Medical Conditions</h4>
+              <div className="form-group">
+                <textarea
+                  value={formData.medicalConditions}
+                  onChange={(e) => setFormData({ ...formData, medicalConditions: e.target.value })}
+                  placeholder="List any medical conditions (diabetes, heart disease, etc.)..."
+                  rows="3"
                 />
               </div>
 
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Medications</h4>
               <div className="form-group">
-                <label>Policy Number</label>
-                <input
-                  type="text"
-                  value={formData.insuranceId}
-                  onChange={(e) => setFormData({ ...formData, insuranceId: e.target.value })}
+                <textarea
+                  value={formData.medications}
+                  onChange={(e) => setFormData({ ...formData, medications: e.target.value })}
+                  placeholder="List current medications and dosages..."
+                  rows="3"
                 />
               </div>
 
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Allergies</h4>
               <div className="form-group">
-                <label>Group Number</label>
-                <input
-                  type="text"
-                  value={formData.insuranceGroup}
-                  onChange={(e) => setFormData({ ...formData, insuranceGroup: e.target.value })}
+                <textarea
+                  value={formData.allergies}
+                  onChange={(e) => setFormData({ ...formData, allergies: e.target.value })}
+                  placeholder="List any allergies (medications, foods, etc.)..."
+                  rows="2"
+                />
+              </div>
+
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Medical Notes</h4>
+              <div className="form-group">
+                <textarea
+                  value={formData.medicalNotes}
+                  onChange={(e) => setFormData({ ...formData, medicalNotes: e.target.value })}
+                  placeholder="Additional medical notes, care instructions, doctor contacts..."
+                  rows="4"
                 />
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Caregiver Preferences */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-              Caregiver Preferences
-            </h4>
-            <div className="form-group">
-              <label>Preferred Caregivers</label>
-              <textarea
-                value={formData.preferredCaregivers}
-                onChange={(e) => setFormData({ ...formData, preferredCaregivers: e.target.value })}
-                placeholder="Any caregiver preferences..."
-                rows="2"
-              ></textarea>
-            </div>
+          {/* Caregivers Tab */}
+          {activeTab === 'caregivers' && (
+            <div>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Preferred Caregivers</h4>
+              <div className="form-group">
+                <textarea
+                  value={formData.preferredCaregivers}
+                  onChange={(e) => setFormData({ ...formData, preferredCaregivers: e.target.value })}
+                  placeholder="List preferred caregivers or qualities the client prefers..."
+                  rows="3"
+                />
+              </div>
 
-            <div className="form-group">
-              <label>Do Not Use Caregivers</label>
-              <textarea
-                value={formData.doNotUseCaregivers}
-                onChange={(e) => setFormData({ ...formData, doNotUseCaregivers: e.target.value })}
-                placeholder="Any caregivers to avoid..."
-                rows="2"
-              ></textarea>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Do Not Assign</h4>
+              <div className="form-group">
+                <textarea
+                  value={formData.doNotUseCaregivers}
+                  onChange={(e) => setFormData({ ...formData, doNotUseCaregivers: e.target.value })}
+                  placeholder="List any caregivers who should NOT be assigned to this client..."
+                  rows="3"
+                />
+              </div>
+
+              <div className="alert alert-info">
+                <strong>Note:</strong> Caregiver pay rates are set by care type in Caregiver Management. 
+                When a caregiver works with this client, they'll be paid based on the client's care type.
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Actions */}
-          <div className="modal-actions">
+          <div className="modal-actions" style={{ marginTop: '1.5rem', borderTop: '1px solid #eee', paddingTop: '1rem' }}>
             <button type="submit" className="btn btn-primary" disabled={loading}>
               {loading ? 'Saving...' : 'Save Changes'}
             </button>
@@ -460,6 +550,7 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
                 className="btn btn-danger"
                 onClick={handleDelete}
                 disabled={loading}
+                style={{ marginLeft: 'auto' }}
               >
                 Delete Client
               </button>
@@ -469,9 +560,9 @@ const EditClientModal = ({ client, isOpen, onClose, onSuccess, token }) => {
                 className="btn btn-danger"
                 onClick={handleDelete}
                 disabled={loading}
-                style={{ background: '#8B0000' }}
+                style={{ marginLeft: 'auto', background: '#8B0000' }}
               >
-                Confirm Delete
+                ⚠️ Confirm Delete
               </button>
             )}
           </div>

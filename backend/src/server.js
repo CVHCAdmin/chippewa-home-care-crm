@@ -351,13 +351,15 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
       serviceType, medicalConditions, allergies, medications, notes,
       insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
       emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-      medicalNotes, doNotUseCaregivers
+      medicalNotes, doNotUseCaregivers,
+      // Billing fields
+      referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes
     } = req.body;
     
     const result = await pool.query(
       `UPDATE clients SET 
-        first_name = $1, 
-        last_name = $2, 
+        first_name = COALESCE($1, first_name), 
+        last_name = COALESCE($2, last_name), 
         date_of_birth = $3,
         phone = $4, 
         email = $5, 
@@ -365,7 +367,7 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
         city = $7,
         state = $8,
         zip = $9,
-        service_type = $10,
+        service_type = COALESCE($10, service_type),
         medical_conditions = $11,
         allergies = $12,
         medications = $13,
@@ -380,13 +382,21 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
         emergency_contact_relationship = $22,
         medical_notes = $23,
         do_not_use_caregivers = $24,
+        referral_source_id = $25,
+        care_type_id = $26,
+        is_private_pay = COALESCE($27, is_private_pay),
+        private_pay_rate = $28,
+        private_pay_rate_type = COALESCE($29, private_pay_rate_type),
+        billing_notes = $30,
         updated_at = NOW()
-       WHERE id = $25 RETURNING *`,
+       WHERE id = $31 RETURNING *`,
       [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
        serviceType, medicalConditions, allergies, medications, notes,
        insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
        emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-       medicalNotes, doNotUseCaregivers, req.params.id]
+       medicalNotes, doNotUseCaregivers, 
+       referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
+       req.params.id]
     );
 
     if (result.rows.length === 0) {
