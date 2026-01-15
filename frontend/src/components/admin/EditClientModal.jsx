@@ -46,11 +46,13 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
         medications: client.medications || '',
         allergies: client.allergies || '',
         medicalNotes: client.medical_notes || '',
+        mobilityAssistanceNeeds: client.mobility_assistance_needs || '',
         // Insurance
         insuranceProvider: client.insurance_provider || '',
         insuranceId: client.insurance_id || '',
         insuranceGroup: client.insurance_group || '',
         // Caregiver Preferences
+        carePreferences: client.care_preferences || '',
         preferredCaregivers: client.preferred_caregivers || '',
         doNotUseCaregivers: client.do_not_use_caregivers || '',
         // Notes
@@ -98,9 +100,11 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
           medications: formData.medications || null,
           allergies: formData.allergies || null,
           medicalNotes: formData.medicalNotes || null,
+          mobilityAssistanceNeeds: formData.mobilityAssistanceNeeds || null,
           insuranceProvider: formData.insuranceProvider || null,
           insuranceId: formData.insuranceId || null,
           insuranceGroup: formData.insuranceGroup || null,
+          carePreferences: formData.carePreferences || null,
           preferredCaregivers: formData.preferredCaregivers || null,
           doNotUseCaregivers: formData.doNotUseCaregivers || null,
           notes: formData.notes || null
@@ -494,6 +498,16 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                 />
               </div>
 
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Mobility & Assistance Needs</h4>
+              <div className="form-group">
+                <textarea
+                  value={formData.mobilityAssistanceNeeds}
+                  onChange={(e) => setFormData({ ...formData, mobilityAssistanceNeeds: e.target.value })}
+                  placeholder="Describe mobility limitations, equipment needs (walker, wheelchair), transfer assistance..."
+                  rows="3"
+                />
+              </div>
+
               <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Medical Notes</h4>
               <div className="form-group">
                 <textarea
@@ -509,6 +523,16 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
           {/* Caregivers Tab */}
           {activeTab === 'caregivers' && (
             <div>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Care Preferences & Routines</h4>
+              <div className="form-group">
+                <textarea
+                  value={formData.carePreferences}
+                  onChange={(e) => setFormData({ ...formData, carePreferences: e.target.value })}
+                  placeholder="Client preferences, daily routines, likes/dislikes, communication style..."
+                  rows="4"
+                />
+              </div>
+
               <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Preferred Caregivers</h4>
               <div className="form-group">
                 <textarea

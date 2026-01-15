@@ -351,7 +351,7 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
       serviceType, medicalConditions, allergies, medications, notes,
       insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
       emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-      medicalNotes, doNotUseCaregivers,
+      medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
       // Billing fields
       referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes
     } = req.body;
@@ -382,19 +382,21 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
         emergency_contact_relationship = $22,
         medical_notes = $23,
         do_not_use_caregivers = $24,
-        referral_source_id = $25,
-        care_type_id = $26,
-        is_private_pay = COALESCE($27, is_private_pay),
-        private_pay_rate = $28,
-        private_pay_rate_type = COALESCE($29, private_pay_rate_type),
-        billing_notes = $30,
+        care_preferences = $25,
+        mobility_assistance_needs = $26,
+        referral_source_id = $27,
+        care_type_id = $28,
+        is_private_pay = COALESCE($29, is_private_pay),
+        private_pay_rate = $30,
+        private_pay_rate_type = COALESCE($31, private_pay_rate_type),
+        billing_notes = $32,
         updated_at = NOW()
-       WHERE id = $31 RETURNING *`,
+       WHERE id = $33 RETURNING *`,
       [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
        serviceType, medicalConditions, allergies, medications, notes,
        insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
        emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-       medicalNotes, doNotUseCaregivers, 
+       medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
        referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
        req.params.id]
     );
@@ -474,6 +476,70 @@ app.patch('/api/clients/:id/onboarding/:stepId', verifyToken, async (req, res) =
 
     await auditLog(req.user.id, 'UPDATE', 'client_onboarding', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- CAREGIVER CLIENT VIEW (Limited info for caregivers) ----
+app.get('/api/clients/:id/caregiver-view', verifyToken, async (req, res) => {
+  try {
+    // Return only care-relevant info, NOT billing/admin stuff
+    const result = await pool.query(
+      `SELECT 
+        id, first_name, last_name, date_of_birth, phone, email,
+        address, city, state, zip,
+        emergency_contact_name, emergency_contact_phone, emergency_contact_relationship,
+        medical_conditions, medications, allergies, medical_notes,
+        care_preferences, mobility_assistance_needs,
+        preferred_caregivers, notes
+       FROM clients WHERE id = $1`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---- CLIENT VISIT NOTES ----
+app.get('/api/clients/:id/visit-notes', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT vn.*, u.first_name || ' ' || u.last_name as caregiver_name
+       FROM client_visit_notes vn
+       LEFT JOIN users u ON vn.caregiver_id = u.id
+       WHERE vn.client_id = $1
+       ORDER BY vn.created_at DESC
+       LIMIT 50`,
+      [req.params.id]
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/clients/:id/visit-notes', verifyToken, async (req, res) => {
+  try {
+    const { note } = req.body;
+    const noteId = uuidv4();
+
+    const result = await pool.query(
+      `INSERT INTO client_visit_notes (id, client_id, caregiver_id, note)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [noteId, req.params.id, req.user.id, note]
+    );
+
+    await auditLog(req.user.id, 'CREATE', 'client_visit_notes', noteId, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
