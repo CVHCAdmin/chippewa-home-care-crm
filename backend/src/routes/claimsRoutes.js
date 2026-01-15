@@ -1,10 +1,10 @@
-// routes/claimsRoutes.js
+// src/routes/claimsRoutes.js
 // Claims Management: Submit, track, export 837P
 
 const express = require('express');
 const router = express.Router();
-const db = require('../../db');
-const auth = require('../../middleware/auth');
+const db = require('../db');
+const { verifyToken: auth } = require('../middleware/auth');
 
 // Get all claims
 router.get('/', auth, async (req, res) => {
