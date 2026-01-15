@@ -719,6 +719,39 @@ body {
     display: block;
 }
 
+/* Utility Classes */
+.text-muted {
+    color: #6B7280;
+    font-size: 0.9rem;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.timer-display {
+    font-size: 3rem;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+    color: var(--color-teal);
+    text-align: center;
+    margin: 1.5rem 0;
+}
+
+/* Calendar Navigation */
+.calendar-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding: 0 0.5rem;
+}
+
+.calendar-nav h3 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     /* Sidebar: hidden off-screen by default on mobile */
@@ -805,6 +838,16 @@ body {
     }
 
     /* Calendar on mobile */
+    .calendar-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .calendar-header,
+    .calendar-grid {
+        min-width: 500px;
+    }
+
     .calendar-grid {
         min-height: 300px;
     }
@@ -821,6 +864,18 @@ body {
     .calendar-day-name {
         padding: 0.5rem;
         font-size: 0.8rem;
+    }
+
+    .calendar-nav {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .calendar-nav h3 {
+        width: 100%;
+        text-align: center;
+        order: -1;
+        margin-bottom: 0.5rem;
     }
 
     /* Modals full width on mobile */
