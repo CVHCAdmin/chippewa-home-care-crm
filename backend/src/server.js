@@ -449,40 +449,6 @@ app.get('/api/referral-sources', verifyToken, async (req, res) => {
   }
 });
 
-// ---- CAREGIVER SCHEDULES ----
-app.post('/api/schedules', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { caregiverId, dayOfWeek, date, startTime, endTime, maxHours } = req.body;
-    const scheduleId = uuidv4();
-
-    const result = await pool.query(
-      `INSERT INTO caregiver_schedules (id, caregiver_id, day_of_week, date, start_time, end_time, max_hours_per_week)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [scheduleId, caregiverId, dayOfWeek, date, startTime, endTime, maxHours]
-    );
-
-    await auditLog(req.user.id, 'CREATE', 'caregiver_schedules', scheduleId, null, result.rows[0]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/schedules/:caregiverId', verifyToken, async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT * FROM caregiver_schedules 
-       WHERE caregiver_id = $1 
-       ORDER BY date DESC, start_time`,
-      [req.params.caregiverId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // ---- INVOICING ----
 app.post('/api/invoices/generate', verifyToken, requireAdmin, async (req, res) => {
   try {
