@@ -1,20 +1,15 @@
 // src/middleware/auditLogger.js
-const AuditLog = require('../models/AuditLog');
-
-/**
- * Audit Logger Middleware
- * Logs all non-GET requests to the audit_logs collection.
- */
+// PostgreSQL-based audit logging (no Mongoose)
 
 const auditLogger = (pool) => {
   return async (req, res, next) => {
-    // Skip audit logging for endpoints that don't fit the schema
+    // Skip audit logging for these paths
     const skipPaths = [
-      '/api/reports',      // Read-only analytics
-      '/api/auth',         // Authentication has different structure
-      '/api/login',        // Login has different structure
-      '/api/logout',       // Logout has different structure
-      '/api/verify'        // Token verification
+      '/api/reports',
+      '/api/auth',
+      '/api/login',
+      '/api/logout',
+      '/api/verify'
     ];
     
     if (skipPaths.some(path => req.path.startsWith(path))) {
@@ -43,49 +38,14 @@ const auditLogger = (pool) => {
     // Log after response is sent
     res.on('finish', async () => {
       try {
-        // Only log non-GET requests and successful operations
-        if (req.method !== 'GET' && res.statusCode < 400) {
+        // Only log non-GET requests
+        if (req.method !== 'GET') {
           const auditData = extractAuditData(req, res, requestBody, responseBody);
-          try {
-            await AuditLog.createAuditLog(auditData);
-          } catch (auditError) {
-            // Silently skip audit logs that don't match schema
-            console.debug('Audit skipped (validation):', auditError.message);
-          }
-        }
-        // Log failed operations too (for security)
-        else if (req.method !== 'GET' && res.statusCode >= 400) {
-          const auditData = extractAuditData(req, res, requestBody, responseBody);
-          auditData.flags = ['access_denied'];
-          try {
-            await AuditLog.createAuditLog(auditData);
-          } catch (auditError) {
-            console.debug('Audit skipped (validation):', auditError.message);
-          }
-        }
-        // Log failed logins
-        else if (req.path.includes('/login') && res.statusCode >= 400) {
-          try {
-            await AuditLog.createAuditLog({
-              timestamp: new Date(),
-              user_id: null,
-              user_name: req.body?.email || 'Unknown',
-              action: 'failed_login',
-              entity_type: 'user',
-              entity_id: 'login-attempt',
-              ip_address: extractIP(req),
-              user_agent: req.get('user-agent'),
-              flags: ['multiple_failed_login'],
-              status_code: res.statusCode,
-              is_sensitive: true
-            });
-          } catch (auditError) {
-            console.debug('Audit skipped (validation):', auditError.message);
-          }
+          await logToPostgres(pool, auditData);
         }
       } catch (error) {
-        console.error('Error logging audit:', error);
-        // Don't throw - audit logging shouldn't break the app
+        // Don't let audit logging break the app
+        console.debug('Audit log skipped:', error.message);
       }
     });
 
@@ -94,32 +54,72 @@ const auditLogger = (pool) => {
 };
 
 /**
+ * Log audit entry to PostgreSQL
+ */
+async function logToPostgres(pool, data) {
+  try {
+    // Validate UUID format for user_id
+    const userId = isValidUUID(data.user_id) ? data.user_id : null;
+    const entityId = isValidUUID(data.entity_id) ? data.entity_id : null;
+
+    await pool.query(`
+      INSERT INTO audit_logs (
+        user_id, action, table_name, record_id, 
+        old_data, new_data, ip_address, timestamp
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
+      userId,
+      data.action,
+      data.entity_type,
+      entityId,
+      JSON.stringify(data.old_data || null),
+      JSON.stringify(data.new_data || null),
+      data.ip_address
+    ]);
+  } catch (error) {
+    // Silently fail - audit logging shouldn't break the app
+    console.debug('Audit insert failed:', error.message);
+  }
+}
+
+/**
+ * Check if string is valid UUID
+ */
+function isValidUUID(str) {
+  if (!str || typeof str !== 'string') return false;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+}
+
+/**
  * Extract audit data from request/response
  */
 function extractAuditData(req, res, requestBody, responseBody) {
   const entityInfo = extractEntityInfo(req);
-  const changes = extractChanges(req, responseBody);
-  const flags = AuditLog.checkSuspiciousActivity(req);
+  
+  // Try to parse response to get created/updated entity ID
+  let newData = null;
+  let recordId = entityInfo.entityId;
+  
+  try {
+    if (responseBody) {
+      const parsed = JSON.parse(responseBody);
+      if (parsed.id) recordId = parsed.id;
+      newData = parsed;
+    }
+  } catch (e) {
+    // Response wasn't JSON
+  }
 
   return {
-    timestamp: new Date(),
-    user_id: req.user?.id || req.user?._id || null,
-    user_name: req.user?.name || req.user?.email || 'System',
+    user_id: req.user?.id || null,
     action: mapMethodToAction(req.method),
     entity_type: entityInfo.entityType,
-    entity_id: entityInfo.entityId,
-    changes: changes,
-    change_description: generateChangeDescription(changes),
+    entity_id: recordId,
+    old_data: null,
+    new_data: req.method !== 'DELETE' ? req.body : null,
     ip_address: extractIP(req),
-    user_agent: req.get('user-agent'),
-    flags: flags,
-    status_code: res.statusCode,
-    is_sensitive: isSensitiveOperation(req, entityInfo),
-    metadata: {
-      path: req.path,
-      method: req.method,
-      query: req.query
-    }
+    status_code: res.statusCode
   };
 }
 
@@ -128,12 +128,12 @@ function extractAuditData(req, res, requestBody, responseBody) {
  */
 function mapMethodToAction(method) {
   const map = {
-    'POST': 'create',
-    'PUT': 'update',
-    'PATCH': 'update',
-    'DELETE': 'delete'
+    'POST': 'CREATE',
+    'PUT': 'UPDATE',
+    'PATCH': 'UPDATE',
+    'DELETE': 'DELETE'
   };
-  return map[method] || 'other';
+  return map[method] || 'OTHER';
 }
 
 /**
@@ -144,96 +144,19 @@ function extractEntityInfo(req) {
   const pathParts = path.split('/').filter(p => p && p !== 'api');
 
   let entityType = 'unknown';
-  let entityId = 'unknown';
+  let entityId = null;
 
-  // Extract entity type from path
   if (pathParts.length > 0) {
-    const resource = pathParts[0];
+    // Entity type is first path segment
+    entityType = pathParts[0];
     
-    // Map plural to singular
-    if (resource.endsWith('s')) {
-      entityType = resource.slice(0, -1);
-    } else {
-      entityType = resource;
-    }
-    
-    // Extract entity ID
-    if (pathParts.length > 1) {
+    // Entity ID is second segment if it looks like a UUID
+    if (pathParts.length > 1 && isValidUUID(pathParts[1])) {
       entityId = pathParts[1];
     }
   }
 
-  // Normalize entity type
-  const entityTypeMap = {
-    'client': 'client',
-    'caregiver': 'caregiver',
-    'schedule': 'schedule',
-    'invoice': 'invoice',
-    'care-plan': 'care_plan',
-    'carePlan': 'care_plan',
-    'incident': 'incident',
-    'user': 'user',
-    'payroll': 'payroll',
-    'audit-log': 'audit_log'
-  };
-
-  entityType = entityTypeMap[entityType] || entityType;
-
   return { entityType, entityId };
-}
-
-/**
- * Extract what changed in the request
- */
-function extractChanges(req, responseBody) {
-  const changes = {};
-
-  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-    // For create/update, log the fields that were sent
-    if (req.body && typeof req.body === 'object') {
-      for (const [key, value] of Object.entries(req.body)) {
-        // Skip sensitive fields and passwords
-        if (!['password', 'token', 'secret', 'key'].some(s => key.toLowerCase().includes(s))) {
-          changes[key] = {
-            old_value: req.method === 'POST' ? null : 'existing',
-            new_value: JSON.stringify(value).substring(0, 100) // Limit string size
-          };
-        }
-      }
-    }
-  }
-
-  return changes;
-}
-
-/**
- * Generate human-readable description of changes
- */
-function generateChangeDescription(changes) {
-  if (Object.keys(changes).length === 0) {
-    return null;
-  }
-
-  const changedFields = Object.keys(changes);
-  const fieldList = changedFields.join(', ');
-  
-  return `Modified fields: ${fieldList}`;
-}
-
-/**
- * Check if operation is sensitive
- */
-function isSensitiveOperation(req, entityInfo) {
-  const sensitiveEntities = ['user', 'caregiver', 'client'];
-  const sensitiveActions = ['delete', 'role', 'permission'];
-  
-  const isSensitiveEntity = sensitiveEntities.includes(entityInfo.entityType);
-  const isSensitiveAction = sensitiveActions.some(action => 
-    req.path.toLowerCase().includes(action) || 
-    Object.keys(req.body || {}).some(key => key.toLowerCase().includes(action))
-  );
-  
-  return isSensitiveEntity || isSensitiveAction;
 }
 
 /**
