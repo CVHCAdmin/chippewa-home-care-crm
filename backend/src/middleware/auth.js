@@ -25,7 +25,9 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-module.exports = {
-  verifyToken,
-  requireAdmin
-};
+// Default export is verifyToken (routes use: const auth = require('./auth'))
+module.exports = verifyToken;
+
+// Named exports for destructuring (const { verifyToken, requireAdmin } = require('./auth'))
+module.exports.verifyToken = verifyToken;
+module.exports.requireAdmin = requireAdmin;
