@@ -26,6 +26,12 @@ const DashboardOverview = ({ summary, token }) => {
     }
   };
 
+  // Helper to safely format currency (handles strings from PostgreSQL)
+  const formatCurrency = (value) => {
+    const num = parseFloat(value) || 0;
+    return num.toFixed(2);
+  };
+
   return (
     <>
       {/* Key Metrics */}
@@ -41,7 +47,7 @@ const DashboardOverview = ({ summary, token }) => {
         <div className="stat-card">
           <h3>Pending Invoices</h3>
           <div className="value value-danger">
-            ${summary?.pendingInvoices?.amount?.toFixed(2) || '0.00'}
+            ${formatCurrency(summary?.pendingInvoices?.amount)}
           </div>
           <p className="stat-subtext">
             {summary?.pendingInvoices?.count || 0} invoices
@@ -50,7 +56,7 @@ const DashboardOverview = ({ summary, token }) => {
         <div className="stat-card">
           <h3>This Month Revenue</h3>
           <div className="value value-success">
-            ${summary?.thisMonthRevenue?.toFixed(2) || '0.00'}
+            ${formatCurrency(summary?.thisMonthRevenue)}
           </div>
         </div>
       </div>
@@ -81,7 +87,7 @@ const DashboardOverview = ({ summary, token }) => {
                     </span>
                   </td>
                   <td>{ref.referral_count || 0}</td>
-                  <td>${(ref.total_revenue || 0).toFixed(2)}</td>
+                  <td>${formatCurrency(ref.total_revenue)}</td>
                 </tr>
               ))}
             </tbody>
@@ -114,7 +120,7 @@ const DashboardOverview = ({ summary, token }) => {
                   <td>
                     {cg.avg_satisfaction ? (
                       <>
-                        <span className="star-icon">★</span> {cg.avg_satisfaction.toFixed(1)}
+                        <span className="star-icon">★</span> {parseFloat(cg.avg_satisfaction).toFixed(1)}
                       </>
                     ) : (
                       'N/A'
