@@ -4581,7 +4581,248 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });
 });
+// ============ SMART SCHEDULING ROUTES ============
 
+// Helper to get week start (Sunday)
+function getWeekStart(date) {
+  const d = new Date(date);
+  d.setDate(d.getDate() - d.getDay());
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// GET /api/scheduling/suggest-caregivers - Smart caregiver suggestions
+app.get('/api/scheduling/suggest-caregivers', verifyToken, async (req, res) => {
+  try {
+    const { clientId, date, startTime, endTime } = req.query;
+    
+    if (!clientId) {
+      return res.status(400).json({ error: 'Client ID required' });
+    }
+
+    const client = await db.query(
+      `SELECT id, first_name, last_name, care_type_id FROM clients WHERE id = $1`,
+      [clientId]
+    );
+    
+    if (client.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const shiftHours = startTime && endTime ? 
+      (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60) : 4;
+
+    // Get caregivers with availability
+    const caregivers = await db.query(`
+      SELECT u.id, u.first_name, u.last_name, u.phone, u.default_pay_rate,
+             ca.status as availability_status, ca.max_hours_per_week
+      FROM users u
+      LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      ORDER BY u.first_name
+    `);
+
+    // Get weekly hours
+    const weekStart = date ? getWeekStart(new Date(date)) : getWeekStart(new Date());
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+
+    const hoursResult = await db.query(`
+      SELECT caregiver_id, SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time)) / 3600) as weekly_hours
+      FROM schedules
+      WHERE is_active = true AND (date >= $1 AND date <= $2 OR day_of_week IS NOT NULL)
+      GROUP BY caregiver_id
+    `, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
+
+    const hoursMap = {};
+    hoursResult.rows.forEach(r => hoursMap[r.caregiver_id] = parseFloat(r.weekly_hours) || 0);
+
+    // Get visit history with this client
+    const historyResult = await db.query(`
+      SELECT caregiver_id, COUNT(*) as visit_count
+      FROM time_entries WHERE client_id = $1 AND is_complete = true
+      GROUP BY caregiver_id
+    `, [clientId]);
+
+    const historyMap = {};
+    historyResult.rows.forEach(r => historyMap[r.caregiver_id] = parseInt(r.visit_count) || 0);
+
+    // Check conflicts
+    let conflictingCaregivers = [];
+    if (date && startTime && endTime) {
+      const dayOfWeek = new Date(date).getDay();
+      const conflicts = await db.query(`
+        SELECT DISTINCT caregiver_id FROM schedules
+        WHERE is_active = true AND (date = $1 OR day_of_week = $4)
+          AND NOT (end_time <= $2 OR start_time >= $3)
+      `, [date, startTime, endTime, dayOfWeek]);
+      conflictingCaregivers = conflicts.rows.map(r => r.caregiver_id);
+    }
+
+    // Score caregivers
+    const ranked = caregivers.rows.map(cg => {
+      const weeklyHours = hoursMap[cg.id] || 0;
+      const maxHours = cg.max_hours_per_week || 40;
+      const visitCount = historyMap[cg.id] || 0;
+      const hasConflict = conflictingCaregivers.includes(cg.id);
+      const isAvailable = cg.availability_status !== 'unavailable';
+      const wouldExceedHours = (weeklyHours + shiftHours) > maxHours;
+      const approachingOvertime = (weeklyHours + shiftHours) > 40;
+
+      let score = 100;
+      score += Math.min(visitCount * 3, 30);
+      if (!isAvailable) score -= 100;
+      if (hasConflict) score -= 100;
+      score -= (weeklyHours / maxHours) * 20;
+      if (wouldExceedHours) score -= 50;
+      if (approachingOvertime) score -= 10;
+
+      const reasons = [];
+      if (visitCount > 5) reasons.push(`Familiar (${visitCount} visits)`);
+      else if (visitCount > 0) reasons.push(`${visitCount} prior visits`);
+      if (hasConflict) reasons.push('⚠️ Conflict');
+      if (!isAvailable) reasons.push('⚠️ Unavailable');
+      if (wouldExceedHours) reasons.push('⚠️ Exceeds max hours');
+      if (approachingOvertime) reasons.push(`⚠️ ${weeklyHours.toFixed(0)}h this week`);
+      if (weeklyHours < 20) reasons.push('Has availability');
+
+      return {
+        ...cg, weeklyHours: weeklyHours.toFixed(1), maxHours, visitCount,
+        hasConflict, isAvailable, wouldExceedHours, approachingOvertime,
+        score: Math.round(score), reasons
+      };
+    });
+
+    ranked.sort((a, b) => b.score - a.score);
+    res.json({ client: client.rows[0], suggestions: ranked, shiftHours });
+  } catch (error) {
+    console.error('Suggest caregivers error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/scheduling/check-conflicts
+app.post('/api/scheduling/check-conflicts', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, date, startTime, endTime } = req.body;
+    if (!caregiverId || !startTime || !endTime) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const dayOfWeek = date ? new Date(date).getDay() : null;
+    const result = await db.query(`
+      SELECT s.*, c.first_name as client_first_name, c.last_name as client_last_name
+      FROM schedules s LEFT JOIN clients c ON s.client_id = c.id
+      WHERE s.caregiver_id = $1 AND s.is_active = true
+        AND NOT (s.end_time <= $2 OR s.start_time >= $3)
+        AND (s.date = $4 OR s.day_of_week = $5)
+    `, [caregiverId, startTime, endTime, date, dayOfWeek]);
+
+    res.json({
+      hasConflict: result.rows.length > 0,
+      conflicts: result.rows.map(s => ({
+        id: s.id, clientName: `${s.client_first_name} ${s.client_last_name}`,
+        startTime: s.start_time, endTime: s.end_time, isRecurring: s.day_of_week !== null
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/scheduling/week-view
+app.get('/api/scheduling/week-view', verifyToken, async (req, res) => {
+  try {
+    const { weekOf } = req.query;
+    const weekStart = weekOf ? getWeekStart(new Date(weekOf)) : getWeekStart(new Date());
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+
+    const caregivers = await db.query(`
+      SELECT id, first_name, last_name FROM users 
+      WHERE role = 'caregiver' AND is_active = true ORDER BY first_name
+    `);
+
+    const schedules = await db.query(`
+      SELECT s.*, c.first_name as client_first_name, c.last_name as client_last_name
+      FROM schedules s LEFT JOIN clients c ON s.client_id = c.id
+      WHERE s.is_active = true AND (s.date >= $1 AND s.date <= $2 OR s.day_of_week IS NOT NULL)
+      ORDER BY s.start_time
+    `, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
+
+    const weekData = {};
+    caregivers.rows.forEach(cg => {
+      weekData[cg.id] = { caregiver: cg, days: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] } };
+    });
+
+    schedules.rows.forEach(s => {
+      if (!weekData[s.caregiver_id]) return;
+      if (s.date) {
+        const dow = new Date(s.date).getDay();
+        weekData[s.caregiver_id].days[dow].push({ ...s, isRecurring: false });
+      } else if (s.day_of_week !== null) {
+        weekData[s.caregiver_id].days[s.day_of_week].push({ ...s, isRecurring: true });
+      }
+    });
+
+    res.json({
+      weekStart: weekStart.toISOString().split('T')[0],
+      weekEnd: weekEnd.toISOString().split('T')[0],
+      caregivers: Object.values(weekData)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/scheduling/bulk-create - Recurring templates
+app.post('/api/scheduling/bulk-create', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { caregiverId, clientId, template, weeks, startDate, notes } = req.body;
+    if (!caregiverId || !clientId || !template || template.length === 0) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const numWeeks = Math.min(Math.max(parseInt(weeks) || 4, 1), 12);
+    const start = startDate ? new Date(startDate) : new Date();
+    start.setDate(start.getDate() - start.getDay());
+
+    const created = [];
+    const conflicts = [];
+
+    for (let week = 0; week < numWeeks; week++) {
+      for (const slot of template) {
+        const slotDate = new Date(start);
+        slotDate.setDate(slotDate.getDate() + (week * 7) + slot.dayOfWeek);
+        if (slotDate < new Date()) continue;
+
+        const dateStr = slotDate.toISOString().split('T')[0];
+
+        const conflict = await db.query(`
+          SELECT id FROM schedules WHERE caregiver_id = $1 AND is_active = true
+            AND date = $2 AND NOT (end_time <= $3 OR start_time >= $4)
+        `, [caregiverId, dateStr, slot.startTime, slot.endTime]);
+
+        if (conflict.rows.length > 0) {
+          conflicts.push({ date: dateStr, startTime: slot.startTime });
+          continue;
+        }
+
+        const scheduleId = uuidv4();
+        const result = await db.query(`
+          INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, date, start_time, end_time, notes)
+          VALUES ($1, $2, $3, 'one-time', $4, $5, $6, $7) RETURNING *
+        `, [scheduleId, caregiverId, clientId, dateStr, slot.startTime, slot.endTime, notes || null]);
+
+        created.push(result.rows[0]);
+      }
+    }
+
+    res.json({ success: true, created: created.length, skippedConflicts: conflicts.length, conflicts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 // Start server
 app.listen(port, () => {
   console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
