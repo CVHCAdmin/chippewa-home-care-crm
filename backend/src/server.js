@@ -7,7 +7,8 @@ const rateLimit = require('express-rate-limit');
 const auditLogger = require('./middleware/auditLogger');
 const authorizeAdmin = require('./middleware/authorizeAdmin');
 const dotenv = require('dotenv');
-const { Pool } = require('pg');
+const db = require('./db');
+const claimsRoutes = require('./routes/claimsRoutes');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
@@ -40,19 +41,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // ============ DATABASE CONNECTION ============
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-app.use(auditLogger(pool));
-// Test connection
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('❌ Database connection failed:', err);
-  } else {
-    console.log('✅ Database connected:', res.rows[0].now);
-  }
-});
+app.use(auditLogger(db.pool));
 
 // ============ HIPAA AUDIT LOGGING ============
 const auditLog = async (userId, action, tableName, recordId, oldData, newData) => {
@@ -63,7 +52,7 @@ const auditLog = async (userId, action, tableName, recordId, oldData, newData) =
       return;
     }
     
-    await pool.query(
+    await db.query(
       `INSERT INTO audit_logs (user_id, action, table_name, record_id, old_data, new_data, timestamp)
        VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
       [userId || '00000000-0000-0000-0000-000000000000', action, tableName, recordId, JSON.stringify(oldData), JSON.stringify(newData)]
@@ -98,13 +87,14 @@ const requireAdmin = (req, res, next) => {
 };
 
 // ============ ROUTES ============
+app.use('/api/claims', claimsRoutes);
 
 // ---- AUTHENTICATION ROUTES ----
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
 
     if (!user) {
@@ -145,9 +135,9 @@ app.post('/api/auth/register-caregiver', verifyToken, requireAdmin, async (req, 
     const userId = uuidv4();
 
     // Set current user for audit trigger
-    await pool.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
+    await db.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role, default_pay_rate)
        VALUES ($1, $2, $3, $4, $5, $6, 'caregiver', $7)
        RETURNING id, email, first_name, last_name, role, default_pay_rate`,
@@ -172,9 +162,9 @@ app.post('/api/auth/register-admin', verifyToken, requireAdmin, async (req, res)
     const userId = uuidv4();
 
     // Set current user for audit trigger
-    await pool.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
+    await db.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role)
        VALUES ($1, $2, $3, $4, $5, $6, 'admin')
        RETURNING id, email, first_name, last_name, role`,
@@ -194,7 +184,7 @@ app.post('/api/auth/register-admin', verifyToken, requireAdmin, async (req, res)
 // ---- USER MANAGEMENT ----
 app.get('/api/users/caregivers', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate
        FROM users WHERE role = 'caregiver' ORDER BY first_name`
     );
@@ -207,7 +197,7 @@ app.get('/api/users/caregivers', verifyToken, requireAdmin, async (req, res) => 
 // Also support /api/caregivers for backwards compatibility
 app.get('/api/caregivers', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate
        FROM users WHERE role = 'caregiver' AND is_active = true ORDER BY first_name`
     );
@@ -222,7 +212,7 @@ app.put('/api/caregivers/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { firstName, lastName, phone, payRate } = req.body;
     
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE users SET 
         first_name = COALESCE($1, first_name),
         last_name = COALESCE($2, last_name),
@@ -248,7 +238,7 @@ app.put('/api/caregivers/:id', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/users/admins - Get all admin users
 app.get('/api/users/admins', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT id, email, first_name, last_name, phone, hire_date, is_active, role
        FROM users WHERE role = 'admin' ORDER BY first_name`
     );
@@ -261,7 +251,7 @@ app.get('/api/users/admins', verifyToken, requireAdmin, async (req, res) => {
 app.post('/api/users/convert-to-admin', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { userId } = req.body;
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE users SET role = 'admin', updated_at = NOW() WHERE id = $1 RETURNING *`,
       [userId]
     );
@@ -287,7 +277,7 @@ app.post('/api/clients', verifyToken, async (req, res) => {
     } = req.body;
     const clientId = uuidv4();
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO clients (
         id, first_name, last_name, date_of_birth, phone, email, address, city, state, zip, 
         referred_by, service_type, start_date, referral_source_id, care_type_id,
@@ -301,7 +291,7 @@ app.post('/api/clients', verifyToken, async (req, res) => {
     );
 
     // Create onboarding checklist
-    await pool.query(
+    await db.query(
       `INSERT INTO client_onboarding (client_id) VALUES ($1)`,
       [clientId]
     );
@@ -315,7 +305,7 @@ app.post('/api/clients', verifyToken, async (req, res) => {
 
 app.get('/api/clients', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT c.*, rs.name as referral_source_name, ct.name as care_type_name
        FROM clients c
        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
@@ -331,9 +321,9 @@ app.get('/api/clients', verifyToken, async (req, res) => {
 
 app.get('/api/clients/:id', verifyToken, async (req, res) => {
   try {
-    const clientResult = await pool.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
-    const emergencyResult = await pool.query('SELECT * FROM client_emergency_contacts WHERE client_id = $1', [req.params.id]);
-    const onboardingResult = await pool.query('SELECT * FROM client_onboarding WHERE client_id = $1', [req.params.id]);
+    const clientResult = await db.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+    const emergencyResult = await db.query('SELECT * FROM client_emergency_contacts WHERE client_id = $1', [req.params.id]);
+    const onboardingResult = await db.query('SELECT * FROM client_onboarding WHERE client_id = $1', [req.params.id]);
 
     res.json({
       client: clientResult.rows[0],
@@ -356,7 +346,7 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
       referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes
     } = req.body;
     
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE clients SET 
         first_name = COALESCE($1, first_name), 
         last_name = COALESCE($2, last_name), 
@@ -415,18 +405,18 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
 // ---- CLIENT ONBOARDING ----
 app.get('/api/clients/:id/onboarding', verifyToken, async (req, res) => {
   try {
-    let result = await pool.query(
+    let result = await db.query(
       `SELECT * FROM client_onboarding WHERE client_id = $1`,
       [req.params.id]
     );
 
     if (result.rows.length === 0) {
       // Create one if it doesn't exist
-      await pool.query(
+      await db.query(
         `INSERT INTO client_onboarding (client_id) VALUES ($1)`,
         [req.params.id]
       );
-      result = await pool.query(
+      result = await db.query(
         `SELECT * FROM client_onboarding WHERE client_id = $1`,
         [req.params.id]
       );
@@ -468,7 +458,7 @@ app.patch('/api/clients/:id/onboarding/:stepId', verifyToken, async (req, res) =
       RETURNING *
     `;
 
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Onboarding record not found' });
@@ -485,7 +475,7 @@ app.patch('/api/clients/:id/onboarding/:stepId', verifyToken, async (req, res) =
 app.get('/api/clients/:id/caregiver-view', verifyToken, async (req, res) => {
   try {
     // Return only care-relevant info, NOT billing/admin stuff
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         id, first_name, last_name, date_of_birth, phone, email,
         address, city, state, zip,
@@ -510,7 +500,7 @@ app.get('/api/clients/:id/caregiver-view', verifyToken, async (req, res) => {
 // ---- CLIENT VISIT NOTES ----
 app.get('/api/clients/:id/visit-notes', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT vn.*, u.first_name || ' ' || u.last_name as caregiver_name
        FROM client_visit_notes vn
        LEFT JOIN users u ON vn.caregiver_id = u.id
@@ -531,7 +521,7 @@ app.post('/api/clients/:id/visit-notes', verifyToken, async (req, res) => {
     const { note } = req.body;
     const noteId = uuidv4();
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO client_visit_notes (id, client_id, caregiver_id, note)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
@@ -551,7 +541,7 @@ app.post('/api/referral-sources', verifyToken, requireAdmin, async (req, res) =>
     const { name, type, contactName, email, phone, address, city, state, zip } = req.body;
     const sourceId = uuidv4();
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO referral_sources (id, name, type, contact_name, email, phone, address, city, state, zip)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
@@ -567,7 +557,7 @@ app.post('/api/referral-sources', verifyToken, requireAdmin, async (req, res) =>
 
 app.get('/api/referral-sources', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT rs.*, COUNT(c.id) as referral_count 
        FROM referral_sources rs
        LEFT JOIN clients c ON rs.id = c.referred_by AND c.is_active = true
@@ -589,7 +579,7 @@ app.post('/api/invoices/generate', verifyToken, requireAdmin, async (req, res) =
     const invoiceNumber = `INV-${Date.now()}`;
 
     // Get time entries for billing period
-    const entriesResult = await pool.query(
+    const entriesResult = await db.query(
       `SELECT te.*, ca.pay_rate FROM time_entries te
        LEFT JOIN client_assignments ca ON te.assignment_id = ca.id
        WHERE te.client_id = $1 AND te.start_time::date >= $2 AND te.end_time::date <= $3 AND te.is_complete = true`,
@@ -612,7 +602,7 @@ app.post('/api/invoices/generate', verifyToken, requireAdmin, async (req, res) =
     }
 
     // Create invoice
-    const invoiceResult = await pool.query(
+    const invoiceResult = await db.query(
       `INSERT INTO invoices (id, invoice_number, client_id, billing_period_start, billing_period_end, subtotal, total, payment_due_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
@@ -621,7 +611,7 @@ app.post('/api/invoices/generate', verifyToken, requireAdmin, async (req, res) =
 
     // Create line items
     for (const item of lineItems) {
-      await pool.query(
+      await db.query(
         `INSERT INTO invoice_line_items (invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [invoiceId, item.timeEntryId, item.caregiverId, 'Care Services', item.hours, item.rate, item.amount]
@@ -637,7 +627,7 @@ app.post('/api/invoices/generate', verifyToken, requireAdmin, async (req, res) =
 
 app.get('/api/invoices', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT i.*, c.first_name, c.last_name, rs.name as referral_source_name
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
@@ -653,7 +643,7 @@ app.get('/api/invoices', verifyToken, async (req, res) => {
 app.put('/api/invoices/:id/payment-status', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { status, paymentDate } = req.body;
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE invoices SET payment_status = $1, payment_date = $2, updated_at = NOW()
        WHERE id = $3 RETURNING *`,
       [status, paymentDate, req.params.id]
@@ -673,10 +663,10 @@ app.put('/api/invoices/:id/payment-status', verifyToken, requireAdmin, async (re
 // ---- DASHBOARD ANALYTICS ----
 app.get('/api/dashboard/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const totalClientsResult = await pool.query('SELECT COUNT(*) as count FROM clients WHERE is_active = true');
-    const activeCaregiversResult = await pool.query('SELECT COUNT(*) as count FROM users WHERE role = \'caregiver\' AND is_active = true');
-    const pendingInvoicesResult = await pool.query('SELECT COUNT(*) as count, SUM(total) as amount FROM invoices WHERE payment_status = \'pending\'');
-    const thisMonthRevenueResult = await pool.query(
+    const totalClientsResult = await db.query('SELECT COUNT(*) as count FROM clients WHERE is_active = true');
+    const activeCaregiversResult = await db.query('SELECT COUNT(*) as count FROM users WHERE role = \'caregiver\' AND is_active = true');
+    const pendingInvoicesResult = await db.query('SELECT COUNT(*) as count, SUM(total) as amount FROM invoices WHERE payment_status = \'pending\'');
+    const thisMonthRevenueResult = await db.query(
       `SELECT SUM(total) as amount FROM invoices 
        WHERE billing_period_start >= date_trunc('month', CURRENT_DATE)
        AND payment_status = 'paid'`
@@ -698,7 +688,7 @@ app.get('/api/dashboard/summary', verifyToken, requireAdmin, async (req, res) =>
 
 app.get('/api/dashboard/referrals', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT rs.name, rs.type, COUNT(c.id) as referral_count,
               SUM(CASE WHEN i.payment_status = 'paid' THEN i.total ELSE 0 END) as total_revenue
        FROM referral_sources rs
@@ -716,7 +706,7 @@ app.get('/api/dashboard/referrals', verifyToken, requireAdmin, async (req, res) 
 
 app.get('/api/dashboard/caregiver-hours', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT u.id, u.first_name, u.last_name,
               COUNT(te.id) as shifts,
               SUM(te.duration_minutes)::integer / 60 as total_hours,
@@ -737,7 +727,7 @@ app.get('/api/dashboard/caregiver-hours', verifyToken, requireAdmin, async (req,
 // ---- EXPORTS ----
 app.get('/api/export/invoices-csv', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT i.invoice_number, c.first_name, c.last_name, i.billing_period_start, 
               i.billing_period_end, i.total, i.payment_status
        FROM invoices i
@@ -763,7 +753,7 @@ app.get('/api/export/invoices-csv', verifyToken, requireAdmin, async (req, res) 
 // GET /api/time-entries/active - Get caregiver's active (non-clocked-out) session
 app.get('/api/time-entries/active', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te
        JOIN clients c ON te.client_id = c.id
@@ -794,7 +784,7 @@ app.get('/api/time-entries/active', verifyToken, async (req, res) => {
 app.get('/api/time-entries/recent', verifyToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te
        JOIN clients c ON te.client_id = c.id
@@ -827,7 +817,7 @@ app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
     const { clientId, latitude, longitude } = req.body;
     const entryId = uuidv4();
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO time_entries (id, caregiver_id, client_id, clock_in, start_location)
        VALUES ($1, $2, $3, NOW(), $4)
        RETURNING *`,
@@ -853,7 +843,7 @@ app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
     const { latitude, longitude, notes } = req.body;
 
     // Calculate hours worked
-    const timeEntry = await pool.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
+    const timeEntry = await db.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
     if (timeEntry.rows.length === 0) {
       return res.status(404).json({ error: 'Time entry not found' });
     }
@@ -862,7 +852,7 @@ app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
     const clockOut = new Date();
     const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE time_entries SET 
         clock_out = NOW(),
         end_location = $1,
@@ -888,7 +878,7 @@ app.post('/api/time-entries/:id/gps', verifyToken, async (req, res) => {
     
     // Store GPS point (you could create a separate gps_tracks table for full history)
     // For now, we'll just update the last known location
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE time_entries SET 
         last_location = $1,
         updated_at = NOW()
@@ -913,12 +903,12 @@ app.patch('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
     const { latitude, longitude, notes } = req.body;
 
     // Calculate hours worked
-    const timeEntry = await pool.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
+    const timeEntry = await db.query(`SELECT clock_in FROM time_entries WHERE id = $1`, [req.params.id]);
     const clockIn = new Date(timeEntry.rows[0].clock_in);
     const clockOut = new Date();
     const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE time_entries SET 
         clock_out = NOW(),
         end_location = $1,
@@ -944,7 +934,7 @@ app.patch('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
 // GET /api/time-entries - Get all time entries
 app.get('/api/time-entries', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT te.*, u.first_name, u.last_name, c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te
        JOIN users u ON te.caregiver_id = u.id
@@ -960,7 +950,7 @@ app.get('/api/time-entries', verifyToken, async (req, res) => {
 // GET /api/time-entries/caregiver/:caregiverId - Get caregiver time entries
 app.get('/api/time-entries/caregiver/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te
        JOIN clients c ON te.client_id = c.id
@@ -979,18 +969,18 @@ app.get('/api/time-entries/caregiver/:caregiverId', verifyToken, async (req, res
 // GET /api/caregiver-rates/:caregiverId
 app.get('/api/caregiver-rates/:caregiverId', verifyToken, async (req, res) => {
   try {
-    let result = await pool.query(
+    let result = await db.query(
       `SELECT * FROM caregiver_rates WHERE caregiver_id = $1`,
       [req.params.caregiverId]
     );
 
     if (result.rows.length === 0) {
       // Create default rate if not exists
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_rates (caregiver_id, base_hourly_rate) VALUES ($1, $2)`,
         [req.params.caregiverId, 18.50]
       );
-      result = await pool.query(
+      result = await db.query(
         `SELECT * FROM caregiver_rates WHERE caregiver_id = $1`,
         [req.params.caregiverId]
       );
@@ -1007,7 +997,7 @@ app.put('/api/caregiver-rates/:caregiverId', verifyToken, requireAdmin, async (r
   try {
     const { baseHourlyRate, overtimeRate, premiumRate } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE caregiver_rates SET
         base_hourly_rate = COALESCE($1, base_hourly_rate),
         overtime_rate = COALESCE($2, overtime_rate),
@@ -1034,7 +1024,7 @@ app.put('/api/caregiver-rates/:caregiverId', verifyToken, requireAdmin, async (r
 // GET /api/invoices/:id - Get invoice details with line items
 app.get('/api/invoices/:id', verifyToken, async (req, res) => {
   try {
-    const invoiceResult = await pool.query(
+    const invoiceResult = await db.query(
       `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.address, c.city, c.state, c.zip,
               rs.name as referral_source_name
        FROM invoices i
@@ -1048,7 +1038,7 @@ app.get('/api/invoices/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    const lineItemsResult = await pool.query(
+    const lineItemsResult = await db.query(
       `SELECT ili.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
               te.start_time as service_date
        FROM invoice_line_items ili
@@ -1076,7 +1066,7 @@ app.post('/api/invoices/generate-from-schedules', verifyToken, requireAdmin, asy
     const invoiceNumber = `INV-${Date.now()}`;
 
     // Get schedules for the billing period
-    const schedulesResult = await pool.query(
+    const schedulesResult = await db.query(
       `SELECT s.*, u.first_name, u.last_name
        FROM schedules s
        JOIN users u ON s.caregiver_id = u.id
@@ -1100,7 +1090,7 @@ app.post('/api/invoices/generate-from-schedules', verifyToken, requireAdmin, asy
       const hours = ((endMinutes - startMinutes) / 60).toFixed(2);
 
       // Get caregiver rate
-      const rateResult = await pool.query(
+      const rateResult = await db.query(
         `SELECT base_hourly_rate FROM caregiver_rates WHERE caregiver_id = $1`,
         [schedule.caregiver_id]
       );
@@ -1122,7 +1112,7 @@ app.post('/api/invoices/generate-from-schedules', verifyToken, requireAdmin, asy
     const total = (subtotal + parseFloat(tax)).toFixed(2);
 
     // Create invoice
-    const invoiceResult = await pool.query(
+    const invoiceResult = await db.query(
       `INSERT INTO invoices (id, invoice_number, client_id, billing_period_start, billing_period_end, subtotal, tax, total, payment_due_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
@@ -1132,7 +1122,7 @@ app.post('/api/invoices/generate-from-schedules', verifyToken, requireAdmin, asy
 
     // Create line items
     for (const item of lineItems) {
-      await pool.query(
+      await db.query(
         `INSERT INTO invoice_line_items (invoice_id, caregiver_id, description, hours, rate, amount)
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [invoiceId, item.caregiverId, item.description, item.hours, item.rate, item.amount]
@@ -1152,7 +1142,7 @@ app.post('/api/invoices/generate-from-schedules', verifyToken, requireAdmin, asy
 // GET /api/invoices/billing-summary - Revenue report
 app.get('/api/invoices/billing-summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         COUNT(*) as total_invoices,
         SUM(CASE WHEN payment_status = 'paid' THEN total ELSE 0 END) as paid_amount,
@@ -1173,7 +1163,7 @@ app.get('/api/invoices/billing-summary', verifyToken, requireAdmin, async (req, 
 // GET /api/service-pricing - List all services
 app.get('/api/service-pricing', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM service_pricing WHERE is_active = true ORDER BY service_name`
     );
     res.json(result.rows);
@@ -1192,7 +1182,7 @@ app.post('/api/service-pricing', verifyToken, requireAdmin, async (req, res) => 
       return res.status(400).json({ error: 'serviceName, clientHourlyRate, and caregiverHourlyRate are required' });
     }
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO service_pricing (id, service_name, description, client_hourly_rate, caregiver_hourly_rate)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
@@ -1211,7 +1201,7 @@ app.put('/api/service-pricing/:id', verifyToken, requireAdmin, async (req, res) 
   try {
     const { serviceName, description, clientHourlyRate, caregiverHourlyRate } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE service_pricing SET
         service_name = COALESCE($1, service_name),
         description = COALESCE($2, description),
@@ -1237,7 +1227,7 @@ app.put('/api/service-pricing/:id', verifyToken, requireAdmin, async (req, res) 
 // DELETE /api/service-pricing/:id - Deactivate service
 app.delete('/api/service-pricing/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE service_pricing SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -1258,7 +1248,7 @@ app.delete('/api/service-pricing/:id', verifyToken, requireAdmin, async (req, re
 // GET /api/clients/:clientId/services - Get client's assigned services
 app.get('/api/clients/:clientId/services', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT cs.*, sp.service_name, sp.client_hourly_rate, sp.caregiver_hourly_rate
        FROM client_services cs
        JOIN service_pricing sp ON cs.service_pricing_id = sp.id
@@ -1284,13 +1274,13 @@ app.post('/api/clients/:clientId/services', verifyToken, requireAdmin, async (re
 
     // If setting as primary, unset other primaries for this client
     if (isPrimary) {
-      await pool.query(
+      await db.query(
         `UPDATE client_services SET is_primary = false WHERE client_id = $1`,
         [req.params.clientId]
       );
     }
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO client_services (id, client_id, service_pricing_id, is_primary, notes)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
@@ -1307,7 +1297,7 @@ app.post('/api/clients/:clientId/services', verifyToken, requireAdmin, async (re
 // DELETE /api/clients/:clientId/services/:serviceId - Remove service from client
 app.delete('/api/clients/:clientId/services/:serviceId', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM client_services WHERE id = $1 AND client_id = $2 RETURNING *`,
       [req.params.serviceId, req.params.clientId]
     );
@@ -1326,7 +1316,7 @@ app.delete('/api/clients/:clientId/services/:serviceId', verifyToken, requireAdm
 // GET /api/service-pricing/margins - Get all services with profit margins
 app.get('/api/service-pricing/margins', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         id,
         service_name,
@@ -1359,7 +1349,7 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
     const payrollNumber = `PR-${Date.now()}`;
 
     // Get all time entries for the period
-    const timeEntriesResult = await pool.query(
+    const timeEntriesResult = await db.query(
       `SELECT te.*, u.first_name, u.last_name, cr.base_hourly_rate
        FROM time_entries te
        JOIN users u ON te.caregiver_id = u.id
@@ -1418,7 +1408,7 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
     const totalNetPay = (totalGrossPay - parseFloat(totalTaxes)).toFixed(2);
 
     // Create payroll record
-    const payrollResult = await pool.query(
+    const payrollResult = await db.query(
       `INSERT INTO payroll (id, payroll_number, pay_period_start, pay_period_end, total_hours, gross_pay, taxes, net_pay, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
@@ -1429,7 +1419,7 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
 
     // Create line items for each caregiver
     for (const item of lineItems) {
-      await pool.query(
+      await db.query(
         `INSERT INTO payroll_line_items (payroll_id, caregiver_id, description, total_hours, hourly_rate, gross_amount)
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [payrollId, item.caregiverId, item.description, item.totalHours, item.hourlyRate, item.grossAmount]
@@ -1450,7 +1440,7 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/payroll - List all payrolls
 app.get('/api/payroll', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM payroll ORDER BY pay_period_end DESC`
     );
     res.json(result.rows);
@@ -1462,7 +1452,7 @@ app.get('/api/payroll', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/payroll/:payrollId - Get payroll details with line items
 app.get('/api/payroll/:payrollId', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const payrollResult = await pool.query(
+    const payrollResult = await db.query(
       `SELECT * FROM payroll WHERE id = $1`,
       [req.params.payrollId]
     );
@@ -1471,7 +1461,7 @@ app.get('/api/payroll/:payrollId', verifyToken, requireAdmin, async (req, res) =
       return res.status(404).json({ error: 'Payroll not found' });
     }
 
-    const lineItemsResult = await pool.query(
+    const lineItemsResult = await db.query(
       `SELECT pli.*, u.first_name, u.last_name
        FROM payroll_line_items pli
        JOIN users u ON pli.caregiver_id = u.id
@@ -1498,7 +1488,7 @@ app.patch('/api/payroll/:payrollId/status', verifyToken, requireAdmin, async (re
       return res.status(400).json({ error: 'status is required' });
     }
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE payroll SET 
         status = $1,
         processed_date = CASE WHEN $1 = 'processed' THEN COALESCE($2, NOW()) ELSE processed_date END,
@@ -1523,7 +1513,7 @@ app.patch('/api/payroll/:payrollId/status', verifyToken, requireAdmin, async (re
 // GET /api/payroll/caregiver/:caregiverId - Get caregiver payroll history
 app.get('/api/payroll/caregiver/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT pli.*, p.payroll_number, p.pay_period_start, p.pay_period_end, p.status
        FROM payroll_line_items pli
        JOIN payroll p ON pli.payroll_id = p.id
@@ -1540,7 +1530,7 @@ app.get('/api/payroll/caregiver/:caregiverId', verifyToken, async (req, res) => 
 // GET /api/payroll/summary - Payroll overview and reports
 app.get('/api/payroll/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         COUNT(DISTINCT id) as total_payrolls,
         COUNT(DISTINCT CASE WHEN status = 'pending' THEN id END) as pending_payrolls,
@@ -1554,7 +1544,7 @@ app.get('/api/payroll/summary', verifyToken, requireAdmin, async (req, res) => {
        FROM payroll`
     );
 
-    const caregiverResult = await pool.query(
+    const caregiverResult = await db.query(
       `SELECT 
         u.id,
         u.first_name,
@@ -1581,7 +1571,7 @@ app.get('/api/payroll/summary', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/payroll-periods - List distinct pay periods
 app.get('/api/payroll-periods', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT DISTINCT pay_period_start, pay_period_end FROM payroll ORDER BY pay_period_end DESC`
     );
     res.json(result.rows);
@@ -1630,7 +1620,7 @@ app.get('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
       query += ` GROUP BY period, c.id, c.first_name, c.last_name, sp.service_name ORDER BY period DESC`;
     }
 
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1640,7 +1630,7 @@ app.get('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/reports/profitability - Profit margins and analysis (including expenses)
 app.get('/api/reports/profitability', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         c.id,
         c.first_name || ' ' || c.last_name as client_name,
@@ -1669,7 +1659,7 @@ app.get('/api/reports/profitability', verifyToken, requireAdmin, async (req, res
 // GET /api/reports/caregiver-performance - Caregiver stats and metrics
 app.get('/api/reports/caregiver-performance', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         u.id,
         u.first_name || ' ' || u.last_name as caregiver_name,
@@ -1697,7 +1687,7 @@ app.get('/api/reports/caregiver-performance', verifyToken, requireAdmin, async (
 // GET /api/reports/client-summary - Client revenue and cost breakdown
 app.get('/api/reports/client-summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         c.id,
         c.first_name || ' ' || c.last_name as client_name,
@@ -1728,7 +1718,7 @@ app.get('/api/reports/client-summary', verifyToken, requireAdmin, async (req, re
 // GET /api/reports/service-analysis - Service type profitability
 app.get('/api/reports/service-analysis', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         sp.id,
         sp.service_name,
@@ -1759,7 +1749,7 @@ app.get('/api/reports/service-analysis', verifyToken, requireAdmin, async (req, 
 // GET /api/reports/payroll-vs-billing - Cost vs Revenue comparison (with expenses)
 app.get('/api/reports/payroll-vs-billing', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         DATE_TRUNC('month', COALESCE(i.billing_period_end, p.pay_period_end, e.expense_date))::DATE as period,
         SUM(i.total) as total_billed,
@@ -1788,7 +1778,7 @@ app.get('/api/reports/payroll-vs-billing', verifyToken, requireAdmin, async (req
 // GET /api/reports/dashboard - Overall business metrics (with expenses and net profit)
 app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const summaryResult = await pool.query(
+    const summaryResult = await db.query(
       `SELECT 
         (SELECT COUNT(*) FROM clients WHERE is_active = true) as active_clients,
         (SELECT COUNT(*) FROM users WHERE role = 'caregiver') as total_caregivers,
@@ -1805,7 +1795,7 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
       `
     );
 
-    const monthlyTrendResult = await pool.query(
+    const monthlyTrendResult = await db.query(
       `SELECT 
         DATE_TRUNC('month', i.created_at)::DATE as month,
         COALESCE(SUM(i.total), 0) as revenue,
@@ -1817,7 +1807,7 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
        LIMIT 6`
     );
 
-    const topClientsResult = await pool.query(
+    const topClientsResult = await db.query(
       `SELECT 
         c.id,
         c.first_name || ' ' || c.last_name as client_name,
@@ -1829,7 +1819,7 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
        LIMIT 5`
     );
 
-    const topCaregiversResult = await pool.query(
+    const topCaregiversResult = await db.query(
       `SELECT 
         u.id,
         u.first_name || ' ' || u.last_name as caregiver_name,
@@ -1842,7 +1832,7 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
        LIMIT 5`
     );
 
-    const expensesByCategory = await pool.query(
+    const expensesByCategory = await db.query(
       `SELECT 
         category,
         COUNT(*) as count,
@@ -1880,7 +1870,7 @@ app.post('/api/absences', verifyToken, async (req, res) => {
 
     const absenceId = uuidv4();
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO absences (id, caregiver_id, date, type, reason, reported_by, coverage_needed, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
        RETURNING *`,
@@ -1929,7 +1919,7 @@ app.get('/api/absences', verifyToken, requireAdmin, async (req, res) => {
 
     query += ` ORDER BY a.date DESC`;
 
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1939,7 +1929,7 @@ app.get('/api/absences', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/absences/caregiver/:caregiverId - Get caregiver absence history
 app.get('/api/absences/caregiver/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM absences 
        WHERE caregiver_id = $1 
        ORDER BY date DESC`,
@@ -1988,7 +1978,7 @@ app.patch('/api/absences/:id', verifyToken, requireAdmin, async (req, res) => {
     params.push(req.params.id);
     const query = `UPDATE absences SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
 
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Absence not found' });
@@ -2004,7 +1994,7 @@ app.patch('/api/absences/:id', verifyToken, requireAdmin, async (req, res) => {
 // DELETE /api/absences/:id
 app.delete('/api/absences/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query('DELETE FROM absences WHERE id = $1 RETURNING *', [req.params.id]);
+    const result = await db.query('DELETE FROM absences WHERE id = $1 RETURNING *', [req.params.id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Absence not found' });
@@ -2020,7 +2010,7 @@ app.delete('/api/absences/:id', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/absences/summary - Get absence summary
 app.get('/api/absences/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT type, COUNT(*) as count, DATE_TRUNC('month', date)::DATE as month
        FROM absences
        GROUP BY type, DATE_TRUNC('month', date)
@@ -2037,14 +2027,14 @@ app.get('/api/absences/summary', verifyToken, requireAdmin, async (req, res) => 
 // GET /api/caregivers/:caregiverId/availability - Get caregiver availability
 app.get('/api/caregivers/:caregiverId/availability', verifyToken, async (req, res) => {
   try {
-    let result = await pool.query(
+    let result = await db.query(
       `SELECT * FROM caregiver_availability WHERE caregiver_id = $1`,
       [req.params.caregiverId]
     );
 
     if (result.rows.length === 0) {
       // Create default availability (Mon-Fri, 8am-5pm)
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_availability (caregiver_id, status, max_hours_per_week,
           monday_available, monday_start_time, monday_end_time,
           tuesday_available, tuesday_start_time, tuesday_end_time,
@@ -2057,7 +2047,7 @@ app.get('/api/caregivers/:caregiverId/availability', verifyToken, async (req, re
           false, false)`,
         [req.params.caregiverId, 'available', 40]
       );
-      result = await pool.query(
+      result = await db.query(
         `SELECT * FROM caregiver_availability WHERE caregiver_id = $1`,
         [req.params.caregiverId]
       );
@@ -2083,7 +2073,7 @@ app.put('/api/caregivers/:caregiverId/availability', verifyToken, async (req, re
       sundayAvailable, sundayStartTime, sundayEndTime
     } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE caregiver_availability SET
         status = COALESCE($1, status),
         max_hours_per_week = COALESCE($2, max_hours_per_week),
@@ -2136,7 +2126,7 @@ app.put('/api/caregivers/:caregiverId/availability', verifyToken, async (req, re
 // GET /api/caregivers/:caregiverId/blackout-dates - Get blackout dates
 app.get('/api/caregivers/:caregiverId/blackout-dates', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM caregiver_blackout_dates 
        WHERE caregiver_id = $1 
        ORDER BY start_date DESC`,
@@ -2158,7 +2148,7 @@ app.post('/api/caregivers/:caregiverId/blackout-dates', verifyToken, async (req,
     }
 
     const blackoutId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO caregiver_blackout_dates (id, caregiver_id, start_date, end_date, reason)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
@@ -2175,7 +2165,7 @@ app.post('/api/caregivers/:caregiverId/blackout-dates', verifyToken, async (req,
 // DELETE /api/blackout-dates/:dateId - Delete blackout date
 app.delete('/api/blackout-dates/:dateId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM caregiver_blackout_dates WHERE id = $1 RETURNING *`,
       [req.params.dateId]
     );
@@ -2233,7 +2223,7 @@ app.get('/api/caregivers/available', verifyToken, async (req, res) => {
 
     query += ` ORDER BY u.first_name, u.last_name`;
 
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2252,7 +2242,7 @@ app.post('/api/expenses', verifyToken, requireAdmin, async (req, res) => {
     }
 
     const expenseId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO expenses (id, expense_date, category, description, amount, payment_method, notes, receipt_url, submitted_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
@@ -2301,7 +2291,7 @@ app.get('/api/expenses', verifyToken, requireAdmin, async (req, res) => {
 
     query += ` ORDER BY expense_date DESC`;
 
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2311,7 +2301,7 @@ app.get('/api/expenses', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/expenses/:id - Get expense details
 app.get('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM expenses WHERE id = $1`,
       [req.params.id]
     );
@@ -2331,7 +2321,7 @@ app.put('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { expenseDate, category, description, amount, paymentMethod, notes, receiptUrl } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE expenses SET
         expense_date = COALESCE($1, expense_date),
         category = COALESCE($2, category),
@@ -2360,7 +2350,7 @@ app.put('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
 // DELETE /api/expenses/:id - Delete expense
 app.delete('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM expenses WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -2379,7 +2369,7 @@ app.delete('/api/expenses/:id', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/expenses/summary - Expense statistics by category
 app.get('/api/expenses/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const totalResult = await pool.query(
+    const totalResult = await db.query(
       `SELECT 
         SUM(amount) as total_expenses,
         COUNT(*) as expense_count,
@@ -2387,7 +2377,7 @@ app.get('/api/expenses/summary', verifyToken, requireAdmin, async (req, res) => 
        FROM expenses`
     );
 
-    const categoryResult = await pool.query(
+    const categoryResult = await db.query(
       `SELECT 
         category,
         COUNT(*) as count,
@@ -2398,7 +2388,7 @@ app.get('/api/expenses/summary', verifyToken, requireAdmin, async (req, res) => 
        ORDER BY total DESC`
     );
 
-    const monthlyResult = await pool.query(
+    const monthlyResult = await db.query(
       `SELECT 
         DATE_TRUNC('month', expense_date)::DATE as month,
         SUM(amount) as total
@@ -2423,7 +2413,7 @@ app.get('/api/expenses/summary', verifyToken, requireAdmin, async (req, res) => 
 // GET /api/applications - Get all job applications
 app.get('/api/applications', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM job_applications ORDER BY created_at DESC`
     );
     res.json(result.rows);
@@ -2435,7 +2425,7 @@ app.get('/api/applications', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/applications/:id - Get specific application
 app.get('/api/applications/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM job_applications WHERE id = $1`,
       [req.params.id]
     );
@@ -2466,7 +2456,7 @@ app.post('/api/applications', async (req, res) => {
     }
 
     const appId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO job_applications (
         id, first_name, last_name, email, phone, date_of_birth, address, city, state, zip,
         years_of_experience, previous_employer_1, job_title_1, employment_dates_1,
@@ -2496,7 +2486,7 @@ app.patch('/api/applications/:id', verifyToken, requireAdmin, async (req, res) =
   try {
     const { status, interviewNotes } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE job_applications SET
         status = COALESCE($1, status),
         interview_notes = COALESCE($2, interview_notes),
@@ -2523,7 +2513,7 @@ app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, re
     const { interviewNotes } = req.body;
 
     // Get application details
-    const appResult = await pool.query(
+    const appResult = await db.query(
       `SELECT * FROM job_applications WHERE id = $1`,
       [req.params.id]
     );
@@ -2535,7 +2525,7 @@ app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, re
     const app = appResult.rows[0];
 
     // Check if user already exists
-    const existingUser = await pool.query(
+    const existingUser = await db.query(
       `SELECT id FROM users WHERE email = $1`,
       [app.email]
     );
@@ -2548,7 +2538,7 @@ app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, re
     const userId = uuidv4();
     const hashedPassword = await bcrypt.hash('TempPassword123!', 10);
 
-    const userResult = await pool.query(
+    const userResult = await db.query(
       `INSERT INTO users (id, first_name, last_name, email, password, phone, date_of_birth, address, city, state, zip, role)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id, first_name, last_name, email, role`,
@@ -2559,21 +2549,21 @@ app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, re
     );
 
     // Create caregiver profile
-    await pool.query(
+    await db.query(
       `INSERT INTO caregiver_profiles (caregiver_id, notes)
        VALUES ($1, $2)`,
       [userId, `Hired from application. Experience: ${app.years_of_experience} years`]
     );
 
     // Create caregiver rates
-    await pool.query(
+    await db.query(
       `INSERT INTO caregiver_rates (caregiver_id, base_hourly_rate)
        VALUES ($1, $2)`,
       [userId, 18.50]
     );
 
     // Create caregiver availability
-    await pool.query(
+    await db.query(
       `INSERT INTO caregiver_availability (caregiver_id, status)
        VALUES ($1, $2)`,
       [userId, 'available']
@@ -2581,35 +2571,35 @@ app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, re
 
     // Add certifications if applicable
     if (app.has_cna) {
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
          VALUES ($1, $2)`,
         [userId, 'CNA']
       );
     }
     if (app.has_lpn) {
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
          VALUES ($1, $2)`,
         [userId, 'LPN']
       );
     }
     if (app.has_rn) {
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
          VALUES ($1, $2)`,
         [userId, 'RN']
       );
     }
     if (app.has_cpr) {
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
          VALUES ($1, $2)`,
         [userId, 'CPR']
       );
     }
     if (app.has_first_aid) {
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_certifications (caregiver_id, certification_name)
          VALUES ($1, $2)`,
         [userId, 'First Aid']
@@ -2617,7 +2607,7 @@ app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, re
     }
 
     // Update application status
-    const updateResult = await pool.query(
+    const updateResult = await db.query(
       `UPDATE job_applications SET
         status = 'hired',
         interview_notes = $1,
@@ -2644,7 +2634,7 @@ app.post('/api/applications/:id/hire', verifyToken, requireAdmin, async (req, re
 // DELETE /api/applications/:id - Delete application
 app.delete('/api/applications/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM job_applications WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -2663,15 +2653,15 @@ app.delete('/api/applications/:id', verifyToken, requireAdmin, async (req, res) 
 // GET /api/applications/summary - Application statistics
 app.get('/api/applications/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const totalResult = await pool.query(
+    const totalResult = await db.query(
       `SELECT COUNT(*) as total FROM job_applications`
     );
 
-    const statusResult = await pool.query(
+    const statusResult = await db.query(
       `SELECT status, COUNT(*) as count FROM job_applications GROUP BY status`
     );
 
-    const certResult = await pool.query(
+    const certResult = await db.query(
       `SELECT 
         COUNT(CASE WHEN has_cna THEN 1 END) as cna_count,
         COUNT(CASE WHEN has_lpn THEN 1 END) as lpn_count,
@@ -2681,7 +2671,7 @@ app.get('/api/applications/summary', verifyToken, requireAdmin, async (req, res)
        FROM job_applications WHERE status = 'hired'`
     );
 
-    const hiredResult = await pool.query(
+    const hiredResult = await db.query(
       `SELECT COUNT(*) as hired_count FROM job_applications WHERE status = 'hired'`
     );
 
@@ -2701,7 +2691,7 @@ app.get('/api/applications/summary', verifyToken, requireAdmin, async (req, res)
 // GET /api/care-plans - Get all care plans
 app.get('/api/care-plans', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT cp.*, c.first_name || ' ' || c.last_name as client_name
        FROM care_plans cp
        JOIN clients c ON cp.client_id = c.id
@@ -2716,7 +2706,7 @@ app.get('/api/care-plans', verifyToken, async (req, res) => {
 // GET /api/care-plans/:clientId - Get care plans for specific client
 app.get('/api/care-plans/:clientId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM care_plans 
        WHERE client_id = $1 
        ORDER BY start_date DESC`,
@@ -2742,7 +2732,7 @@ app.post('/api/care-plans', verifyToken, requireAdmin, async (req, res) => {
     }
 
     const planId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO care_plans (
         id, client_id, service_type, service_description, frequency,
         care_goals, special_instructions, precautions, medication_notes,
@@ -2773,7 +2763,7 @@ app.put('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
       dietaryNotes, communicationNotes, startDate, endDate
     } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE care_plans SET
         service_type = COALESCE($1, service_type),
         service_description = COALESCE($2, service_description),
@@ -2811,7 +2801,7 @@ app.put('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
 // DELETE /api/care-plans/:id - Delete care plan
 app.delete('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM care_plans WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -2830,24 +2820,24 @@ app.delete('/api/care-plans/:id', verifyToken, requireAdmin, async (req, res) =>
 // GET /api/care-plans/summary - Care plan statistics
 app.get('/api/care-plans/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const totalResult = await pool.query(
+    const totalResult = await db.query(
       `SELECT COUNT(*) as total_plans FROM care_plans`
     );
 
-    const activeResult = await pool.query(
+    const activeResult = await db.query(
       `SELECT COUNT(*) as active_plans FROM care_plans 
        WHERE (start_date IS NULL OR start_date <= CURRENT_DATE)
        AND (end_date IS NULL OR end_date >= CURRENT_DATE)`
     );
 
-    const byServiceType = await pool.query(
+    const byServiceType = await db.query(
       `SELECT service_type, COUNT(*) as count
        FROM care_plans
        GROUP BY service_type
        ORDER BY count DESC`
     );
 
-    const byClient = await pool.query(
+    const byClient = await db.query(
       `SELECT c.id, c.first_name || ' ' || c.last_name as client_name, COUNT(cp.id) as plan_count
        FROM clients c
        LEFT JOIN care_plans cp ON c.id = cp.client_id
@@ -2872,7 +2862,7 @@ app.get('/api/care-plans/summary', verifyToken, requireAdmin, async (req, res) =
 // GET /api/incidents - Get all incidents
 app.get('/api/incidents', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT ir.*, c.first_name || ' ' || c.last_name as client_name, 
               u.first_name || ' ' || u.last_name as caregiver_name
        FROM incident_reports ir
@@ -2889,7 +2879,7 @@ app.get('/api/incidents', verifyToken, async (req, res) => {
 // GET /api/incidents/:id - Get specific incident
 app.get('/api/incidents/:id', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT ir.*, c.first_name || ' ' || c.last_name as client_name,
               u.first_name || ' ' || u.last_name as caregiver_name
        FROM incident_reports ir
@@ -2923,7 +2913,7 @@ app.post('/api/incidents', verifyToken, async (req, res) => {
     }
 
     const incidentId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO incident_reports (
         id, client_id, caregiver_id, incident_type, severity, incident_date, incident_time,
         description, witnesses, injuries_or_damage, actions_taken, follow_up_required,
@@ -2952,7 +2942,7 @@ app.patch('/api/incidents/:id', verifyToken, async (req, res) => {
       severity, injuriesOrDamage, actionsTaken, followUpRequired, followUpNotes
     } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE incident_reports SET
         severity = COALESCE($1, severity),
         injuries_or_damage = COALESCE($2, injuries_or_damage),
@@ -2979,7 +2969,7 @@ app.patch('/api/incidents/:id', verifyToken, async (req, res) => {
 // DELETE /api/incidents/:id - Delete incident report
 app.delete('/api/incidents/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM incident_reports WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -2998,24 +2988,24 @@ app.delete('/api/incidents/:id', verifyToken, requireAdmin, async (req, res) => 
 // GET /api/incidents/summary - Incident statistics
 app.get('/api/incidents/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const totalResult = await pool.query(
+    const totalResult = await db.query(
       `SELECT COUNT(*) as total FROM incident_reports`
     );
 
-    const bySeverityResult = await pool.query(
+    const bySeverityResult = await db.query(
       `SELECT severity, COUNT(*) as count FROM incident_reports GROUP BY severity ORDER BY 
        CASE severity WHEN 'critical' THEN 1 WHEN 'severe' THEN 2 WHEN 'moderate' THEN 3 WHEN 'minor' THEN 4 END`
     );
 
-    const byTypeResult = await pool.query(
+    const byTypeResult = await db.query(
       `SELECT incident_type, COUNT(*) as count FROM incident_reports GROUP BY incident_type ORDER BY count DESC`
     );
 
-    const followUpResult = await pool.query(
+    const followUpResult = await db.query(
       `SELECT COUNT(*) as pending_followup FROM incident_reports WHERE follow_up_required = true`
     );
 
-    const monthlyResult = await pool.query(
+    const monthlyResult = await db.query(
       `SELECT 
         DATE_TRUNC('month', incident_date)::DATE as month,
         COUNT(*) as count,
@@ -3026,7 +3016,7 @@ app.get('/api/incidents/summary', verifyToken, requireAdmin, async (req, res) =>
        LIMIT 12`
     );
 
-    const byClientResult = await pool.query(
+    const byClientResult = await db.query(
       `SELECT c.id, c.first_name || ' ' || c.last_name as client_name, COUNT(ir.id) as incident_count
        FROM clients c
        LEFT JOIN incident_reports ir ON c.id = ir.client_id
@@ -3054,7 +3044,7 @@ app.get('/api/incidents/summary', verifyToken, requireAdmin, async (req, res) =>
 // GET /api/performance-reviews - Get all performance reviews
 app.get('/api/performance-reviews', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT pr.*, c.first_name || ' ' || c.last_name as caregiver_name,
               cl.first_name || ' ' || cl.last_name as client_name
        FROM performance_reviews pr
@@ -3071,7 +3061,7 @@ app.get('/api/performance-reviews', verifyToken, async (req, res) => {
 // GET /api/performance-reviews/:caregiverId - Get reviews for specific caregiver
 app.get('/api/performance-reviews/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT pr.*, cl.first_name || ' ' || cl.last_name as client_name
        FROM performance_reviews pr
        LEFT JOIN clients cl ON pr.client_id = cl.id
@@ -3095,7 +3085,7 @@ app.post('/api/performance-reviews', verifyToken, requireAdmin, async (req, res)
     }
 
     const reviewId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO performance_reviews (id, caregiver_id, client_id, review_date, performance_notes, strengths, areas_for_improvement, overall_assessment, reviewed_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
@@ -3112,7 +3102,7 @@ app.post('/api/performance-reviews', verifyToken, requireAdmin, async (req, res)
 // DELETE /api/performance-reviews/:id - Delete performance review
 app.delete('/api/performance-reviews/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM performance_reviews WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -3131,7 +3121,7 @@ app.delete('/api/performance-reviews/:id', verifyToken, requireAdmin, async (req
 // GET /api/performance-reviews/summary/:caregiverId - Performance summary for caregiver
 app.get('/api/performance-reviews/summary/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         COUNT(*) as total_reviews,
         AVG(CASE WHEN overall_assessment = 'excellent' THEN 3 WHEN overall_assessment = 'satisfactory' THEN 2 WHEN overall_assessment = 'needs_improvement' THEN 1 ELSE 0 END) as avg_score,
@@ -3154,7 +3144,7 @@ app.get('/api/performance-reviews/summary/:caregiverId', verifyToken, async (req
 // GET /api/caregivers/:caregiverId/background-check - Get background check
 app.get('/api/caregivers/:caregiverId/background-check', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM background_checks WHERE caregiver_id = $1 ORDER BY check_date DESC LIMIT 1`,
       [req.params.caregiverId]
     );
@@ -3174,7 +3164,7 @@ app.post('/api/caregivers/:caregiverId/background-check', verifyToken, requireAd
     }
 
     const checkId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO background_checks (id, caregiver_id, check_date, expiration_date, status, clearance_number, notes, checked_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
@@ -3191,7 +3181,7 @@ app.post('/api/caregivers/:caregiverId/background-check', verifyToken, requireAd
 // GET /api/caregivers/:caregiverId/training-records - Get training records
 app.get('/api/caregivers/:caregiverId/training-records', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM training_records WHERE caregiver_id = $1 ORDER BY completion_date DESC`,
       [req.params.caregiverId]
     );
@@ -3211,7 +3201,7 @@ app.post('/api/caregivers/:caregiverId/training-records', verifyToken, requireAd
     }
 
     const recordId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO training_records (id, caregiver_id, training_type, completion_date, expiration_date, certification_number, provider, status, recorded_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
@@ -3228,7 +3218,7 @@ app.post('/api/caregivers/:caregiverId/training-records', verifyToken, requireAd
 // DELETE /api/training-records/:id - Delete training record
 app.delete('/api/training-records/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM training_records WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -3247,7 +3237,7 @@ app.delete('/api/training-records/:id', verifyToken, requireAdmin, async (req, r
 // GET /api/caregivers/:caregiverId/compliance-documents - Get compliance documents
 app.get('/api/caregivers/:caregiverId/compliance-documents', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM compliance_documents WHERE caregiver_id = $1 ORDER BY upload_date DESC`,
       [req.params.caregiverId]
     );
@@ -3267,7 +3257,7 @@ app.post('/api/caregivers/:caregiverId/compliance-documents', verifyToken, requi
     }
 
     const docId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO compliance_documents (id, caregiver_id, document_type, document_name, expiration_date, file_url, notes, uploaded_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
@@ -3284,7 +3274,7 @@ app.post('/api/caregivers/:caregiverId/compliance-documents', verifyToken, requi
 // DELETE /api/compliance-documents/:id - Delete compliance document
 app.delete('/api/compliance-documents/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM compliance_documents WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -3303,19 +3293,19 @@ app.delete('/api/compliance-documents/:id', verifyToken, requireAdmin, async (re
 // GET /api/compliance/summary - Compliance overview
 app.get('/api/compliance/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const expiredBgResult = await pool.query(
+    const expiredBgResult = await db.query(
       `SELECT COUNT(*) as expired_bg FROM background_checks WHERE expiration_date < CURRENT_DATE`
     );
 
-    const expiredTrainingResult = await pool.query(
+    const expiredTrainingResult = await db.query(
       `SELECT COUNT(*) as expired_training FROM training_records WHERE expiration_date < CURRENT_DATE AND status != 'expired'`
     );
 
-    const trainingByTypeResult = await pool.query(
+    const trainingByTypeResult = await db.query(
       `SELECT training_type, COUNT(*) as count FROM training_records WHERE status = 'completed' GROUP BY training_type ORDER BY count DESC`
     );
 
-    const bgStatusResult = await pool.query(
+    const bgStatusResult = await db.query(
       `SELECT status, COUNT(*) as count FROM background_checks GROUP BY status`
     );
 
@@ -3335,7 +3325,7 @@ app.get('/api/compliance/summary', verifyToken, requireAdmin, async (req, res) =
 // GET /api/referral-sources - Get all referral sources
 app.get('/api/referral-sources', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM referral_sources ORDER BY name ASC`
     );
     res.json(result.rows);
@@ -3354,7 +3344,7 @@ app.post('/api/referral-sources', verifyToken, requireAdmin, async (req, res) =>
     }
 
     const sourceId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO referral_sources (id, name, type, contact_name, email, phone, address, city, state, zip, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
@@ -3373,7 +3363,7 @@ app.put('/api/referral-sources/:id', verifyToken, requireAdmin, async (req, res)
   try {
     const { name, type, contactName, email, phone, address, city, state, zip } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE referral_sources SET
         name = COALESCE($1, name),
         type = COALESCE($2, type),
@@ -3404,7 +3394,7 @@ app.put('/api/referral-sources/:id', verifyToken, requireAdmin, async (req, res)
 // DELETE /api/referral-sources/:id - Delete referral source
 app.delete('/api/referral-sources/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM referral_sources WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -3423,15 +3413,15 @@ app.delete('/api/referral-sources/:id', verifyToken, requireAdmin, async (req, r
 // GET /api/referral-sources/stats - Referral statistics
 app.get('/api/referral-sources/stats', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const totalResult = await pool.query(
+    const totalResult = await db.query(
       `SELECT COUNT(*) as total FROM referral_sources`
     );
 
-    const byTypeResult = await pool.query(
+    const byTypeResult = await db.query(
       `SELECT type, COUNT(*) as count FROM referral_sources GROUP BY type ORDER BY count DESC`
     );
 
-    const clientsBySourceResult = await pool.query(
+    const clientsBySourceResult = await db.query(
       `SELECT rs.id, rs.name, COUNT(c.id) as client_count
        FROM referral_sources rs
        LEFT JOIN clients c ON rs.id = c.referral_source_id
@@ -3457,7 +3447,7 @@ app.get('/api/referral-sources/stats', verifyToken, requireAdmin, async (req, re
 app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    const summary = await pool.query(
+    const summary = await db.query(
       `SELECT 
         COALESCE(SUM(duration_minutes) / 60.0, 0) as totalHours,
         COALESCE((SELECT SUM(total) FROM invoices WHERE CAST(created_at AS DATE) >= $1 AND CAST(created_at AS DATE) <= $2), 0) as totalRevenue,
@@ -3467,7 +3457,7 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
        WHERE is_complete = true AND CAST(start_time AS DATE) >= $1 AND CAST(start_time AS DATE) <= $2`,
       [startDate, endDate]
     );
-    const topCaregivers = await pool.query(
+    const topCaregivers = await db.query(
       `SELECT u.id, u.first_name, u.last_name,
               COALESCE(SUM(te.duration_minutes) / 60.0, 0) as total_hours,
               COUNT(DISTINCT te.client_id) as clients_served,
@@ -3483,7 +3473,7 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
        ORDER BY total_hours DESC LIMIT 5`,
       [startDate, endDate]
     );
-    const topClients = await pool.query(
+    const topClients = await db.query(
       `SELECT c.id, c.first_name, c.last_name, c.service_type,
               COALESCE(SUM(i.total), 0) as total_cost,
               COALESCE(SUM(te.duration_minutes)::numeric / 60.0, 0) as total_hours,
@@ -3525,13 +3515,13 @@ app.post('/api/reports/overview', verifyToken, requireAdmin, async (req, res) =>
 app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    const hoursByWeek = await pool.query(
+    const hoursByWeek = await db.query(
       `SELECT TO_CHAR(DATE_TRUNC('week', start_time), 'YYYY-WW') as week, SUM(duration_minutes) / 60.0 as hours
        FROM time_entries WHERE is_complete = true AND CAST(start_time AS DATE) >= $1 AND CAST(start_time AS DATE) <= $2
        GROUP BY DATE_TRUNC('week', start_time) ORDER BY DATE_TRUNC('week', start_time) DESC`,
       [startDate, endDate]
     );
-    const hoursByType = await pool.query(
+    const hoursByType = await db.query(
       `SELECT COALESCE(cp.service_type, 'Unassigned') as service_type,
               SUM(te.duration_minutes) / 60.0 as hours,
               ROUND(SUM(te.duration_minutes) * 100.0 / NULLIF((SELECT SUM(duration_minutes) FROM time_entries WHERE is_complete = true AND CAST(start_time AS DATE) >= $1 AND CAST(start_time AS DATE) <= $2), 0), 1) as percentage
@@ -3541,7 +3531,7 @@ app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
        GROUP BY COALESCE(cp.service_type, 'Unassigned') ORDER BY hours DESC`,
       [startDate, endDate]
     );
-    const caregiverBreakdown = await pool.query(
+    const caregiverBreakdown = await db.query(
       `SELECT u.id, u.first_name, u.last_name,
               COALESCE(SUM(te.duration_minutes) / 60.0, 0) as total_hours,
               COALESCE(SUM(CASE WHEN te.duration_minutes / 60.0 <= 40 THEN te.duration_minutes / 60.0 ELSE 40 END), 0) as regular_hours,
@@ -3570,7 +3560,7 @@ app.post('/api/reports/hours', verifyToken, requireAdmin, async (req, res) => {
 app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    const performance = await pool.query(
+    const performance = await db.query(
       `SELECT u.id, u.first_name, u.last_name,
               COUNT(DISTINCT ir.id) as incident_count,
               COUNT(DISTINCT tr.id) as training_hours,
@@ -3600,7 +3590,7 @@ app.post('/api/reports/performance', verifyToken, requireAdmin, async (req, res)
 app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    const satisfaction = await pool.query(
+    const satisfaction = await db.query(
       `SELECT u.id, u.first_name, u.last_name,
               COUNT(pr.id) as review_count,
               COUNT(CASE WHEN pr.overall_assessment = 'excellent' THEN 1 END) as excellent_count,
@@ -3627,7 +3617,7 @@ app.post('/api/reports/satisfaction', verifyToken, requireAdmin, async (req, res
 app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    const byClient = await pool.query(
+    const byClient = await db.query(
       `SELECT c.id, c.first_name || ' ' || c.last_name as client_name,
               COALESCE(SUM(i.total), 0) as total_revenue,
               COUNT(DISTINCT i.id) as invoice_count
@@ -3636,7 +3626,7 @@ app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => 
        GROUP BY c.id, c.first_name, c.last_name ORDER BY total_revenue DESC`,
       [startDate, endDate]
     );
-    const byService = await pool.query(
+    const byService = await db.query(
       `SELECT COALESCE(cp.service_type, 'Unassigned') as service_type,
               COALESCE(SUM(i.total), 0) as total_revenue,
               COUNT(DISTINCT i.id) as invoice_count
@@ -3646,7 +3636,7 @@ app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => 
        GROUP BY COALESCE(cp.service_type, 'Unassigned') ORDER BY total_revenue DESC`,
       [startDate, endDate]
     );
-    const byMonth = await pool.query(
+    const byMonth = await db.query(
       `SELECT DATE_TRUNC('month', created_at)::DATE as month,
               COALESCE(SUM(total), 0) as total_revenue,
               COUNT(DISTINCT id) as invoice_count
@@ -3681,7 +3671,7 @@ app.post('/api/reports/revenue', verifyToken, requireAdmin, async (req, res) => 
 // GET /api/notifications - Get notifications for user
 app.get('/api/notifications', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM notifications 
        WHERE recipient_id = $1 OR (recipient_type = 'admin' AND $2 = 'admin')
        ORDER BY created_at DESC
@@ -3697,19 +3687,19 @@ app.get('/api/notifications', verifyToken, async (req, res) => {
 // GET /api/notification-settings - Get notification settings
 app.get('/api/notification-settings', verifyToken, async (req, res) => {
   try {
-    let result = await pool.query(
+    let result = await db.query(
       `SELECT * FROM notification_settings WHERE user_id = $1`,
       [req.user.id]
     );
 
     if (result.rows.length === 0) {
       // Create default settings
-      await pool.query(
+      await db.query(
         `INSERT INTO notification_settings (user_id, email_enabled, schedule_alerts, payroll_alerts, absence_alerts, payment_alerts)
          VALUES ($1, true, true, true, true, true)`,
         [req.user.id]
       );
-      result = await pool.query(
+      result = await db.query(
         `SELECT * FROM notification_settings WHERE user_id = $1`,
         [req.user.id]
       );
@@ -3726,7 +3716,7 @@ app.put('/api/notification-settings', verifyToken, async (req, res) => {
   try {
     const { emailEnabled, scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE notification_settings SET
         email_enabled = COALESCE($1, email_enabled),
         schedule_alerts = COALESCE($2, schedule_alerts),
@@ -3755,7 +3745,7 @@ app.post('/api/notifications/send', verifyToken, requireAdmin, async (req, res) 
     }
 
     const notificationId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO notifications (id, recipient_type, recipient_id, notification_type, subject, message, status, sent_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
@@ -3784,7 +3774,7 @@ app.post('/api/notifications/send-bulk', verifyToken, requireAdmin, async (req, 
 
     for (const recipientId of recipientIds) {
       const notificationId = uuidv4();
-      const result = await pool.query(
+      const result = await db.query(
         `INSERT INTO notifications (id, recipient_type, recipient_id, notification_type, subject, message, status, sent_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
@@ -3803,7 +3793,7 @@ app.post('/api/notifications/send-bulk', verifyToken, requireAdmin, async (req, 
 // PATCH /api/notifications/:id/read - Mark notification as read
 app.patch('/api/notifications/:id/read', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE notifications SET is_read = true, updated_at = NOW() WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
@@ -3821,7 +3811,7 @@ app.patch('/api/notifications/:id/read', verifyToken, async (req, res) => {
 // DELETE /api/notifications/:id - Delete notification
 app.delete('/api/notifications/:id', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM notifications WHERE id = $1 AND recipient_id = $2 RETURNING *`,
       [req.params.id, req.user.id]
     );
@@ -3839,7 +3829,7 @@ app.delete('/api/notifications/:id', verifyToken, async (req, res) => {
 // GET /api/notifications/summary - Notification statistics
 app.get('/api/notifications/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT 
         COUNT(*) as total_notifications,
         COUNT(CASE WHEN is_read = false THEN 1 END) as unread_count,
@@ -3871,7 +3861,7 @@ app.put('/api/notifications/preferences', verifyToken, async (req, res) => {
   try {
     const { emailEnabled, pushEnabled, scheduleAlerts, absenceAlerts, billingAlerts } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO notification_preferences (user_id, email_enabled, push_enabled, schedule_alerts, absence_alerts, billing_alerts)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (user_id) DO UPDATE SET 
@@ -3891,7 +3881,7 @@ app.put('/api/notifications/preferences', verifyToken, async (req, res) => {
 // GET /api/schedules/:caregiverId - Get schedules for a specific caregiver
 app.get('/api/schedules/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM schedules WHERE caregiver_id = $1 AND is_active = true ORDER BY day_of_week, date, start_time`,
       [req.params.caregiverId]
     );
@@ -3904,7 +3894,7 @@ app.get('/api/schedules/:caregiverId', verifyToken, async (req, res) => {
 // GET /api/schedules-all - Get all schedules for calendar view
 app.get('/api/schedules-all', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT s.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
               c.first_name as client_first_name, c.last_name as client_last_name
        FROM schedules s
@@ -3925,7 +3915,7 @@ app.post('/api/schedules', verifyToken, async (req, res) => {
     const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes } = req.body;
     
     const scheduleId = uuidv4();
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
@@ -3942,7 +3932,7 @@ app.post('/api/schedules', verifyToken, async (req, res) => {
 // DELETE /api/schedules/:scheduleId - Delete a schedule
 app.delete('/api/schedules/:scheduleId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
       [req.params.scheduleId]
     );
@@ -3963,18 +3953,18 @@ app.delete('/api/schedules/:scheduleId', verifyToken, async (req, res) => {
 // GET /api/caregiver-profile/:caregiverId
 app.get('/api/caregiver-profile/:caregiverId', verifyToken, async (req, res) => {
   try {
-    let result = await pool.query(
+    let result = await db.query(
       `SELECT * FROM caregiver_profiles WHERE caregiver_id = $1`,
       [req.params.caregiverId]
     );
 
     if (result.rows.length === 0) {
       // Create default profile
-      await pool.query(
+      await db.query(
         `INSERT INTO caregiver_profiles (caregiver_id) VALUES ($1)`,
         [req.params.caregiverId]
       );
-      result = await pool.query(
+      result = await db.query(
         `SELECT * FROM caregiver_profiles WHERE caregiver_id = $1`,
         [req.params.caregiverId]
       );
@@ -3991,7 +3981,7 @@ app.put('/api/caregiver-profile/:caregiverId', verifyToken, async (req, res) => 
   try {
     const { notes, capabilities, limitations, preferredHours, availableMon, availableTue, availableWed, availableThu, availableFri, availableSat, availableSun } = req.body;
 
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE caregiver_profiles SET
         notes = COALESCE($1, notes),
         capabilities = COALESCE($2, capabilities),
@@ -4022,7 +4012,7 @@ app.put('/api/caregiver-profile/:caregiverId', verifyToken, async (req, res) => 
 // GET /api/caregivers/:caregiverId/certifications
 app.get('/api/caregivers/:caregiverId/certifications', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM caregiver_certifications WHERE caregiver_id = $1 ORDER BY expiration_date DESC`,
       [req.params.caregiverId]
     );
@@ -4038,7 +4028,7 @@ app.post('/api/caregivers/:caregiverId/certifications', verifyToken, async (req,
     const { certificationName, certificationNumber, issuer, issuedDate, expirationDate } = req.body;
     const certId = uuidv4();
 
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO caregiver_certifications (id, caregiver_id, certification_name, certification_number, issuer, issued_date, expiration_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
@@ -4055,7 +4045,7 @@ app.post('/api/caregivers/:caregiverId/certifications', verifyToken, async (req,
 // DELETE /api/caregivers/certifications/:certId
 app.delete('/api/caregivers/certifications/:certId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `DELETE FROM caregiver_certifications WHERE id = $1 RETURNING *`,
       [req.params.certId]
     );
@@ -4074,7 +4064,7 @@ app.delete('/api/caregivers/certifications/:certId', verifyToken, async (req, re
 // GET /api/users/caregivers/:caregiverId - Get single caregiver
 app.get('/api/users/caregivers/:caregiverId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM users WHERE id = $1 AND role = 'caregiver'`,
       [req.params.caregiverId]
     );
@@ -4112,7 +4102,7 @@ app.use('/api/alerts', verifyToken, require('./routes/alertsRoutes'));
 // ============ CARE TYPES ============
 app.get('/api/care-types', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT * FROM care_types WHERE is_active = true ORDER BY name`
     );
     res.json(result.rows);
@@ -4126,7 +4116,7 @@ app.post('/api/care-types', verifyToken, requireAdmin, async (req, res) => {
     const { name, description } = req.body;
     const id = uuidv4();
     
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO care_types (id, name, description) VALUES ($1, $2, $3) RETURNING *`,
       [id, name, description]
     );
@@ -4142,7 +4132,7 @@ app.put('/api/care-types/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { name, description } = req.body;
     
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE care_types SET name = $1, description = $2, updated_at = NOW() 
        WHERE id = $3 RETURNING *`,
       [name, description, req.params.id]
@@ -4180,7 +4170,7 @@ app.get('/api/referral-source-rates', verifyToken, async (req, res) => {
     
     query += ` ORDER BY rs.name, ct.name`;
     
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -4193,13 +4183,13 @@ app.post('/api/referral-source-rates', verifyToken, requireAdmin, async (req, re
     const id = uuidv4();
     
     // Deactivate any existing rate for this combo
-    await pool.query(
+    await db.query(
       `UPDATE referral_source_rates SET is_active = false, end_date = $1, updated_at = NOW()
        WHERE referral_source_id = $2 AND care_type_id = $3 AND is_active = true`,
       [effectiveDate || new Date(), referralSourceId, careTypeId]
     );
     
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO referral_source_rates (id, referral_source_id, care_type_id, rate_amount, rate_type, effective_date)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [id, referralSourceId, careTypeId, rateAmount, rateType || 'hourly', effectiveDate || new Date()]
@@ -4216,7 +4206,7 @@ app.put('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (req,
   try {
     const { rateAmount, rateType } = req.body;
     
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE referral_source_rates SET rate_amount = $1, rate_type = $2, updated_at = NOW()
        WHERE id = $3 RETURNING *`,
       [rateAmount, rateType, req.params.id]
@@ -4235,7 +4225,7 @@ app.put('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (req,
 
 app.delete('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE referral_source_rates SET is_active = false, end_date = CURRENT_DATE, updated_at = NOW()
        WHERE id = $1 RETURNING *`,
       [req.params.id]
@@ -4276,7 +4266,7 @@ app.get('/api/caregiver-care-type-rates', verifyToken, async (req, res) => {
     
     query += ` ORDER BY u.last_name, ct.name`;
     
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -4289,13 +4279,13 @@ app.post('/api/caregiver-care-type-rates', verifyToken, requireAdmin, async (req
     const id = uuidv4();
     
     // Deactivate any existing rate for this combo
-    await pool.query(
+    await db.query(
       `UPDATE caregiver_care_type_rates SET is_active = false, end_date = CURRENT_DATE, updated_at = NOW()
        WHERE caregiver_id = $1 AND care_type_id = $2 AND is_active = true`,
       [caregiverId, careTypeId]
     );
     
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO caregiver_care_type_rates (id, caregiver_id, care_type_id, hourly_rate)
        VALUES ($1, $2, $3, $4) RETURNING *`,
       [id, caregiverId, careTypeId, hourlyRate]
@@ -4312,7 +4302,7 @@ app.put('/api/caregiver-care-type-rates/:id', verifyToken, requireAdmin, async (
   try {
     const { hourlyRate } = req.body;
     
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE caregiver_care_type_rates SET hourly_rate = $1, updated_at = NOW()
        WHERE id = $2 RETURNING *`,
       [hourlyRate, req.params.id]
@@ -4331,7 +4321,7 @@ app.put('/api/caregiver-care-type-rates/:id', verifyToken, requireAdmin, async (
 
 app.delete('/api/caregiver-care-type-rates/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE caregiver_care_type_rates SET is_active = false, end_date = CURRENT_DATE, updated_at = NOW()
        WHERE id = $1 RETURNING *`,
       [req.params.id]
@@ -4351,7 +4341,7 @@ app.delete('/api/caregiver-care-type-rates/:id', verifyToken, requireAdmin, asyn
 // Get caregiver's pay rate for a specific client (based on client's care type)
 app.get('/api/caregivers/:id/pay-rate-for-client/:clientId', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(`
+    const result = await db.query(`
       SELECT 
         cctr.hourly_rate,
         ct.name as care_type_name,
@@ -4384,7 +4374,7 @@ app.get('/api/caregivers/:id/pay-rate-for-client/:clientId', verifyToken, async 
 // ============ CLIENT BILLING INFO ============
 app.get('/api/clients/:id/billing-rate', verifyToken, async (req, res) => {
   try {
-    const result = await pool.query(`
+    const result = await db.query(`
       SELECT 
         c.is_private_pay,
         CASE 
@@ -4421,7 +4411,7 @@ app.put('/api/clients/:id/billing', verifyToken, requireAdmin, async (req, res) 
   try {
     const { referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes } = req.body;
     
-    const result = await pool.query(`
+    const result = await db.query(`
       UPDATE clients SET 
         referral_source_id = $1,
         care_type_id = $2,
@@ -4452,7 +4442,7 @@ app.post('/api/invoices/generate-with-rates', verifyToken, requireAdmin, async (
     const invoiceNumber = `INV-${Date.now()}`;
 
     // Get client billing info
-    const clientResult = await pool.query(`
+    const clientResult = await db.query(`
       SELECT c.*, 
              rs.name as referral_source_name, rs.id as rs_id,
              ct.name as care_type_name,
@@ -4483,7 +4473,7 @@ app.post('/api/invoices/generate-with-rates', verifyToken, requireAdmin, async (
     const rateType = client.rate_type || 'hourly';
 
     // Get time entries for billing period
-    const entriesResult = await pool.query(`
+    const entriesResult = await db.query(`
       SELECT te.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
              ccr.hourly_rate as caregiver_rate
       FROM time_entries te
@@ -4529,7 +4519,7 @@ app.post('/api/invoices/generate-with-rates', verifyToken, requireAdmin, async (
     }
 
     // Create invoice
-    const invoiceResult = await pool.query(`
+    const invoiceResult = await db.query(`
       INSERT INTO invoices (
         id, invoice_number, client_id, referral_source_id, invoice_type,
         billing_period_start, billing_period_end, subtotal, total, 
@@ -4549,7 +4539,7 @@ app.post('/api/invoices/generate-with-rates', verifyToken, requireAdmin, async (
 
     // Create line items
     for (const item of lineItems) {
-      await pool.query(`
+      await db.query(`
         INSERT INTO invoice_line_items (
           invoice_id, time_entry_id, caregiver_id, description, 
           hours, rate, amount
