@@ -856,12 +856,12 @@ app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
       `UPDATE time_entries SET 
         end_time = NOW(),
         clock_out_location = $1,
-        hours_worked = $2,
+        duration_minutes = $2,
         notes = $3,
         updated_at = NOW()
        WHERE id = $4
        RETURNING *`,
-      [latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, hoursWorked.toFixed(2), notes || null, req.params.id]
+      [latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, (hoursWorked * 60).toFixed(0), notes || null, req.params.id]
     );
 
     await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
@@ -912,12 +912,12 @@ app.patch('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
       `UPDATE time_entries SET 
         end_time = NOW(),
         clock_out_location = $1,
-        hours_worked = $2,
+        duration_minutes = $2,
         notes = $3,
         updated_at = NOW()
        WHERE id = $4
        RETURNING *`,
-      [JSON.stringify({ lat: latitude, lng: longitude }), hoursWorked.toFixed(2), notes || null, req.params.id]
+      [JSON.stringify({ lat: latitude, lng: longitude }), (hoursWorked * 60).toFixed(0), notes || null, req.params.id]
     );
 
     if (result.rows.length === 0) {
@@ -4578,5 +4578,6 @@ app.listen(port, () => {
   console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
   console.log(`📊 Admin Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
 });
+
 
 
