@@ -1,5 +1,4 @@
 // src/components/CaregiverDashboard.jsx
-// Professional caregiver app modeled after Homebase / When I Work / CareSmartz360
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../config';
 
@@ -27,7 +26,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     };
   }, []);
 
-  // Timer for active session
   useEffect(() => {
     if (activeSession) {
       timerRef.current = setInterval(() => {
@@ -44,7 +42,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     };
   }, [activeSession]);
 
-  // Close sidebar on page change (mobile)
   useEffect(() => {
     if (window.innerWidth <= 768) {
       setSidebarOpen(false);
@@ -53,7 +50,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const loadData = async () => {
     try {
-      // Load all data in parallel
       const [schedulesRes, clientsRes, activeRes, visitsRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/schedules/${user.id}`, {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -63,10 +59,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         }),
         fetch(`${API_BASE_URL}/api/time-entries/active`, {
           headers: { 'Authorization': `Bearer ${token}` }
-        }),
-        fetch(`${API_BASE_URL}/api/time-entries/recent?limit=5`, {
+        }).catch(() => ({ ok: false })),
+        fetch(`${API_BASE_URL}/api/time-entries/recent?limit=10`, {
           headers: { 'Authorization': `Bearer ${token}` }
-        })
+        }).catch(() => ({ ok: false }))
       ]);
 
       if (schedulesRes.ok) {
@@ -110,7 +106,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           setLocationError(null);
         },
         (error) => {
-          console.error('GPS error:', error);
           setLocationError(error.message);
         },
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
@@ -122,10 +117,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const handleClockIn = async () => {
     if (!location) {
-      alert('GPS location not available. Please enable location services and try again.');
+      alert('GPS location not available. Please enable location services.');
       return;
     }
-
     if (!selectedClient) {
       alert('Please select a client before clocking in.');
       return;
@@ -158,13 +152,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     }
   };
 
-  const handleClockOut = async () => {
+  const handleClockOut = () => {
     if (!activeSession) {
       alert('No active session to clock out from.');
       return;
     }
-
-    // Show note modal before clocking out
     setShowNoteModal(true);
   };
 
@@ -192,7 +184,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       setSelectedClient('');
       setVisitNote('');
       setShowNoteModal(false);
-      loadData(); // Refresh data
+      loadData();
     } catch (error) {
       alert('Failed to clock out: ' + error.message);
     }
@@ -215,12 +207,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             })
           });
         } catch (error) {
-          console.error('Failed to track GPS:', error);
+          // Silent fail for GPS tracking
         }
       }
-    }, 60000); // Every 60 seconds
+    }, 60000);
 
     return () => clearInterval(interval);
+  };
+
+  const handlePageClick = (page) => {
+    setCurrentPage(page);
+    if (window.innerWidth <= 768) {
+      setSidebarOpen(false);
+    }
   };
 
   // Helper functions
@@ -229,19 +228,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return client ? `${client.first_name} ${client.last_name}` : 'Unknown Client';
   };
 
-  const getClientAddress = (clientId) => {
-    const client = clients.find(c => c.id === clientId);
-    if (!client) return '';
-    return client.address || '';
-  };
-
   const formatTime = (timeStr) => {
     if (!timeStr) return '';
     const [hours, minutes] = timeStr.split(':');
     const h = parseInt(hours);
-    const ampm = h >= 12 ? 'pm' : 'am';
+    const ampm = h >= 12 ? 'PM' : 'AM';
     const hour12 = h % 12 || 12;
-    return `${hour12}:${minutes}${ampm}`;
+    return `${hour12}:${minutes} ${ampm}`;
   };
 
   const formatElapsedTime = (seconds) => {
@@ -260,23 +253,22 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     });
   };
 
-  const getDayName = (dayOfWeek) => {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return days[dayOfWeek] || '';
+  const calculateHours = (start, end) => {
+    if (!start || !end) return 0;
+    const startDate = new Date(`2000-01-01T${start}`);
+    const endDate = new Date(`2000-01-01T${end}`);
+    return ((endDate - startDate) / (1000 * 60 * 60)).toFixed(1);
   };
 
-  // Get today's schedules
   const getTodaySchedules = () => {
     const today = new Date();
     const todayDayOfWeek = today.getDay();
     const todayStr = today.toISOString().split('T')[0];
 
     return schedules.filter(schedule => {
-      // Check recurring (day of week matches)
       if (schedule.day_of_week !== null && schedule.day_of_week !== undefined) {
         return schedule.day_of_week === todayDayOfWeek;
       }
-      // Check one-time (date matches)
       if (schedule.date) {
         return schedule.date.split('T')[0] === todayStr;
       }
@@ -284,7 +276,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     }).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   };
 
-  // Get upcoming schedules (next 7 days)
   const getUpcomingSchedules = () => {
     const upcoming = [];
     const today = new Date();
@@ -317,58 +308,48 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return upcoming;
   };
 
-  const calculateHours = (start, end) => {
-    if (!start || !end) return 0;
-    const startDate = new Date(`2000-01-01T${start}`);
-    const endDate = new Date(`2000-01-01T${end}`);
-    return ((endDate - startDate) / (1000 * 60 * 60)).toFixed(1);
-  };
-
   // Render Home Page
   const renderHomePage = () => {
     const todaySchedules = getTodaySchedules();
+    const weeklyHours = getUpcomingSchedules().reduce((total, day) => 
+      total + day.schedules.reduce((t, s) => t + parseFloat(calculateHours(s.start_time, s.end_time)), 0)
+    , 0);
 
     return (
-      <div >
-        {/* Clock In/Out Card - The Hero */}
-        <div style={{
-          background: activeSession 
-            ? 'linear-gradient(135deg, #DC2626 0%, #B91C1C 100%)' 
-            : 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-          borderRadius: '16px',
-          padding: '2rem',
-          color: 'white',
-          marginBottom: '1.5rem',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
-        }}>
+      <>
+        {/* Stats Row */}
+        <div className="grid">
+          <div className="stat-card">
+            <h3>Today's Shifts</h3>
+            <div className="value">{todaySchedules.length}</div>
+          </div>
+          <div className="stat-card">
+            <h3>Hours This Week</h3>
+            <div className="value">{weeklyHours.toFixed(1)}</div>
+          </div>
+          <div className="stat-card">
+            <h3>GPS Status</h3>
+            <div className="value">
+              <span className={location ? 'badge badge-success' : 'badge badge-danger'}>
+                {location ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Clock In/Out Card */}
+        <div className="card">
+          <div className="card-title">
+            {activeSession ? 'Currently Working' : 'Clock In'}
+          </div>
+
           {!activeSession ? (
             <>
-              <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.5rem', fontWeight: '600' }}>
-                Ready to Clock In?
-              </h2>
-
-              {/* Client Selector */}
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ 
-                  display: 'block', 
-                  marginBottom: '0.5rem', 
-                  fontSize: '0.9rem',
-                  opacity: 0.9
-                }}>
-                  Select Client
-                </label>
+              <div className="form-group">
+                <label>Select Client *</label>
                 <select
                   value={selectedClient}
                   onChange={(e) => setSelectedClient(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '1rem',
-                    borderRadius: '10px',
-                    border: 'none',
-                    fontSize: '1rem',
-                    background: 'rgba(255,255,255,0.95)',
-                    color: '#1F2937'
-                  }}
                 >
                   <option value="">Choose a client...</option>
                   {clients.map(client => (
@@ -379,197 +360,71 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 </select>
               </div>
 
-              {/* GPS Status */}
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '0.5rem',
-                marginBottom: '1.5rem',
-                fontSize: '0.9rem'
-              }}>
-                <span style={{
-                  width: '10px',
-                  height: '10px',
-                  borderRadius: '50%',
-                  background: location ? '#4ADE80' : '#FCD34D',
-                  boxShadow: location ? '0 0 8px #4ADE80' : 'none'
-                }} />
-                {location ? (
-                  <span>GPS Active • ±{location.accuracy.toFixed(0)}m accuracy</span>
-                ) : (
-                  <span>Waiting for GPS...</span>
-                )}
-              </div>
+              {location && (
+                <p className="text-muted">
+                  GPS Active (±{location.accuracy.toFixed(0)}m accuracy)
+                </p>
+              )}
 
-              {/* Clock In Button */}
               <button
+                className="btn btn-primary btn-block"
                 onClick={handleClockIn}
                 disabled={!selectedClient || !location}
-                style={{
-                  width: '100%',
-                  padding: '1.25rem',
-                  borderRadius: '12px',
-                  border: 'none',
-                  background: 'white',
-                  color: '#059669',
-                  fontSize: '1.25rem',
-                  fontWeight: '700',
-                  cursor: selectedClient && location ? 'pointer' : 'not-allowed',
-                  opacity: selectedClient && location ? 1 : 0.7,
-                  transition: 'transform 0.2s'
-                }}
               >
-                🟢 CLOCK IN
+                CLOCK IN
               </button>
             </>
           ) : (
             <>
-              {/* Active Session Display */}
-              <div style={{ textAlign: 'center' }}>
-                <p style={{ margin: '0 0 0.5rem 0', opacity: 0.9, fontSize: '0.9rem' }}>
-                  Currently with
-                </p>
-                <h2 style={{ margin: '0 0 1rem 0', fontSize: '1.5rem' }}>
-                  {getClientName(activeSession.client_id)}
-                </h2>
-
-                {/* Timer */}
-                <div style={{
-                  fontSize: '3rem',
-                  fontWeight: '700',
-                  fontFamily: 'monospace',
-                  margin: '1.5rem 0',
-                  letterSpacing: '2px'
-                }}>
-                  {formatElapsedTime(elapsedTime)}
-                </div>
-
-                <p style={{ margin: '0 0 1.5rem 0', opacity: 0.9, fontSize: '0.85rem' }}>
-                  Started at {new Date(activeSession.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
-
-                {/* Clock Out Button */}
-                <button
-                  onClick={handleClockOut}
-                  style={{
-                    width: '100%',
-                    padding: '1.25rem',
-                    borderRadius: '12px',
-                    border: 'none',
-                    background: 'white',
-                    color: '#DC2626',
-                    fontSize: '1.25rem',
-                    fontWeight: '700',
-                    cursor: 'pointer'
-                  }}
-                >
-                  🔴 CLOCK OUT
-                </button>
+              <p className="text-muted">Working with</p>
+              <h3>{getClientName(activeSession.client_id)}</h3>
+              
+              <div className="timer-display">
+                {formatElapsedTime(elapsedTime)}
               </div>
+
+              <p className="text-muted">
+                Started at {new Date(activeSession.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
+              </p>
+
+              <button
+                className="btn btn-danger btn-block"
+                onClick={handleClockOut}
+              >
+                CLOCK OUT
+              </button>
             </>
           )}
         </div>
 
         {/* Today's Schedule */}
-        <div className="card" style={{ marginBottom: '1.5rem' }}>
-          <h3 style={{ 
-            margin: '0 0 1rem 0', 
-            fontSize: '1.1rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
-          }}>
-            <span>📅</span> Today's Schedule
-            <span style={{
-              fontSize: '0.75rem',
-              background: '#E5E7EB',
-              padding: '0.25rem 0.5rem',
-              borderRadius: '10px',
-              marginLeft: 'auto'
-            }}>
-              {todaySchedules.length} shift{todaySchedules.length !== 1 ? 's' : ''}
-            </span>
-          </h3>
-
+        <div className="card">
+          <div className="card-title">Today's Schedule</div>
+          
           {todaySchedules.length === 0 ? (
-            <p style={{ color: '#6B7280', textAlign: 'center', padding: '1rem 0' }}>
-              No shifts scheduled for today
-            </p>
+            <p className="text-muted text-center">No shifts scheduled for today</p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {todaySchedules.map((schedule, idx) => (
-                <div 
-                  key={schedule.id || idx}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    padding: '1rem',
-                    background: '#F9FAFB',
-                    borderRadius: '10px',
-                    borderLeft: '4px solid #3B82F6'
-                  }}
-                >
-                  <div style={{ 
-                    minWidth: '70px',
-                    textAlign: 'center'
-                  }}>
-                    <div style={{ fontWeight: '700', color: '#1D4ED8' }}>
-                      {formatTime(schedule.start_time)}
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: '#6B7280' }}>
-                      {formatTime(schedule.end_time)}
-                    </div>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: '600', marginBottom: '0.25rem' }}>
-                      {getClientName(schedule.client_id)}
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: '#6B7280' }}>
-                      {calculateHours(schedule.start_time, schedule.end_time)}h
-                      {schedule.day_of_week !== null && (
-                        <span style={{
-                          marginLeft: '0.5rem',
-                          background: '#DBEAFE',
-                          color: '#1D4ED8',
-                          padding: '0.125rem 0.5rem',
-                          borderRadius: '10px',
-                          fontSize: '0.7rem'
-                        }}>
-                          Weekly
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Client</th>
+                  <th>Hours</th>
+                </tr>
+              </thead>
+              <tbody>
+                {todaySchedules.map((schedule, idx) => (
+                  <tr key={schedule.id || idx}>
+                    <td>{formatTime(schedule.start_time)} - {formatTime(schedule.end_time)}</td>
+                    <td>{getClientName(schedule.client_id)}</td>
+                    <td>{calculateHours(schedule.start_time, schedule.end_time)}h</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
-
-        {/* Quick Stats */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: '1fr 1fr',
-          gap: '1rem',
-          marginBottom: '1.5rem'
-        }}>
-          <div className="card" style={{ textAlign: 'center', padding: '1.25rem' }}>
-            <div style={{ fontSize: '2rem', fontWeight: '700', color: '#059669' }}>
-              {todaySchedules.reduce((total, s) => total + parseFloat(calculateHours(s.start_time, s.end_time)), 0).toFixed(1)}h
-            </div>
-            <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>Today's Hours</div>
-          </div>
-          <div className="card" style={{ textAlign: 'center', padding: '1.25rem' }}>
-            <div style={{ fontSize: '2rem', fontWeight: '700', color: '#3B82F6' }}>
-              {getUpcomingSchedules().reduce((total, day) => 
-                total + day.schedules.reduce((t, s) => t + parseFloat(calculateHours(s.start_time, s.end_time)), 0)
-              , 0).toFixed(1)}h
-            </div>
-            <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>This Week</div>
-          </div>
-        </div>
-      </div>
+      </>
     );
   };
 
@@ -578,215 +433,135 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     const upcoming = getUpcomingSchedules();
 
     return (
-      <div >
-        <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
-          Upcoming Schedule
-        </h2>
-
-        {upcoming.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-            <p style={{ color: '#6B7280' }}>No upcoming shifts scheduled</p>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {upcoming.map((day, idx) => (
-              <div key={idx} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                {/* Day Header */}
-                <div style={{
-                  padding: '0.75rem 1rem',
-                  background: idx === 0 ? '#DBEAFE' : '#F3F4F6',
-                  borderBottom: '1px solid #E5E7EB',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <div>
-                    <span style={{ fontWeight: '700', color: idx === 0 ? '#1D4ED8' : '#374151' }}>
-                      {idx === 0 ? 'Today' : day.date.toLocaleDateString('en-US', { weekday: 'long' })}
-                    </span>
-                    <span style={{ marginLeft: '0.5rem', fontSize: '0.85rem', color: '#6B7280' }}>
-                      {day.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-                  <span style={{ 
-                    fontSize: '0.8rem',
-                    color: idx === 0 ? '#1D4ED8' : '#6B7280'
-                  }}>
-                    {day.schedules.reduce((t, s) => t + parseFloat(calculateHours(s.start_time, s.end_time)), 0).toFixed(1)}h
-                  </span>
-                </div>
-
-                {/* Schedules */}
-                <div style={{ padding: '0.5rem' }}>
-                  {day.schedules.map((schedule, sIdx) => (
-                    <div 
-                      key={schedule.id || sIdx}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '1rem',
-                        padding: '0.75rem',
-                        borderBottom: sIdx < day.schedules.length - 1 ? '1px solid #F3F4F6' : 'none'
-                      }}
-                    >
-                      <div style={{ minWidth: '70px', textAlign: 'center' }}>
-                        <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>
-                          {formatTime(schedule.start_time)}
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>
-                          {formatTime(schedule.end_time)}
-                        </div>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: '600', marginBottom: '0.125rem' }}>
-                          {getClientName(schedule.client_id)}
-                        </div>
-                        {schedule.notes && (
-                          <div style={{ fontSize: '0.8rem', color: '#6B7280' }}>
-                            {schedule.notes}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <>
+        <div className="card">
+          <div className="card-title">Upcoming Schedule (Next 7 Days)</div>
+          
+          {upcoming.length === 0 ? (
+            <p className="text-muted text-center">No upcoming shifts scheduled</p>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Time</th>
+                  <th>Client</th>
+                  <th>Hours</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map((day, dayIdx) => 
+                  day.schedules.map((schedule, idx) => (
+                    <tr key={`${dayIdx}-${schedule.id || idx}`}>
+                      <td>
+                        {idx === 0 ? (
+                          dayIdx === 0 ? 'Today' : day.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                        ) : ''}
+                      </td>
+                      <td>{formatTime(schedule.start_time)} - {formatTime(schedule.end_time)}</td>
+                      <td>{getClientName(schedule.client_id)}</td>
+                      <td>{calculateHours(schedule.start_time, schedule.end_time)}h</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </>
     );
   };
 
   // Render History Page
   const renderHistoryPage = () => (
-    <div >
-      <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
-        Recent Visits
-      </h2>
-
+    <div className="card">
+      <div className="card-title">Recent Visits</div>
+      
       {recentVisits.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-          <p style={{ color: '#6B7280' }}>No recent visits</p>
-        </div>
+        <p className="text-muted text-center">No recent visits</p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {recentVisits.map((visit, idx) => (
-            <div key={visit.id || idx} className="card" style={{ padding: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                <span style={{ fontWeight: '600' }}>{getClientName(visit.client_id)}</span>
-                <span style={{ fontSize: '0.85rem', color: '#6B7280' }}>
-                  {formatDate(visit.start_time)}
-                </span>
-              </div>
-              <div style={{ fontSize: '0.9rem', color: '#6B7280', marginBottom: '0.5rem' }}>
-                {new Date(visit.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                {' - '}
-                {visit.end_time ? new Date(visit.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'In Progress'}
-              </div>
-              {visit.notes && (
-                <div style={{ 
-                  fontSize: '0.85rem', 
-                  color: '#4B5563',
-                  background: '#F9FAFB',
-                  padding: '0.75rem',
-                  borderRadius: '8px',
-                  marginTop: '0.5rem'
-                }}>
-                  {visit.notes}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Client</th>
+              <th>Time</th>
+              <th>Hours</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recentVisits.map((visit, idx) => (
+              <tr key={visit.id || idx}>
+                <td>{formatDate(visit.start_time)}</td>
+                <td>{visit.client_name || getClientName(visit.client_id)}</td>
+                <td>
+                  {new Date(visit.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
+                  {visit.end_time && ` - ${new Date(visit.end_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}`}
+                </td>
+                <td>{visit.hours_worked ? `${parseFloat(visit.hours_worked).toFixed(1)}h` : '-'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
 
   // Render Settings Page
   const renderSettingsPage = () => (
-    <div >
-      <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem' }}>
-        Settings
-      </h2>
+    <>
+      <div className="card">
+        <div className="card-title">Profile</div>
+        <div className="form-group">
+          <label>Name</label>
+          <input type="text" value={user.name || `${user.first_name} ${user.last_name}`} disabled />
+        </div>
+        <div className="form-group">
+          <label>Email</label>
+          <input type="text" value={user.email} disabled />
+        </div>
+      </div>
 
       <div className="card">
-        <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem' }}>Profile</h3>
-        <div style={{ marginBottom: '1rem' }}>
-          <div style={{ fontWeight: '600' }}>{user.name || `${user.first_name} ${user.last_name}`}</div>
-          <div style={{ fontSize: '0.9rem', color: '#6B7280' }}>{user.email}</div>
+        <div className="card-title">GPS Status</div>
+        <div className={`alert ${location ? 'alert-success' : 'alert-error'}`}>
+          {location ? (
+            <>
+              <strong>GPS Active</strong><br />
+              Accuracy: ±{location.accuracy.toFixed(0)} meters
+            </>
+          ) : (
+            <>
+              <strong>GPS Not Available</strong><br />
+              {locationError || 'Please enable location services'}
+            </>
+          )}
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: '1rem' }}>
-        <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem' }}>GPS Status</h3>
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '0.75rem',
-          padding: '1rem',
-          background: location ? '#D1FAE5' : '#FEE2E2',
-          borderRadius: '8px'
-        }}>
-          <span style={{
-            width: '12px',
-            height: '12px',
-            borderRadius: '50%',
-            background: location ? '#059669' : '#DC2626'
-          }} />
-          <div>
-            <div style={{ fontWeight: '600', color: location ? '#059669' : '#DC2626' }}>
-              {location ? 'GPS Active' : 'GPS Not Available'}
-            </div>
-            {location && (
-              <div style={{ fontSize: '0.8rem', color: '#6B7280' }}>
-                Accuracy: ±{location.accuracy.toFixed(0)}m
-              </div>
-            )}
-            {locationError && (
-              <div style={{ fontSize: '0.8rem', color: '#DC2626' }}>
-                {locationError}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <button 
-        onClick={onLogout}
-        className="btn btn-danger"
-        style={{ width: '100%', marginTop: '2rem' }}
-      >
+      <button className="btn btn-danger btn-block" onClick={onLogout}>
         Log Out
       </button>
-    </div>
+    </>
   );
 
   if (loading) {
     return (
-      <div style={{ 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center', 
-        height: '100vh',
-        background: '#F3F4F6'
-      }}>
-        <div className="spinner" />
+      <div className="loading">
+        <div className="spinner"></div>
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
-      {/* Overlay for mobile sidebar */}
-      {sidebarOpen && (
+    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+      {sidebarOpen && window.innerWidth <= 768 && (
         <div
           className="sidebar-overlay active"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      {/* Sidebar */}
       <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-logo">
           CVHC CRM
@@ -796,7 +571,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <a
               href="#home"
               className={currentPage === 'home' ? 'active' : ''}
-              onClick={(e) => { e.preventDefault(); setCurrentPage('home'); }}
+              onClick={() => handlePageClick('home')}
             >
               Home
             </a>
@@ -805,7 +580,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <a
               href="#schedule"
               className={currentPage === 'schedule' ? 'active' : ''}
-              onClick={(e) => { e.preventDefault(); setCurrentPage('schedule'); }}
+              onClick={() => handlePageClick('schedule')}
             >
               My Schedule
             </a>
@@ -814,7 +589,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <a
               href="#history"
               className={currentPage === 'history' ? 'active' : ''}
-              onClick={(e) => { e.preventDefault(); setCurrentPage('history'); }}
+              onClick={() => handlePageClick('history')}
             >
               Visit History
             </a>
@@ -823,7 +598,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <a
               href="#settings"
               className={currentPage === 'settings' ? 'active' : ''}
-              onClick={(e) => { e.preventDefault(); setCurrentPage('settings'); }}
+              onClick={() => handlePageClick('settings')}
             >
               Settings
             </a>
@@ -831,7 +606,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </ul>
 
         <div className="sidebar-user">
-          <div className="sidebar-user-name">{user.name || `${user.first_name} ${user.last_name}`}</div>
+          <div className="sidebar-user-name">{user.name || `${user.first_name || ''} ${user.last_name || ''}`}</div>
           <div className="sidebar-user-role">Caregiver</div>
           <button className="btn-logout" onClick={onLogout}>
             Logout
@@ -839,7 +614,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="main-content">
         <div className="header">
           <div>
@@ -849,6 +623,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           <button
             className="hamburger-btn"
             onClick={() => setSidebarOpen(!sidebarOpen)}
+            title="Menu"
           >
             Menu
           </button>
@@ -864,61 +639,30 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
       {/* Visit Note Modal */}
       {showNoteModal && (
-        <div 
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 2000,
-            padding: '1rem'
-          }}
-        >
-          <div style={{
-            background: 'white',
-            borderRadius: '16px',
-            padding: '1.5rem',
-            width: '100%',
-            maxWidth: '400px'
-          }}>
-            <h3 style={{ margin: '0 0 1rem 0' }}>Visit Notes</h3>
-            <p style={{ color: '#6B7280', fontSize: '0.9rem', marginBottom: '1rem' }}>
-              Add any notes about this visit (optional)
-            </p>
-            <textarea
-              value={visitNote}
-              onChange={(e) => setVisitNote(e.target.value)}
-              placeholder="How did the visit go? Any concerns or updates?"
-              rows={4}
-              style={{
-                width: '100%',
-                padding: '0.75rem',
-                borderRadius: '8px',
-                border: '2px solid #E5E7EB',
-                fontSize: '1rem',
-                resize: 'vertical',
-                marginBottom: '1rem'
-              }}
-            />
-            <div style={{ display: 'flex', gap: '0.75rem' }}>
-              <button
-                onClick={() => setShowNoteModal(false)}
-                className="btn btn-secondary"
-                style={{ flex: 1 }}
-              >
+        <div className="modal active">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h2>Visit Notes</h2>
+              <button className="close-btn" onClick={() => setShowNoteModal(false)}>×</button>
+            </div>
+            
+            <p className="text-muted">Add any notes about this visit (optional)</p>
+            
+            <div className="form-group">
+              <textarea
+                value={visitNote}
+                onChange={(e) => setVisitNote(e.target.value)}
+                placeholder="How did the visit go? Any concerns or updates?"
+                rows={4}
+              />
+            </div>
+
+            <div className="form-actions">
+              <button className="btn btn-secondary" onClick={() => setShowNoteModal(false)}>
                 Cancel
               </button>
-              <button
-                onClick={completeClockOut}
-                className="btn btn-primary"
-                style={{ flex: 1 }}
-              >
-                Clock Out
+              <button className="btn btn-primary" onClick={completeClockOut}>
+                Complete Clock Out
               </button>
             </div>
           </div>
