@@ -576,14 +576,6 @@ body {
     border-right: 1px solid #eee;
 }
 
-.calendar-day-name .day-short {
-    display: none;
-}
-
-.calendar-day-name .day-full {
-    display: inline;
-}
-
 .calendar-day-name:last-child {
     border-right: none;
 }
@@ -744,20 +736,286 @@ body {
     color: var(--color-teal);
     text-align: center;
     margin: 1.5rem 0;
+    letter-spacing: 2px;
 }
 
-/* Calendar Navigation */
-.calendar-nav {
+/* Clock In/Out Hero Card */
+.clock-card {
+    border-radius: 16px;
+    padding: 2rem;
+    color: white;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+
+.clock-card.ready {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+}
+
+.clock-card.active {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+}
+
+.clock-card h2 {
+    margin: 0 0 1.5rem 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.clock-card .form-group label {
+    color: rgba(255,255,255,0.9);
+}
+
+.clock-card select {
+    width: 100%;
+    padding: 1rem;
+    border-radius: 10px;
+    border: none;
+    font-size: 1rem;
+    background: rgba(255,255,255,0.95);
+    color: #1F2937;
+}
+
+.clock-card .gps-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+    opacity: 0.9;
+}
+
+.clock-card .gps-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #4ADE80;
+    box-shadow: 0 0 8px #4ADE80;
+}
+
+.clock-card .gps-dot.inactive {
+    background: #FCD34D;
+    box-shadow: 0 0 8px #FCD34D;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.clock-card .clock-btn {
+    width: 100%;
+    padding: 1.25rem;
+    border-radius: 12px;
+    border: none;
+    background: white;
+    font-size: 1.25rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.clock-card .clock-btn:hover {
+    transform: scale(1.02);
+}
+
+.clock-card .clock-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.clock-card .clock-btn.clock-in {
+    color: #059669;
+}
+
+.clock-card .clock-btn.clock-out {
+    color: #DC2626;
+}
+
+.clock-card .timer-display {
+    font-size: 3rem;
+    color: white;
+    margin: 1.5rem 0;
+}
+
+.clock-card .active-info {
+    text-align: center;
+}
+
+.clock-card .active-info p {
+    margin: 0;
+    opacity: 0.9;
+}
+
+.clock-card .active-info h2 {
+    margin: 0.5rem 0 1rem 0;
+}
+
+/* Schedule Item Styles */
+.schedule-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.schedule-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+}
+
+.schedule-count {
+    font-size: 0.75rem;
+    background: #E5E7EB;
+    padding: 0.25rem 0.5rem;
+    border-radius: 10px;
+    color: #374151;
+}
+
+.schedule-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.schedule-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: #F9FAFB;
+    border-radius: 10px;
+    border-left: 4px solid #3B82F6;
+}
+
+.schedule-time {
+    min-width: 70px;
+    text-align: center;
+}
+
+.schedule-time-start {
+    font-weight: 700;
+    color: #1D4ED8;
+}
+
+.schedule-time-end {
+    font-size: 0.8rem;
+    color: #6B7280;
+}
+
+.schedule-details {
+    flex: 1;
+}
+
+.schedule-client {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.schedule-meta {
+    font-size: 0.8rem;
+    color: #6B7280;
+}
+
+.badge-weekly {
+    display: inline-block;
+    margin-left: 0.5rem;
+    background: #DBEAFE;
+    color: #1D4ED8;
+    padding: 0.125rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.7rem;
+}
+
+/* Quick Stats Grid */
+.stats-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.stat-value-large {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.stat-value-green {
+    color: #059669;
+}
+
+.stat-value-blue {
+    color: #3B82F6;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    color: #6B7280;
+}
+
+/* Schedule Day Card */
+.schedule-day-card {
+    overflow: hidden;
+    padding: 0;
+}
+
+.schedule-day-header {
+    padding: 0.75rem 1rem;
+    background: #F3F4F6;
+    border-bottom: 1px solid #E5E7EB;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
-    padding: 0 0.5rem;
 }
 
-.calendar-nav h3 {
-    margin: 0;
-    font-size: 1.25rem;
+.schedule-day-header.today {
+    background: #DBEAFE;
+}
+
+.schedule-day-name {
+    font-weight: 700;
+    color: #374151;
+}
+
+.schedule-day-header.today .schedule-day-name {
+    color: #1D4ED8;
+}
+
+.schedule-day-date {
+    margin-left: 0.5rem;
+    font-size: 0.85rem;
+    color: #6B7280;
+}
+
+.schedule-day-hours {
+    font-size: 0.8rem;
+    color: #6B7280;
+}
+
+.schedule-day-header.today .schedule-day-hours {
+    color: #1D4ED8;
+}
+
+.schedule-day-list {
+    padding: 0.5rem;
+}
+
+.schedule-day-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid #F3F4F6;
+}
+
+.schedule-day-item:last-child {
+    border-bottom: none;
 }
 
 /* Responsive */
@@ -845,65 +1103,23 @@ body {
         white-space: nowrap;
     }
 
-    /* Calendar on mobile - fit all 7 days */
-    .calendar-container {
-        margin: 0 -0.5rem;
-        border-radius: 0;
-        border-left: none;
-        border-right: none;
-    }
-
-    .calendar-day-name {
-        padding: 0.5rem 0.25rem;
-        font-size: 0.7rem;
-    }
-
-    .calendar-day-name .day-short {
-        display: inline;
-    }
-
-    .calendar-day-name .day-full {
-        display: none;
-    }
-
+    /* Calendar on mobile */
     .calendar-grid {
-        min-height: auto;
+        min-height: 300px;
     }
 
     .calendar-cell {
-        min-height: 50px;
+        min-height: 60px;
         padding: 0.25rem;
     }
 
     .calendar-day-number {
+        font-size: 0.9rem;
+    }
+
+    .calendar-day-name {
+        padding: 0.5rem;
         font-size: 0.8rem;
-        margin-bottom: 0.25rem;
-    }
-
-    .schedule-preview {
-        font-size: 0.6rem;
-        padding: 1px 2px;
-        margin-bottom: 1px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .schedule-more {
-        font-size: 0.6rem;
-    }
-
-    .calendar-nav {
-        flex-wrap: wrap;
-        gap: 0.5rem;
-    }
-
-    .calendar-nav h3 {
-        width: 100%;
-        text-align: center;
-        order: -1;
-        margin-bottom: 0.5rem;
-        font-size: 1.1rem;
     }
 
     /* Modals full width on mobile */
@@ -965,25 +1181,6 @@ body {
     }
 
     .calendar-cell {
-        min-height: 45px;
-        padding: 2px;
-    }
-
-    .calendar-day-number {
-        font-size: 0.75rem;
-    }
-
-    .schedule-preview {
-        display: none;
-    }
-
-    .calendar-cell.has-schedules::after {
-        content: '';
-        display: block;
-        width: 6px;
-        height: 6px;
-        background: var(--color-teal);
-        border-radius: 50%;
-        margin: 2px auto 0;
+        min-height: 50px;
     }
 }
