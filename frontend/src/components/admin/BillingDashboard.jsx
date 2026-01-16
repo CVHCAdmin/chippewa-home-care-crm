@@ -82,8 +82,10 @@ const BillingDashboard = ({ token }) => {
     notes: ''
   });
 
+  const [detailedMode, setDetailedMode] = useState(true); // Default to detailed (best practice)
+  
   const [manualLineItems, setManualLineItems] = useState([
-    { caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }
+    { caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '', serviceDate: '', startTime: '', endTime: '' }
   ]);
 
   useEffect(() => {
@@ -166,12 +168,22 @@ const BillingDashboard = ({ token }) => {
       return;
     }
 
+    // In detailed mode, require date for each line item
+    if (detailedMode) {
+      const missingDates = validLineItems.some(item => !item.serviceDate);
+      if (missingDates) {
+        alert('Please enter a date for each line item in detailed mode');
+        return;
+      }
+    }
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/invoices/manual`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           ...manualFormData,
+          detailedMode,
           lineItems: validLineItems
         })
       });
@@ -181,7 +193,7 @@ const BillingDashboard = ({ token }) => {
       }
       const invoice = await response.json();
       setManualFormData({ clientId: '', billingPeriodStart: '', billingPeriodEnd: '', notes: '' });
-      setManualLineItems([{ caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }]);
+      setManualLineItems([{ caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '', serviceDate: '', startTime: '', endTime: '' }]);
       setShowManualForm(false);
       loadData();
       setSelectedInvoice(invoice);
@@ -194,7 +206,7 @@ const BillingDashboard = ({ token }) => {
   };
 
   const addManualLineItem = () => {
-    setManualLineItems([...manualLineItems, { caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }]);
+    setManualLineItems([...manualLineItems, { caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '', serviceDate: '', startTime: '', endTime: '' }]);
   };
 
   const removeManualLineItem = (index) => {
@@ -555,84 +567,150 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               </div>
             </div>
             
-            <h4 style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>Line Items</h4>
-            <table className="table" style={{ marginBottom: '1rem' }}>
-              <thead>
-                <tr>
-                  <th>Caregiver</th>
-                  <th>Description</th>
-                  <th>Hours</th>
-                  <th>Rate</th>
-                  <th>Amount</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {manualLineItems.map((item, index) => (
-                  <tr key={index}>
-                    <td>
-                      <select 
-                        value={item.caregiverId} 
-                        onChange={(e) => updateManualLineItem(index, 'caregiverId', e.target.value)}
-                        style={{ minWidth: '150px' }}
-                      >
-                        <option value="">Select caregiver...</option>
-                        {caregivers.map(cg => (
-                          <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <input 
-                        type="text" 
-                        value={item.description} 
-                        onChange={(e) => updateManualLineItem(index, 'description', e.target.value)}
-                        placeholder="Description"
-                        style={{ minWidth: '150px' }}
-                      />
-                    </td>
-                    <td>
-                      <input 
-                        type="number" 
-                        step="0.25" 
-                        min="0" 
-                        value={item.hours} 
-                        onChange={(e) => updateManualLineItem(index, 'hours', e.target.value)}
-                        placeholder="0.00"
-                        style={{ width: '80px' }}
-                        required
-                      />
-                    </td>
-                    <td>
-                      <input 
-                        type="number" 
-                        step="0.01" 
-                        min="0" 
-                        value={item.rate} 
-                        onChange={(e) => updateManualLineItem(index, 'rate', e.target.value)}
-                        placeholder="0.00"
-                        style={{ width: '80px' }}
-                        required
-                      />
-                    </td>
-                    <td>
-                      <strong>{formatCurrency((parseFloat(item.hours) || 0) * (parseFloat(item.rate) || 0))}</strong>
-                    </td>
-                    <td>
-                      {manualLineItems.length > 1 && (
-                        <button type="button" className="btn btn-sm btn-danger" onClick={() => removeManualLineItem(index)}>✕</button>
-                      )}
-                    </td>
+            {/* Mode Toggle */}
+            <div style={{ 
+              display: 'flex', 
+              gap: '1rem', 
+              alignItems: 'center', 
+              marginTop: '1.5rem', 
+              marginBottom: '1rem',
+              padding: '0.75rem',
+              background: '#f8f9fa',
+              borderRadius: '8px'
+            }}>
+              <label style={{ fontWeight: '600', margin: 0 }}>Invoice Format:</label>
+              <button 
+                type="button" 
+                className={`btn ${!detailedMode ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setDetailedMode(false)}
+                style={{ padding: '0.4rem 1rem' }}
+              >
+                Summary (Total Hours)
+              </button>
+              <button 
+                type="button" 
+                className={`btn ${detailedMode ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setDetailedMode(true)}
+                style={{ padding: '0.4rem 1rem' }}
+              >
+                Detailed (Daily Breakdown) ✓ Recommended
+              </button>
+            </div>
+            
+            <h4 style={{ marginTop: '1rem', marginBottom: '1rem' }}>Line Items</h4>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table" style={{ marginBottom: '1rem', minWidth: detailedMode ? '900px' : '600px' }}>
+                <thead>
+                  <tr>
+                    {detailedMode && <th style={{ width: '120px' }}>Date *</th>}
+                    <th>Caregiver</th>
+                    <th>Description</th>
+                    {detailedMode && <th style={{ width: '100px' }}>Start Time</th>}
+                    {detailedMode && <th style={{ width: '100px' }}>End Time</th>}
+                    <th style={{ width: '80px' }}>Hours *</th>
+                    <th style={{ width: '80px' }}>Rate *</th>
+                    <th style={{ width: '100px' }}>Amount</th>
+                    <th style={{ width: '40px' }}></th>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan="4" style={{ textAlign: 'right' }}><strong>Total:</strong></td>
-                  <td colSpan="2"><strong style={{ fontSize: '1.2rem' }}>{formatCurrency(calculateManualTotal())}</strong></td>
-                </tr>
-              </tfoot>
-            </table>
+                </thead>
+                <tbody>
+                  {manualLineItems.map((item, index) => (
+                    <tr key={index}>
+                      {detailedMode && (
+                        <td>
+                          <input 
+                            type="date" 
+                            value={item.serviceDate} 
+                            onChange={(e) => updateManualLineItem(index, 'serviceDate', e.target.value)}
+                            style={{ width: '100%' }}
+                            required={detailedMode}
+                          />
+                        </td>
+                      )}
+                      <td>
+                        <select 
+                          value={item.caregiverId} 
+                          onChange={(e) => updateManualLineItem(index, 'caregiverId', e.target.value)}
+                          style={{ minWidth: '130px' }}
+                        >
+                          <option value="">Select...</option>
+                          {caregivers.map(cg => (
+                            <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <input 
+                          type="text" 
+                          value={item.description} 
+                          onChange={(e) => updateManualLineItem(index, 'description', e.target.value)}
+                          placeholder="Home Care Services"
+                          style={{ minWidth: '120px' }}
+                        />
+                      </td>
+                      {detailedMode && (
+                        <td>
+                          <input 
+                            type="time" 
+                            value={item.startTime} 
+                            onChange={(e) => updateManualLineItem(index, 'startTime', e.target.value)}
+                            style={{ width: '100%' }}
+                          />
+                        </td>
+                      )}
+                      {detailedMode && (
+                        <td>
+                          <input 
+                            type="time" 
+                            value={item.endTime} 
+                            onChange={(e) => updateManualLineItem(index, 'endTime', e.target.value)}
+                            style={{ width: '100%' }}
+                          />
+                        </td>
+                      )}
+                      <td>
+                        <input 
+                          type="number" 
+                          step="0.25" 
+                          min="0" 
+                          value={item.hours} 
+                          onChange={(e) => updateManualLineItem(index, 'hours', e.target.value)}
+                          placeholder="0.00"
+                          style={{ width: '70px' }}
+                          required
+                        />
+                      </td>
+                      <td>
+                        <input 
+                          type="number" 
+                          step="0.01" 
+                          min="0" 
+                          value={item.rate} 
+                          onChange={(e) => updateManualLineItem(index, 'rate', e.target.value)}
+                          placeholder="0.00"
+                          style={{ width: '70px' }}
+                          required
+                        />
+                      </td>
+                      <td>
+                        <strong>{formatCurrency((parseFloat(item.hours) || 0) * (parseFloat(item.rate) || 0))}</strong>
+                      </td>
+                      <td>
+                        {manualLineItems.length > 1 && (
+                          <button type="button" className="btn btn-sm btn-danger" onClick={() => removeManualLineItem(index)}>✕</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={detailedMode ? 7 : 4} style={{ textAlign: 'right' }}><strong>Total:</strong></td>
+                    <td colSpan="2"><strong style={{ fontSize: '1.2rem' }}>{formatCurrency(calculateManualTotal())}</strong></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
             
             <button type="button" className="btn btn-secondary" onClick={addManualLineItem} style={{ marginBottom: '1rem' }}>
               + Add Line Item
@@ -650,7 +728,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             
             <div className="form-actions">
               <button type="submit" className="btn btn-primary">Create Invoice</button>
-              <button type="button" className="btn btn-secondary" onClick={() => { setShowManualForm(false); setManualLineItems([{ caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }]); }}>Cancel</button>
+              <button type="button" className="btn btn-secondary" onClick={() => { setShowManualForm(false); setManualLineItems([{ caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '', serviceDate: '', startTime: '', endTime: '' }]); }}>Cancel</button>
             </div>
           </form>
         </div>

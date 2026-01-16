@@ -75,6 +75,13 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     const amount = rateType === 'hourly' ? hours * rate : rate;
     invoiceTotal += amount;
 
+    // Format times for display
+    const startTime = new Date(entry.start_time);
+    const endTime = entry.end_time ? new Date(entry.end_time) : null;
+    const timeRange = endTime 
+      ? `${startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
+      : '';
+
     lineItems.push({
       time_entry_id: entry.time_entry_id,
       caregiver_id: entry.caregiver_id,
@@ -83,6 +90,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       service_date: entry.service_date,
       start_time: entry.start_time,
       end_time: entry.end_time,
+      time_range: timeRange,
       description: entry.notes || 'Home Care Services',
       hours: hours,
       rate: rate,
@@ -101,8 +109,8 @@ async function insertLineItems(invoiceId, lineItems) {
   for (const item of lineItems) {
     await db.query(`
       INSERT INTO invoice_line_items (
-        invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount, service_date
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `, [
       invoiceId,
       item.time_entry_id,
@@ -110,7 +118,8 @@ async function insertLineItems(invoiceId, lineItems) {
       item.description,
       item.hours,
       item.rate,
-      item.amount
+      item.amount,
+      item.service_date || null
     ]);
   }
 }
@@ -300,7 +309,7 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
 
 // Create manual invoice with custom line items
 router.post('/invoices/manual', auth, async (req, res) => {
-  const { clientId, billingPeriodStart, billingPeriodEnd, notes, lineItems } = req.body;
+  const { clientId, billingPeriodStart, billingPeriodEnd, notes, lineItems, detailedMode } = req.body;
 
   if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
     return res.status(400).json({ error: 'Client and billing period are required' });
@@ -370,29 +379,37 @@ router.post('/invoices/manual', auth, async (req, res) => {
 
     const invoice = invoiceResult.rows[0];
 
-    // Insert line items
+    // Insert line items with optional service_date and times
     const insertedLineItems = [];
     for (const item of lineItems) {
       const amount = parseFloat(item.hours || 0) * parseFloat(item.rate || 0);
       
+      // Build description with time info if provided
+      let description = item.description || 'Home Care Services';
+      if (detailedMode && item.startTime && item.endTime) {
+        description = `${description} (${item.startTime} - ${item.endTime})`;
+      }
+      
       await db.query(`
         INSERT INTO invoice_line_items (
-          invoice_id, caregiver_id, description, hours, rate, amount
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+          invoice_id, caregiver_id, description, hours, rate, amount, service_date
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
       `, [
         invoice.id,
         item.caregiverId || null,
-        item.description || 'Home Care Services',
+        description,
         item.hours,
         item.rate,
-        amount
+        amount,
+        item.serviceDate || null
       ]);
 
       insertedLineItems.push({
         caregiver_id: item.caregiverId,
         caregiver_first_name: item.caregiverName?.split(' ')[0] || '',
         caregiver_last_name: item.caregiverName?.split(' ').slice(1).join(' ') || '',
-        description: item.description || 'Home Care Services',
+        description: description,
+        service_date: item.serviceDate,
         hours: item.hours,
         rate: item.rate,
         amount: amount
