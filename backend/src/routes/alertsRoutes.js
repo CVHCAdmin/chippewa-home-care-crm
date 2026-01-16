@@ -16,7 +16,7 @@ router.get('/', auth, async (req, res) => {
       SELECT a.*,
         CASE 
           WHEN a.related_entity_type = 'client' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM clients WHERE id = a.related_entity_id)
-          WHEN a.related_entity_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM caregiver_profiles WHERE id = a.related_entity_id)
+          WHEN a.related_entity_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = a.related_entity_id)
           ELSE NULL
         END as related_entity_name
       FROM alerts a
@@ -119,10 +119,10 @@ router.get('/certifications', auth, async (req, res) => {
   try {
     let query = `
       SELECT ca.*, 
-        cp.first_name, cp.last_name, cp.phone, cp.email,
+        u.first_name, u.last_name, u.phone, u.email,
         cc.certification_type, cc.expiration_date
       FROM certification_alerts ca
-      JOIN caregiver_profiles cp ON ca.caregiver_id = cp.id
+      JOIN users u ON ca.caregiver_id = u.id
       JOIN caregiver_certifications cc ON ca.certification_id = cc.id
       WHERE 1=1
     `;
@@ -167,9 +167,9 @@ router.post('/certifications/generate', auth, async (req, res) => {
           WHEN cc.expiration_date <= CURRENT_DATE + 30 THEN 'expiring_30'
         END as alert_type
       FROM caregiver_certifications cc
-      JOIN caregiver_profiles cp ON cc.caregiver_id = cp.id
+      JOIN users u ON cc.caregiver_id = u.id
       WHERE cc.expiration_date <= CURRENT_DATE + 30
-      AND cp.status = 'active'
+      AND u.is_active = true
       AND NOT EXISTS (
         SELECT 1 FROM certification_alerts ca 
         WHERE ca.certification_id = cc.id 
