@@ -3,6 +3,25 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 
+// Generate time options in 15-minute increments
+const generateTimeOptions = () => {
+  const options = [];
+  for (let hour = 0; hour < 24; hour++) {
+    for (let min = 0; min < 60; min += 15) {
+      const h = hour.toString().padStart(2, '0');
+      const m = min.toString().padStart(2, '0');
+      const value = `${h}:${m}`;
+      const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+      const ampm = hour < 12 ? 'AM' : 'PM';
+      const label = `${displayHour}:${m.padStart(2, '0')} ${ampm}`;
+      options.push({ value, label });
+    }
+  }
+  return options;
+};
+
+const TIME_OPTIONS = generateTimeOptions();
+
 const BillingDashboard = ({ token }) => {
   const [activeTab, setActiveTab] = useState('invoices');
   const [invoices, setInvoices] = useState([]);
@@ -677,21 +696,27 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     <>
                       <div className="form-group" style={{ margin: 0 }}>
                         <label style={{ fontSize: '0.8rem' }}>Start Time</label>
-                        <input 
-                          type="time" 
-                          step="900"
+                        <select 
                           value={item.startTime} 
                           onChange={(e) => updateManualLineItem(index, 'startTime', e.target.value)}
-                        />
+                        >
+                          <option value="">Select...</option>
+                          {TIME_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
                         <label style={{ fontSize: '0.8rem' }}>End Time</label>
-                        <input 
-                          type="time" 
-                          step="900"
+                        <select 
                           value={item.endTime} 
                           onChange={(e) => updateManualLineItem(index, 'endTime', e.target.value)}
-                        />
+                        >
+                          <option value="">Select...</option>
+                          {TIME_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
                       </div>
                     </>
                   )}
