@@ -570,151 +570,161 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             {/* Mode Toggle */}
             <div style={{ 
               display: 'flex', 
-              gap: '1rem', 
+              gap: '0.5rem', 
               alignItems: 'center', 
               marginTop: '1.5rem', 
               marginBottom: '1rem',
               padding: '0.75rem',
               background: '#f8f9fa',
-              borderRadius: '8px'
+              borderRadius: '8px',
+              flexWrap: 'wrap'
             }}>
-              <label style={{ fontWeight: '600', margin: 0 }}>Invoice Format:</label>
+              <label style={{ fontWeight: '600', margin: 0, marginRight: '0.5rem' }}>Format:</label>
               <button 
                 type="button" 
-                className={`btn ${!detailedMode ? 'btn-primary' : 'btn-secondary'}`}
+                className={`btn btn-sm ${!detailedMode ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => setDetailedMode(false)}
-                style={{ padding: '0.4rem 1rem' }}
               >
-                Summary (Total Hours)
+                Summary
               </button>
               <button 
                 type="button" 
-                className={`btn ${detailedMode ? 'btn-primary' : 'btn-secondary'}`}
+                className={`btn btn-sm ${detailedMode ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => setDetailedMode(true)}
-                style={{ padding: '0.4rem 1rem' }}
               >
-                Detailed (Daily Breakdown) ✓ Recommended
+                Detailed ✓
               </button>
             </div>
             
             <h4 style={{ marginTop: '1rem', marginBottom: '1rem' }}>Line Items</h4>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="table" style={{ marginBottom: '1rem', minWidth: detailedMode ? '900px' : '600px' }}>
-                <thead>
-                  <tr>
-                    {detailedMode && <th style={{ width: '120px' }}>Date *</th>}
-                    <th>Caregiver</th>
-                    <th>Description</th>
-                    {detailedMode && <th style={{ width: '100px' }}>Start Time</th>}
-                    {detailedMode && <th style={{ width: '100px' }}>End Time</th>}
-                    <th style={{ width: '80px' }}>Hours *</th>
-                    <th style={{ width: '80px' }}>Rate *</th>
-                    <th style={{ width: '100px' }}>Amount</th>
-                    <th style={{ width: '40px' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {manualLineItems.map((item, index) => (
-                    <tr key={index}>
-                      {detailedMode && (
-                        <td>
-                          <input 
-                            type="date" 
-                            value={item.serviceDate} 
-                            onChange={(e) => updateManualLineItem(index, 'serviceDate', e.target.value)}
-                            style={{ width: '100%' }}
-                            required={detailedMode}
-                          />
-                        </td>
-                      )}
-                      <td>
-                        <select 
-                          value={item.caregiverId} 
-                          onChange={(e) => updateManualLineItem(index, 'caregiverId', e.target.value)}
-                          style={{ minWidth: '130px' }}
-                        >
-                          <option value="">Select...</option>
-                          {caregivers.map(cg => (
-                            <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <input 
-                          type="text" 
-                          value={item.description} 
-                          onChange={(e) => updateManualLineItem(index, 'description', e.target.value)}
-                          placeholder="Home Care Services"
-                          style={{ minWidth: '120px' }}
-                        />
-                      </td>
-                      {detailedMode && (
-                        <td>
-                          <input 
-                            type="time" 
-                            value={item.startTime} 
-                            onChange={(e) => updateManualLineItem(index, 'startTime', e.target.value)}
-                            style={{ width: '100%' }}
-                          />
-                        </td>
-                      )}
-                      {detailedMode && (
-                        <td>
-                          <input 
-                            type="time" 
-                            value={item.endTime} 
-                            onChange={(e) => updateManualLineItem(index, 'endTime', e.target.value)}
-                            style={{ width: '100%' }}
-                          />
-                        </td>
-                      )}
-                      <td>
-                        <input 
-                          type="number" 
-                          step="0.25" 
-                          min="0" 
-                          value={item.hours} 
-                          onChange={(e) => updateManualLineItem(index, 'hours', e.target.value)}
-                          placeholder="0.00"
-                          style={{ width: '70px' }}
-                          required
-                        />
-                      </td>
-                      <td>
-                        <input 
-                          type="number" 
-                          step="0.01" 
-                          min="0" 
-                          value={item.rate} 
-                          onChange={(e) => updateManualLineItem(index, 'rate', e.target.value)}
-                          placeholder="0.00"
-                          style={{ width: '70px' }}
-                          required
-                        />
-                      </td>
-                      <td>
-                        <strong>{formatCurrency((parseFloat(item.hours) || 0) * (parseFloat(item.rate) || 0))}</strong>
-                      </td>
-                      <td>
-                        {manualLineItems.length > 1 && (
-                          <button type="button" className="btn btn-sm btn-danger" onClick={() => removeManualLineItem(index)}>✕</button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={detailedMode ? 7 : 4} style={{ textAlign: 'right' }}><strong>Total:</strong></td>
-                    <td colSpan="2"><strong style={{ fontSize: '1.2rem' }}>{formatCurrency(calculateManualTotal())}</strong></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
             
-            <button type="button" className="btn btn-secondary" onClick={addManualLineItem} style={{ marginBottom: '1rem' }}>
-              + Add Line Item
-            </button>
+            {/* Card-based line items for better responsiveness */}
+            {manualLineItems.map((item, index) => (
+              <div key={index} style={{ 
+                border: '1px solid #ddd', 
+                borderRadius: '8px', 
+                padding: '1rem', 
+                marginBottom: '0.75rem',
+                background: '#fafafa'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <strong style={{ color: '#666' }}>Line Item {index + 1}</strong>
+                  {manualLineItems.length > 1 && (
+                    <button type="button" className="btn btn-sm btn-danger" onClick={() => removeManualLineItem(index)}>✕ Remove</button>
+                  )}
+                </div>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
+                  {detailedMode && (
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label style={{ fontSize: '0.8rem' }}>Date *</label>
+                      <input 
+                        type="date" 
+                        value={item.serviceDate} 
+                        onChange={(e) => updateManualLineItem(index, 'serviceDate', e.target.value)}
+                        required={detailedMode}
+                      />
+                    </div>
+                  )}
+                  
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.8rem' }}>Caregiver</label>
+                    <select 
+                      value={item.caregiverId} 
+                      onChange={(e) => updateManualLineItem(index, 'caregiverId', e.target.value)}
+                    >
+                      <option value="">Select...</option>
+                      {caregivers.map(cg => (
+                        <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div className="form-group" style={{ margin: 0, gridColumn: detailedMode ? 'span 1' : 'span 2' }}>
+                    <label style={{ fontSize: '0.8rem' }}>Description</label>
+                    <input 
+                      type="text" 
+                      value={item.description} 
+                      onChange={(e) => updateManualLineItem(index, 'description', e.target.value)}
+                      placeholder="Home Care Services"
+                    />
+                  </div>
+                  
+                  {detailedMode && (
+                    <>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label style={{ fontSize: '0.8rem' }}>Start Time</label>
+                        <input 
+                          type="time" 
+                          value={item.startTime} 
+                          onChange={(e) => updateManualLineItem(index, 'startTime', e.target.value)}
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label style={{ fontSize: '0.8rem' }}>End Time</label>
+                        <input 
+                          type="time" 
+                          value={item.endTime} 
+                          onChange={(e) => updateManualLineItem(index, 'endTime', e.target.value)}
+                        />
+                      </div>
+                    </>
+                  )}
+                  
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.8rem' }}>Hours *</label>
+                    <input 
+                      type="number" 
+                      step="0.25" 
+                      min="0" 
+                      value={item.hours} 
+                      onChange={(e) => updateManualLineItem(index, 'hours', e.target.value)}
+                      placeholder="0.00"
+                      required
+                    />
+                  </div>
+                  
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.8rem' }}>Rate *</label>
+                    <input 
+                      type="number" 
+                      step="0.01" 
+                      min="0" 
+                      value={item.rate} 
+                      onChange={(e) => updateManualLineItem(index, 'rate', e.target.value)}
+                      placeholder="0.00"
+                      required
+                    />
+                  </div>
+                  
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.8rem' }}>Amount</label>
+                    <div style={{ padding: '0.6rem', background: '#e8f5e9', borderRadius: '6px', fontWeight: '600', color: '#2e7d32' }}>
+                      {formatCurrency((parseFloat(item.hours) || 0) * (parseFloat(item.rate) || 0))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            
+            {/* Totals row */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              padding: '1rem',
+              background: '#e3f2fd',
+              borderRadius: '8px',
+              marginBottom: '1rem'
+            }}>
+              <button type="button" className="btn btn-secondary" onClick={addManualLineItem}>
+                + Add Line Item
+              </button>
+              <div style={{ textAlign: 'right' }}>
+                <span style={{ color: '#666', marginRight: '1rem' }}>Total:</span>
+                <strong style={{ fontSize: '1.3rem', color: '#1565c0' }}>{formatCurrency(calculateManualTotal())}</strong>
+              </div>
+            </div>
 
             <div className="form-group">
               <label>Notes</label>
@@ -1132,48 +1142,20 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               <button className="close-btn" onClick={() => setShowInvoiceModal(false)}>×</button>
             </div>
             
-            {/* Printable Invoice */}
+            {/* Printable Invoice - Zoho Style */}
             <div id="printable-invoice" className="invoice-print-container">
               <style>{`
                 @media print {
                   @page {
-                    margin: 15mm;
+                    margin: 10mm;
                     size: letter;
                   }
-                  
-                  /* Hide everything first */
-                  body * {
-                    visibility: hidden;
-                  }
-                  
-                  /* Show only the invoice */
-                  #printable-invoice,
-                  #printable-invoice * {
-                    visibility: visible;
-                  }
-                  
-                  /* Reset containers */
-                  html, body {
-                    height: auto !important;
-                    overflow: visible !important;
-                  }
-                  
-                  #root, .main-content, .container {
-                    overflow: visible !important;
-                    height: auto !important;
-                  }
-                  
-                  /* Hide sidebar completely */
-                  .sidebar {
-                    display: none !important;
-                  }
-                  
-                  .main-content {
-                    margin-left: 0 !important;
-                    width: 100% !important;
-                  }
-                  
-                  /* Reset modal to flow normally */
+                  body * { visibility: hidden; }
+                  #printable-invoice, #printable-invoice * { visibility: visible; }
+                  html, body { height: auto !important; overflow: visible !important; }
+                  #root, .main-content, .container { overflow: visible !important; height: auto !important; }
+                  .sidebar { display: none !important; }
+                  .main-content { margin-left: 0 !important; width: 100% !important; }
                   .modal, .modal.active {
                     position: absolute !important;
                     left: 0 !important;
@@ -1185,7 +1167,6 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     padding: 0 !important;
                     display: block !important;
                   }
-                  
                   .modal-content, .modal-large {
                     position: relative !important;
                     overflow: visible !important;
@@ -1197,407 +1178,369 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     max-width: 100% !important;
                     width: 100% !important;
                   }
-                  
-                  /* Invoice container - NO absolute positioning */
                   #printable-invoice {
                     position: relative !important;
                     width: 100% !important;
                     padding: 0 !important;
                     margin: 0 !important;
-                    background: white !important;
                   }
-                  
-                  .invoice-print-container {
-                    padding: 0 !important;
-                  }
-                  
-                  /* Hide non-print elements */
-                  .no-print {
-                    display: none !important;
-                    visibility: hidden !important;
-                  }
-                  
-                  /* Prevent page breaks inside key sections */
-                  .invoice-header {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                  }
-                  
-                  .invoice-title-section {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                  }
-                  
-                  .invoice-parties {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                  }
-                  
-                  .invoice-totals {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                  }
-                  
-                  .invoice-footer {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                  }
-                  
-                  .invoice-notes {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                  }
-                  
-                  /* Table handling */
-                  .invoice-table {
-                    page-break-inside: auto;
-                  }
-                  
-                  .invoice-table tr {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                  }
+                  .no-print { display: none !important; visibility: hidden !important; }
+                  .invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
                 }
                 .invoice-print-container {
                   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                  color: #1a1a2e;
+                  color: #333;
                   background: white;
-                  padding: 40px;
-                  line-height: 1.6;
+                  padding: 30px;
+                  line-height: 1.4;
+                  font-size: 13px;
                 }
-                .invoice-header {
+                /* Header: Logo+Company LEFT, Invoice Info RIGHT */
+                .invoice-header-row {
                   display: flex;
                   justify-content: space-between;
                   align-items: flex-start;
-                  margin-bottom: 40px;
-                  padding-bottom: 30px;
-                  border-bottom: 3px solid #c9a227;
+                  margin-bottom: 25px;
                 }
-                .invoice-logo img {
-                  max-height: 100px;
-                  width: auto;
-                }
-                .invoice-company {
-                  text-align: right;
-                  color: #555;
-                  font-size: 14px;
-                }
-                .invoice-company h1 {
-                  color: #c9a227;
-                  font-size: 28px;
-                  margin: 0 0 8px 0;
-                  font-weight: 600;
-                  letter-spacing: -0.5px;
-                }
-                .invoice-title-section {
+                .invoice-header-left {
                   display: flex;
-                  justify-content: space-between;
-                  margin-bottom: 40px;
+                  flex-direction: column;
                 }
-                .invoice-title {
-                  font-size: 42px;
-                  font-weight: 700;
-                  color: #1a1a2e;
-                  letter-spacing: -1px;
+                .invoice-logo-large {
+                  max-width: 180px;
+                  max-height: 120px;
+                  margin-bottom: 15px;
                 }
-                .invoice-meta {
-                  text-align: right;
-                }
-                .invoice-meta-item {
-                  margin-bottom: 8px;
-                }
-                .invoice-meta-label {
-                  color: #888;
+                .invoice-company-info {
                   font-size: 12px;
-                  text-transform: uppercase;
-                  letter-spacing: 1px;
-                }
-                .invoice-meta-value {
-                  font-size: 16px;
-                  font-weight: 600;
-                  color: #1a1a2e;
-                }
-                .invoice-parties {
-                  display: grid;
-                  grid-template-columns: 1fr 1fr;
-                  gap: 60px;
-                  margin-bottom: 40px;
-                }
-                .invoice-party h3 {
-                  font-size: 11px;
-                  text-transform: uppercase;
-                  letter-spacing: 2px;
-                  color: #888;
-                  margin: 0 0 12px 0;
-                  font-weight: 600;
-                }
-                .invoice-party-name {
-                  font-size: 18px;
-                  font-weight: 600;
-                  color: #1a1a2e;
-                  margin-bottom: 4px;
-                }
-                .invoice-party-detail {
                   color: #555;
-                  font-size: 14px;
                   line-height: 1.5;
                 }
+                .invoice-company-name {
+                  font-size: 16px;
+                  font-weight: 600;
+                  color: #333;
+                  margin-bottom: 3px;
+                }
+                .invoice-header-right {
+                  text-align: right;
+                }
+                .invoice-title-large {
+                  font-size: 36px;
+                  font-weight: 300;
+                  color: #333;
+                  margin: 0;
+                  letter-spacing: 2px;
+                }
+                .invoice-number-display {
+                  font-size: 14px;
+                  color: #666;
+                  margin-top: 5px;
+                }
+                .invoice-balance-box {
+                  margin-top: 15px;
+                  text-align: right;
+                }
+                .invoice-balance-label {
+                  font-size: 11px;
+                  color: #888;
+                  text-transform: uppercase;
+                }
+                .invoice-balance-amount {
+                  font-size: 28px;
+                  font-weight: 600;
+                  color: #2ABBA7;
+                }
+                /* Bill To LEFT, Invoice Dates RIGHT */
+                .invoice-details-row {
+                  display: flex;
+                  justify-content: space-between;
+                  margin-bottom: 25px;
+                  padding-bottom: 20px;
+                }
+                .invoice-bill-to {
+                  flex: 1;
+                }
+                .invoice-bill-to-label {
+                  font-size: 11px;
+                  color: #888;
+                  margin-bottom: 5px;
+                }
+                .invoice-bill-to-name {
+                  font-size: 15px;
+                  font-weight: 600;
+                  color: #333;
+                  margin-bottom: 3px;
+                }
+                .invoice-bill-to-address {
+                  font-size: 12px;
+                  color: #555;
+                  line-height: 1.5;
+                }
+                .invoice-dates {
+                  text-align: right;
+                }
+                .invoice-date-row {
+                  display: flex;
+                  justify-content: flex-end;
+                  gap: 20px;
+                  margin-bottom: 6px;
+                  font-size: 13px;
+                }
+                .invoice-date-label {
+                  color: #666;
+                }
+                .invoice-date-value {
+                  font-weight: 500;
+                  min-width: 100px;
+                  text-align: right;
+                }
+                /* Table - Zoho Style */
                 .invoice-table {
                   width: 100%;
                   border-collapse: collapse;
-                  margin-bottom: 30px;
+                  margin-bottom: 0;
+                }
+                .invoice-table thead {
+                  background: #2ABBA7;
                 }
                 .invoice-table th {
-                  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                   color: white;
-                  padding: 14px 16px;
+                  padding: 10px 12px;
                   text-align: left;
                   font-size: 11px;
+                  font-weight: 600;
                   text-transform: uppercase;
-                  letter-spacing: 1px;
-                  font-weight: 600;
+                  border: none;
                 }
-                .invoice-table th:last-child {
-                  text-align: right;
-                }
+                .invoice-table th:first-child { width: 30px; text-align: center; }
+                .invoice-table th:nth-child(2) { width: auto; }
+                .invoice-table th:nth-child(3) { width: 60px; text-align: right; }
+                .invoice-table th:nth-child(4) { width: 70px; text-align: right; }
+                .invoice-table th:last-child { width: 90px; text-align: right; }
                 .invoice-table td {
-                  padding: 16px;
+                  padding: 10px 12px;
                   border-bottom: 1px solid #eee;
-                  font-size: 14px;
+                  font-size: 13px;
+                  vertical-align: top;
                 }
-                .invoice-table td:last-child {
-                  text-align: right;
-                  font-weight: 600;
+                .invoice-table td:first-child { text-align: center; color: #888; }
+                .invoice-table td:nth-child(3) { text-align: right; }
+                .invoice-table td:nth-child(4) { text-align: right; }
+                .invoice-table td:last-child { text-align: right; font-weight: 500; }
+                .invoice-item-description {
+                  font-weight: 500;
+                  color: #333;
                 }
-                .invoice-table tbody tr:hover {
-                  background: #fafafa;
+                .invoice-item-details {
+                  font-size: 11px;
+                  color: #888;
+                  margin-top: 3px;
+                  line-height: 1.4;
                 }
-                .invoice-table tbody tr:last-child td {
-                  border-bottom: 2px solid #1a1a2e;
-                }
-                .invoice-totals {
+                /* Totals Section */
+                .invoice-totals-section {
                   display: flex;
                   justify-content: flex-end;
-                  margin-bottom: 40px;
+                  margin-top: 0;
                 }
-                .invoice-totals-table {
-                  width: 300px;
+                .invoice-totals-box {
+                  width: 280px;
                 }
-                .invoice-totals-row {
+                .invoice-total-row {
                   display: flex;
                   justify-content: space-between;
-                  padding: 10px 0;
+                  padding: 8px 12px;
                   border-bottom: 1px solid #eee;
+                  font-size: 13px;
                 }
-                .invoice-totals-row.total {
+                .invoice-total-row:last-child {
                   border-bottom: none;
-                  border-top: 2px solid #1a1a2e;
-                  margin-top: 10px;
+                }
+                .invoice-total-label { color: #555; }
+                .invoice-total-value { font-weight: 500; text-align: right; min-width: 80px; }
+                .invoice-total-row.grand-total {
+                  background: #2ABBA7;
+                  color: white;
+                  font-weight: 600;
+                  font-size: 14px;
+                }
+                .invoice-total-row.grand-total .invoice-total-label,
+                .invoice-total-row.grand-total .invoice-total-value {
+                  color: white;
+                  font-weight: 600;
+                }
+                /* Notes */
+                .invoice-notes-section {
+                  margin-top: 30px;
                   padding-top: 15px;
                 }
-                .invoice-totals-label {
-                  color: #555;
-                  font-size: 14px;
-                }
-                .invoice-totals-value {
-                  font-weight: 600;
-                  font-size: 14px;
-                }
-                .invoice-totals-row.total .invoice-totals-label,
-                .invoice-totals-row.total .invoice-totals-value {
-                  font-size: 20px;
-                  font-weight: 700;
-                  color: #1a1a2e;
-                }
-                .invoice-status {
-                  display: inline-block;
-                  padding: 6px 16px;
-                  border-radius: 20px;
+                .invoice-notes-label {
                   font-size: 12px;
                   font-weight: 600;
-                  text-transform: uppercase;
-                  letter-spacing: 1px;
+                  color: #333;
+                  margin-bottom: 5px;
                 }
-                .invoice-status.paid {
-                  background: #d4edda;
-                  color: #155724;
+                .invoice-notes-text {
+                  font-size: 12px;
+                  color: #555;
                 }
-                .invoice-status.pending {
-                  background: #fff3cd;
-                  color: #856404;
-                }
-                .invoice-status.partial {
-                  background: #cce5ff;
-                  color: #004085;
-                }
-                .invoice-footer {
-                  margin-top: 50px;
-                  padding-top: 30px;
-                  border-top: 1px solid #eee;
+                /* Footer */
+                .invoice-footer-section {
+                  margin-top: 40px;
+                  padding-top: 15px;
+                  border-top: 1px solid #ddd;
                   text-align: center;
                   color: #888;
-                  font-size: 12px;
-                }
-                .invoice-footer-brand {
-                  color: #c9a227;
-                  font-weight: 600;
-                  font-size: 14px;
-                  margin-bottom: 8px;
-                }
-                .invoice-notes {
-                  background: #f8f9fa;
-                  padding: 20px;
-                  border-radius: 8px;
-                  margin-bottom: 30px;
-                  border-left: 4px solid #c9a227;
-                }
-                .invoice-notes h4 {
-                  margin: 0 0 8px 0;
-                  font-size: 12px;
-                  text-transform: uppercase;
-                  letter-spacing: 1px;
-                  color: #888;
-                }
-                .invoice-notes p {
-                  margin: 0;
-                  color: #555;
-                  font-size: 14px;
+                  font-size: 11px;
                 }
               `}</style>
               
-              {/* Invoice Header with Logo */}
-              <div className="invoice-header">
-                <div className="invoice-logo">
-                  <img src="/logo.png" alt="Chippewa Valley Home Care" onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }} />
-                  <div style={{ display: 'none' }}>
-                    <h1 style={{ color: '#c9a227', fontSize: '24px', margin: 0 }}>Chippewa Valley</h1>
-                    <p style={{ color: '#4ecdc4', fontStyle: 'italic', margin: 0 }}>Home Care</p>
+              {/* Header Row: Logo+Company on Left, Invoice Title+Balance on Right */}
+              <div className="invoice-header-row">
+                <div className="invoice-header-left">
+                  <img 
+                    src="/logo.png" 
+                    alt="Chippewa Valley Home Care" 
+                    className="invoice-logo-large"
+                    onError={(e) => { e.target.style.display = 'none'; }}
+                  />
+                  <div className="invoice-company-info">
+                    <div className="invoice-company-name">Chippewa Valley Home Care</div>
+                    <div>2607 Beverly Hills Dr</div>
+                    <div>Eau Claire, Wisconsin 54701</div>
+                    <div>U.S.A</div>
+                    <div>715-491-1254</div>
+                    <div>chippewavalleyhomecare@gmail.com</div>
                   </div>
                 </div>
-                <div className="invoice-company">
-                  <h1>Chippewa Valley Home Care</h1>
-                  <div>Eau Claire, Wisconsin</div>
-                  <div>info@chippewavalleyhomecare.com</div>
-                  <div>(715) 555-0100</div>
-                </div>
-              </div>
-
-              {/* Invoice Title & Meta */}
-              <div className="invoice-title-section">
-                <div>
-                  <div className="invoice-title">INVOICE</div>
-                  <span className={`invoice-status ${selectedInvoice.payment_status}`}>
-                    {selectedInvoice.payment_status}
-                  </span>
-                </div>
-                <div className="invoice-meta">
-                  <div className="invoice-meta-item">
-                    <div className="invoice-meta-label">Invoice Number</div>
-                    <div className="invoice-meta-value">{selectedInvoice.invoice_number}</div>
-                  </div>
-                  <div className="invoice-meta-item">
-                    <div className="invoice-meta-label">Invoice Date</div>
-                    <div className="invoice-meta-value">{new Date(selectedInvoice.created_at).toLocaleDateString()}</div>
-                  </div>
-                  <div className="invoice-meta-item">
-                    <div className="invoice-meta-label">Due Date</div>
-                    <div className="invoice-meta-value">{new Date(selectedInvoice.payment_due_date).toLocaleDateString()}</div>
+                <div className="invoice-header-right">
+                  <h1 className="invoice-title-large">INVOICE</h1>
+                  <div className="invoice-number-display"># {selectedInvoice.invoice_number}</div>
+                  <div className="invoice-balance-box">
+                    <div className="invoice-balance-label">Balance Due</div>
+                    <div className="invoice-balance-amount">{formatCurrency(parseFloat(selectedInvoice.total || 0) - parseFloat(selectedInvoice.amount_paid || 0))}</div>
                   </div>
                 </div>
               </div>
 
-              {/* Bill To / Service Period */}
-              <div className="invoice-parties">
-                <div className="invoice-party">
-                  <h3>Bill To</h3>
-                  <div className="invoice-party-name">{selectedInvoice.first_name} {selectedInvoice.last_name}</div>
-                  <div className="invoice-party-detail">
+              {/* Details Row: Bill To on Left, Dates on Right */}
+              <div className="invoice-details-row">
+                <div className="invoice-bill-to">
+                  <div className="invoice-bill-to-label">Bill To</div>
+                  <div className="invoice-bill-to-name">{selectedInvoice.first_name} {selectedInvoice.last_name}</div>
+                  <div className="invoice-bill-to-address">
                     {selectedInvoice.address && <>{selectedInvoice.address}<br /></>}
-                    {selectedInvoice.city && <>{selectedInvoice.city}, {selectedInvoice.state} {selectedInvoice.zip}<br /></>}
-                    {selectedInvoice.email && <>{selectedInvoice.email}<br /></>}
-                    {selectedInvoice.phone && <>{selectedInvoice.phone}</>}
+                    {selectedInvoice.city && <>{selectedInvoice.city}<br /></>}
+                    {selectedInvoice.state && <>{selectedInvoice.state}<br /></>}
+                    U.S.A
                   </div>
                 </div>
-                <div className="invoice-party">
-                  <h3>Service Period</h3>
-                  <div className="invoice-party-name">
-                    {new Date(selectedInvoice.billing_period_start).toLocaleDateString()} — {new Date(selectedInvoice.billing_period_end).toLocaleDateString()}
+                <div className="invoice-dates">
+                  <div className="invoice-date-row">
+                    <span className="invoice-date-label">Invoice Date :</span>
+                    <span className="invoice-date-value">{new Date(selectedInvoice.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
-                  <div className="invoice-party-detail">
-                    {selectedInvoice.referral_source_name ? (
-                      <>Payer: {selectedInvoice.referral_source_name}</>
-                    ) : (
-                      <>Payment Type: Private Pay</>
-                    )}
+                  <div className="invoice-date-row">
+                    <span className="invoice-date-label">Terms :</span>
+                    <span className="invoice-date-value">Due on Receipt</span>
+                  </div>
+                  <div className="invoice-date-row">
+                    <span className="invoice-date-label">Due Date :</span>
+                    <span className="invoice-date-value">{new Date(selectedInvoice.payment_due_date).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
                 </div>
               </div>
 
               {/* Line Items Table */}
-              {selectedInvoice.line_items?.length > 0 && (
-                <table className="invoice-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '15%' }}>Date</th>
-                      <th style={{ width: '25%' }}>Caregiver</th>
-                      <th style={{ width: '30%' }}>Description</th>
-                      <th style={{ width: '10%', textAlign: 'center' }}>Hours</th>
-                      <th style={{ width: '10%', textAlign: 'right' }}>Rate</th>
-                      <th style={{ width: '10%', textAlign: 'right' }}>Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedInvoice.line_items.map((item, idx) => (
+              <table className="invoice-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Item & Description</th>
+                    <th>Qty</th>
+                    <th>Rate</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedInvoice.line_items?.length > 0 ? (
+                    selectedInvoice.line_items.map((item, idx) => (
                       <tr key={idx}>
-                        <td>{item.service_date ? new Date(item.service_date).toLocaleDateString() : '—'}</td>
-                        <td>{item.caregiver_first_name} {item.caregiver_last_name}</td>
-                        <td>{item.description}</td>
-                        <td style={{ textAlign: 'center' }}>{parseFloat(item.hours).toFixed(2)}</td>
-                        <td style={{ textAlign: 'right' }}>{formatCurrency(item.rate)}</td>
-                        <td style={{ textAlign: 'right' }}>{formatCurrency(item.amount)}</td>
+                        <td>{idx + 1}</td>
+                        <td>
+                          <div className="invoice-item-description">{item.description || 'Home Care Services'}</div>
+                          {item.service_date && (
+                            <div className="invoice-item-details">
+                              {new Date(item.service_date).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })}
+                              {item.caregiver_first_name && ` - ${item.caregiver_first_name} ${item.caregiver_last_name}`}
+                              {item.time_range && ` ${item.time_range}`}
+                            </div>
+                          )}
+                        </td>
+                        <td>{parseFloat(item.hours).toFixed(2)}<br /><span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
+                        <td>{parseFloat(item.rate).toFixed(2)}</td>
+                        <td>{parseFloat(item.amount).toFixed(2)}</td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                    ))
+                  ) : (
+                    <tr>
+                      <td>1</td>
+                      <td>
+                        <div className="invoice-item-description">Home Care Services</div>
+                        <div className="invoice-item-details">
+                          {new Date(selectedInvoice.billing_period_start).toLocaleDateString()} - {new Date(selectedInvoice.billing_period_end).toLocaleDateString()}
+                        </div>
+                      </td>
+                      <td>{selectedInvoice.total_hours?.toFixed(2) || '0.00'}<br /><span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
+                      <td>{selectedInvoice.line_items?.[0]?.rate?.toFixed(2) || '33.00'}</td>
+                      <td>{parseFloat(selectedInvoice.total).toFixed(2)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
 
               {/* Totals */}
-              <div className="invoice-totals">
-                <div className="invoice-totals-table">
-                  <div className="invoice-totals-row">
-                    <span className="invoice-totals-label">Subtotal</span>
-                    <span className="invoice-totals-value">{formatCurrency(selectedInvoice.subtotal || selectedInvoice.total)}</span>
+              <div className="invoice-totals-section">
+                <div className="invoice-totals-box">
+                  <div className="invoice-total-row">
+                    <span className="invoice-total-label">Sub Total</span>
+                    <span className="invoice-total-value">{parseFloat(selectedInvoice.subtotal || selectedInvoice.total).toFixed(2)}</span>
                   </div>
-                  <div className="invoice-totals-row">
-                    <span className="invoice-totals-label">Total Hours</span>
-                    <span className="invoice-totals-value">{selectedInvoice.line_items?.reduce((sum, item) => sum + parseFloat(item.hours || 0), 0).toFixed(2) || '0.00'}</span>
+                  <div className="invoice-total-row">
+                    <span className="invoice-total-label">Total</span>
+                    <span className="invoice-total-value"><strong>${parseFloat(selectedInvoice.total).toFixed(2)}</strong></span>
                   </div>
                   {parseFloat(selectedInvoice.amount_paid || 0) > 0 && (
-                    <div className="invoice-totals-row">
-                      <span className="invoice-totals-label">Amount Paid</span>
-                      <span className="invoice-totals-value" style={{ color: '#28a745' }}>-{formatCurrency(selectedInvoice.amount_paid)}</span>
+                    <div className="invoice-total-row">
+                      <span className="invoice-total-label">Amount Paid</span>
+                      <span className="invoice-total-value" style={{ color: '#28a745' }}>-${parseFloat(selectedInvoice.amount_paid).toFixed(2)}</span>
                     </div>
                   )}
-                  <div className="invoice-totals-row total">
-                    <span className="invoice-totals-label">{parseFloat(selectedInvoice.amount_paid || 0) > 0 ? 'Balance Due' : 'Total Due'}</span>
-                    <span className="invoice-totals-value">{formatCurrency(parseFloat(selectedInvoice.total || 0) - parseFloat(selectedInvoice.amount_paid || 0))}</span>
+                  <div className="invoice-total-row grand-total">
+                    <span className="invoice-total-label">Balance Due</span>
+                    <span className="invoice-total-value">${(parseFloat(selectedInvoice.total || 0) - parseFloat(selectedInvoice.amount_paid || 0)).toFixed(2)}</span>
                   </div>
                 </div>
               </div>
 
               {/* Notes */}
-              {selectedInvoice.notes && (
-                <div className="invoice-notes">
-                  <h4>Notes</h4>
-                  <p>{selectedInvoice.notes}</p>
+              {selectedInvoice.notes ? (
+                <div className="invoice-notes-section">
+                  <div className="invoice-notes-label">Notes</div>
+                  <div className="invoice-notes-text">{selectedInvoice.notes}</div>
+                </div>
+              ) : (
+                <div className="invoice-notes-section">
+                  <div className="invoice-notes-label">Notes</div>
+                  <div className="invoice-notes-text">Thanks for your business.</div>
                 </div>
               )}
 
               {/* Footer */}
-              <div className="invoice-footer">
-                <div className="invoice-footer-brand">Chippewa Valley Home Care</div>
+              <div className="invoice-footer-section">
+                <div>Chippewa Valley Home Care</div>
                 <div>Thank you for choosing us for your home care needs.</div>
-                <div style={{ marginTop: '8px' }}>Payment is due within 30 days of invoice date. Please include invoice number with payment.</div>
               </div>
             </div>
 
