@@ -1058,57 +1058,53 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <div id="printable-invoice" className="invoice-print-container">
               <style>{`
                 @media print {
-                  /* Hide everything except the invoice */
+                  @page {
+                    margin: 10mm;
+                    size: letter;
+                  }
                   html, body {
                     height: auto !important;
                     overflow: visible !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
                   }
-                  body > *:not(.modal) { display: none !important; }
-                  .modal { 
-                    position: static !important;
-                    display: block !important;
-                    overflow: visible !important;
-                    background: none !important;
+                  body * { 
+                    visibility: hidden; 
                   }
-                  .modal-content {
-                    position: static !important;
-                    max-width: 100% !important;
-                    max-height: none !important;
-                    overflow: visible !important;
-                    box-shadow: none !important;
-                    border: none !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
+                  #printable-invoice, 
+                  #printable-invoice * { 
+                    visibility: visible; 
                   }
-                  .no-print { display: none !important; }
+                  #printable-invoice { 
+                    position: absolute; 
+                    left: 0; 
+                    top: 0; 
+                    width: 100%;
+                    padding: 10mm;
+                    margin: 0;
+                  }
+                  .no-print { 
+                    display: none !important; 
+                  }
                   .invoice-print-container { 
                     box-shadow: none !important; 
                     border: none !important;
-                    padding: 15mm !important;
-                    margin: 0 !important;
                   }
-                  /* Page break controls */
+                  .modal, .modal-content {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                  }
+                  /* Prevent breaks inside sections */
                   .invoice-header,
                   .invoice-title-section,
                   .invoice-parties,
                   .invoice-totals,
+                  .invoice-footer,
                   .invoice-notes {
-                    page-break-inside: avoid;
-                  }
-                  .invoice-table {
-                    page-break-inside: auto;
-                  }
-                  .invoice-table thead {
-                    display: table-header-group;
+                    page-break-inside: avoid !important;
+                    break-inside: avoid !important;
                   }
                   .invoice-table tr {
-                    page-break-inside: avoid;
-                  }
-                  .invoice-footer {
-                    page-break-inside: avoid;
-                    margin-top: 20px !important;
+                    page-break-inside: avoid !important;
                   }
                 }
                 .invoice-print-container {
