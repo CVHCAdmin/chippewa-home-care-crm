@@ -3,6 +3,30 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 
+// Helper to parse date without timezone shift
+const parseDate = (dateStr) => {
+  if (!dateStr) return null;
+  // If it's just a date (YYYY-MM-DD), parse as local time
+  if (typeof dateStr === 'string' && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  // If it includes time, also handle it as local
+  if (typeof dateStr === 'string' && dateStr.includes('T')) {
+    const [datePart] = dateStr.split('T');
+    const [year, month, day] = datePart.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  return new Date(dateStr);
+};
+
+// Format date for display
+const formatDate = (dateStr, options = {}) => {
+  const date = parseDate(dateStr);
+  if (!date || isNaN(date)) return '';
+  return date.toLocaleDateString('en-US', options);
+};
+
 // Generate time options in 15-minute increments
 const generateTimeOptions = () => {
   const options = [];
@@ -475,7 +499,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     const today = new Date();
     const buckets = { current: 0, thirtyDays: 0, sixtyDays: 0, ninetyDays: 0, over90: 0 };
     invoices.filter(inv => inv.payment_status !== 'paid').forEach(inv => {
-      const dueDate = new Date(inv.payment_due_date);
+      const dueDate = parseDate(inv.payment_due_date);
       const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
       const amount = parseFloat(inv.total || 0) - parseFloat(inv.amount_paid || 0);
       if (daysOverdue <= 0) buckets.current += amount;
@@ -542,7 +566,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
         </div>
         <div className="stat-card">
           <h3>Active Authorizations</h3>
-          <div className="value">{authorizations.filter(a => new Date(a.end_date) >= new Date()).length}</div>
+          <div className="value">{authorizations.filter(a => parseDate(a.end_date) >= new Date()).length}</div>
         </div>
       </div>
 
@@ -862,7 +886,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     <td><strong>{invoice.invoice_number}</strong></td>
                     <td>{invoice.first_name} {invoice.last_name}</td>
                     <td>{invoice.referral_source_name || <span className="badge badge-info">Private</span>}</td>
-                    <td>{new Date(invoice.billing_period_start).toLocaleDateString()} - {new Date(invoice.billing_period_end).toLocaleDateString()}</td>
+                    <td>{formatDate(invoice.billing_period_start)} - {formatDate(invoice.billing_period_end)}</td>
                     <td><strong>{formatCurrency(total)}</strong></td>
                     <td style={{ color: '#28a745' }}>{formatCurrency(paid)}</td>
                     <td style={{ color: balance > 0 ? '#dc3545' : '#28a745' }}>{formatCurrency(balance)}</td>
@@ -905,15 +929,15 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <tr><th>Invoice #</th><th>Client</th><th>Payer</th><th>Due Date</th><th>Days Overdue</th><th>Balance</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                {invoices.filter(inv => inv.payment_status !== 'paid').sort((a, b) => new Date(a.payment_due_date) - new Date(b.payment_due_date)).map(invoice => {
-                  const daysOverdue = Math.floor((new Date() - new Date(invoice.payment_due_date)) / (1000 * 60 * 60 * 24));
+                {invoices.filter(inv => inv.payment_status !== 'paid').sort((a, b) => parseDate(a.payment_due_date) - parseDate(b.payment_due_date)).map(invoice => {
+                  const daysOverdue = Math.floor((new Date() - parseDate(invoice.payment_due_date)) / (1000 * 60 * 60 * 24));
                   const balance = parseFloat(invoice.total || 0) - parseFloat(invoice.amount_paid || 0);
                   return (
                     <tr key={invoice.id}>
                       <td><strong>{invoice.invoice_number}</strong></td>
                       <td>{invoice.first_name} {invoice.last_name}</td>
                       <td>{invoice.referral_source_name || 'Private Pay'}</td>
-                      <td>{new Date(invoice.payment_due_date).toLocaleDateString()}</td>
+                      <td>{formatDate(invoice.payment_due_date)}</td>
                       <td><span className={`badge ${daysOverdue <= 0 ? 'badge-success' : daysOverdue <= 30 ? 'badge-warning' : 'badge-danger'}`}>{daysOverdue <= 0 ? 'Current' : `${daysOverdue} days`}</span></td>
                       <td><strong>{formatCurrency(balance)}</strong></td>
                       <td>
@@ -946,7 +970,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               <tbody>
                 {authorizations.map(auth => {
                   const usage = getAuthUsage(auth);
-                  const isExpired = new Date(auth.end_date) < new Date();
+                  const isExpired = parseDate(auth.end_date) < new Date();
                   const isLow = usage.percentage >= 80;
                   return (
                     <tr key={auth.id} style={{ background: isExpired ? '#f8d7da' : isLow ? '#fff3cd' : undefined }}>
@@ -957,7 +981,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                       <td>{usage.authorized} {auth.unit_type}</td>
                       <td>{usage.used.toFixed(1)} ({usage.percentage.toFixed(0)}%)</td>
                       <td style={{ color: usage.remaining < 10 ? '#dc3545' : '#28a745', fontWeight: 'bold' }}>{usage.remaining.toFixed(1)}</td>
-                      <td>{new Date(auth.start_date).toLocaleDateString()} - {new Date(auth.end_date).toLocaleDateString()}</td>
+                      <td>{formatDate(auth.start_date)} - {formatDate(auth.end_date)}</td>
                       <td>{isExpired ? <span className="badge badge-danger">EXPIRED</span> : isLow ? <span className="badge badge-warning">LOW</span> : <span className="badge badge-success">ACTIVE</span>}</td>
                     </tr>
                   );
@@ -985,7 +1009,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               <tbody>
                 {payments.map(payment => (
                   <tr key={payment.id}>
-                    <td>{new Date(payment.payment_date).toLocaleDateString()}</td>
+                    <td>{formatDate(payment.payment_date)}</td>
                     <td><strong>{payment.invoice_number}</strong></td>
                     <td>{payment.client_name}</td>
                     <td style={{ color: '#28a745', fontWeight: 'bold' }}>{formatCurrency(payment.amount)}</td>
@@ -1051,7 +1075,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     <td>{rate.care_type_name}</td>
                     <td><strong>{formatCurrency(rate.rate_amount)}</strong></td>
                     <td><span className="badge badge-info">{rate.rate_type === 'hourly' ? 'Per Hour' : 'Per 15 Min'}</span></td>
-                    <td>{new Date(rate.effective_date).toLocaleDateString()}</td>
+                    <td>{formatDate(rate.effective_date)}</td>
                     <td><button className="btn btn-sm btn-danger" onClick={() => handleDeleteRate(rate.id)}>Delete</button></td>
                   </tr>
                 ))}
@@ -1489,7 +1513,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <div className="invoice-dates">
                   <div className="invoice-date-row">
                     <span className="invoice-date-label">Invoice Date :</span>
-                    <span className="invoice-date-value">{new Date(selectedInvoice.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                    <span className="invoice-date-value">{formatDate(selectedInvoice.created_at, { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
                   <div className="invoice-date-row">
                     <span className="invoice-date-label">Terms :</span>
@@ -1497,7 +1521,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   </div>
                   <div className="invoice-date-row">
                     <span className="invoice-date-label">Due Date :</span>
-                    <span className="invoice-date-value">{new Date(selectedInvoice.payment_due_date).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                    <span className="invoice-date-value">{formatDate(selectedInvoice.payment_due_date, { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
                 </div>
               </div>
@@ -1521,7 +1545,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                         <td>
                           <div className="invoice-item-description">{item.description || 'Home Care Services'}</div>
                           <div className="invoice-item-details">
-                            {item.service_date && new Date(item.service_date).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })}
+                            {item.service_date && formatDate(item.service_date, { month: '2-digit', day: '2-digit' })}
                             {item.caregiver_first_name && ` - ${item.caregiver_first_name} ${item.caregiver_last_name}`}
                             {item.time_range && ` ${item.time_range}`}
                           </div>
@@ -1537,7 +1561,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                       <td>
                         <div className="invoice-item-description">Home Care Services</div>
                         <div className="invoice-item-details">
-                          {new Date(selectedInvoice.billing_period_start).toLocaleDateString()} - {new Date(selectedInvoice.billing_period_end).toLocaleDateString()}
+                          {formatDate(selectedInvoice.billing_period_start)} - {formatDate(selectedInvoice.billing_period_end)}
                         </div>
                       </td>
                       <td>{selectedInvoice.total_hours?.toFixed(2) || '0.00'}</td>
