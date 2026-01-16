@@ -4625,7 +4625,7 @@ app.get('/api/scheduling/suggest-caregivers', verifyToken, async (req, res) => {
       SELECT u.id, u.first_name, u.last_name, u.phone, u.default_pay_rate,
              u.latitude, u.longitude, u.certifications,
              ca.status as availability_status, ca.max_hours_per_week,
-             ARRAY_AGG(DISTINCT cc.certification_type) FILTER (WHERE cc.certification_type IS NOT NULL AND (cc.expiration_date IS NULL OR cc.expiration_date > CURRENT_DATE)) as active_certifications
+             ARRAY_AGG(DISTINCT cc.certification_name) FILTER (WHERE cc.certification_type IS NOT NULL AND (cc.expiration_date IS NULL OR cc.expiration_date > CURRENT_DATE)) as active_certifications
       FROM users u
       LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
       LEFT JOIN caregiver_certifications cc ON u.id = cc.caregiver_id
