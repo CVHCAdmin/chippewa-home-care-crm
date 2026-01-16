@@ -12,15 +12,15 @@ router.get('/', auth, async (req, res) => {
   try {
     let query = `
       SELECT ssr.*,
-        s.scheduled_date, s.start_time, s.end_time,
+        s.date as shift_date, s.start_time, s.end_time,
         c.first_name as client_first, c.last_name as client_last,
-        cp1.first_name as requester_first, cp1.last_name as requester_last,
-        cp2.first_name as target_first, cp2.last_name as target_last
+        u1.first_name as requester_first, u1.last_name as requester_last,
+        u2.first_name as target_first, u2.last_name as target_last
       FROM shift_swap_requests ssr
       JOIN schedules s ON ssr.schedule_id = s.id
       JOIN clients c ON s.client_id = c.id
-      JOIN caregiver_profiles cp1 ON ssr.requesting_caregiver_id = cp1.id
-      LEFT JOIN caregiver_profiles cp2 ON ssr.target_caregiver_id = cp2.id
+      JOIN users u1 ON ssr.requesting_caregiver_id = u1.id
+      LEFT JOIN users u2 ON ssr.target_caregiver_id = u2.id
       WHERE 1=1
     `;
     const params = [];
@@ -49,7 +49,7 @@ router.post('/', auth, async (req, res) => {
   
   try {
     // Get shift date
-    const schedule = await db.query('SELECT scheduled_date FROM schedules WHERE id = $1', [scheduleId]);
+    const schedule = await db.query('SELECT date FROM schedules WHERE id = $1', [scheduleId]);
     if (schedule.rows.length === 0) {
       return res.status(404).json({ error: 'Schedule not found' });
     }
@@ -58,7 +58,7 @@ router.post('/', auth, async (req, res) => {
       INSERT INTO shift_swap_requests (schedule_id, requesting_caregiver_id, target_caregiver_id, shift_date, reason)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [scheduleId, requestingCaregiverId, targetCaregiverId, schedule.rows[0].scheduled_date, reason]);
+    `, [scheduleId, requestingCaregiverId, targetCaregiverId, schedule.rows[0].date, reason]);
 
     res.json(result.rows[0]);
   } catch (error) {
