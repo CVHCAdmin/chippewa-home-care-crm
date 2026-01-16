@@ -7,6 +7,7 @@ const BillingDashboard = ({ token }) => {
   const [activeTab, setActiveTab] = useState('invoices');
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
+  const [caregivers, setCaregivers] = useState([]);
   const [referralSources, setReferralSources] = useState([]);
   const [careTypes, setCareTypes] = useState([]);
   const [rates, setRates] = useState([]);
@@ -14,6 +15,7 @@ const BillingDashboard = ({ token }) => {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showGenerateForm, setShowGenerateForm] = useState(false);
+  const [showManualForm, setShowManualForm] = useState(false);
   const [showBatchForm, setShowBatchForm] = useState(false);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -73,18 +75,30 @@ const BillingDashboard = ({ token }) => {
     notes: ''
   });
 
+  const [manualFormData, setManualFormData] = useState({
+    clientId: '',
+    billingPeriodStart: '',
+    billingPeriodEnd: '',
+    notes: ''
+  });
+
+  const [manualLineItems, setManualLineItems] = useState([
+    { caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }
+  ]);
+
   useEffect(() => {
     loadData();
   }, []);
 
   const loadData = async () => {
     try {
-      const [invoiceRes, clientRes, rsRes, ctRes, ratesRes] = await Promise.all([
+      const [invoiceRes, clientRes, rsRes, ctRes, ratesRes, caregiversRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/invoices`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/clients`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/referral-sources`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/care-types`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`${API_BASE_URL}/api/referral-source-rates`, { headers: { 'Authorization': `Bearer ${token}` } })
+        fetch(`${API_BASE_URL}/api/referral-source-rates`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/users?role=caregiver`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
 
       setInvoices(await invoiceRes.json());
@@ -92,6 +106,11 @@ const BillingDashboard = ({ token }) => {
       setReferralSources(await rsRes.json());
       setCareTypes(await ctRes.json());
       setRates(await ratesRes.json());
+      
+      try {
+        const caregiversData = await caregiversRes.json();
+        setCaregivers(Array.isArray(caregiversData) ? caregiversData : []);
+      } catch (e) { setCaregivers([]); }
 
       // Try loading optional endpoints
       try {
@@ -132,6 +151,77 @@ const BillingDashboard = ({ token }) => {
     } catch (error) {
       alert('Failed to generate invoice: ' + error.message);
     }
+  };
+
+  const handleManualInvoice = async (e) => {
+    e.preventDefault();
+    
+    // Validate line items
+    const validLineItems = manualLineItems.filter(item => 
+      parseFloat(item.hours) > 0 && parseFloat(item.rate) > 0
+    );
+    
+    if (validLineItems.length === 0) {
+      alert('Please add at least one line item with hours and rate');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/invoices/manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          ...manualFormData,
+          lineItems: validLineItems
+        })
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to create invoice');
+      }
+      const invoice = await response.json();
+      setManualFormData({ clientId: '', billingPeriodStart: '', billingPeriodEnd: '', notes: '' });
+      setManualLineItems([{ caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }]);
+      setShowManualForm(false);
+      loadData();
+      setSelectedInvoice(invoice);
+      setShowInvoiceModal(true);
+      setMessage('✓ Manual invoice created successfully');
+      setTimeout(() => setMessage(''), 3000);
+    } catch (error) {
+      alert('Failed to create invoice: ' + error.message);
+    }
+  };
+
+  const addManualLineItem = () => {
+    setManualLineItems([...manualLineItems, { caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }]);
+  };
+
+  const removeManualLineItem = (index) => {
+    if (manualLineItems.length > 1) {
+      setManualLineItems(manualLineItems.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateManualLineItem = (index, field, value) => {
+    const updated = [...manualLineItems];
+    updated[index][field] = value;
+    
+    // If selecting a caregiver, also store their name
+    if (field === 'caregiverId' && value) {
+      const caregiver = caregivers.find(c => c.id === value);
+      if (caregiver) {
+        updated[index].caregiverName = `${caregiver.first_name} ${caregiver.last_name}`;
+      }
+    }
+    
+    setManualLineItems(updated);
+  };
+
+  const calculateManualTotal = () => {
+    return manualLineItems.reduce((sum, item) => {
+      return sum + (parseFloat(item.hours || 0) * parseFloat(item.rate || 0));
+    }, 0);
   };
 
   const handleBatchGenerate = async (e) => {
@@ -373,6 +463,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
         <h2>💰 Billing & Invoicing</h2>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <button className="btn btn-primary" onClick={() => setShowGenerateForm(!showGenerateForm)}>📄 New Invoice</button>
+          <button className="btn btn-primary" onClick={() => setShowManualForm(!showManualForm)}>✏️ Manual Invoice</button>
           <button className="btn btn-secondary" onClick={() => setShowBatchForm(!showBatchForm)}>📋 Batch Generate</button>
           <button className="btn btn-secondary" onClick={handleExportCSV}>📥 Export CSV</button>
           <button className="btn btn-secondary" onClick={handleExportEVV}>📤 EVV Export</button>
@@ -435,6 +526,131 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <div className="form-actions">
               <button type="submit" className="btn btn-primary">Generate</button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowGenerateForm(false)}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Manual Invoice Form */}
+      {showManualForm && (
+        <div className="card card-form">
+          <h3>✏️ Manual Invoice Entry</h3>
+          <p className="text-muted">Create an invoice with manually entered line items (no time entries required).</p>
+          <form onSubmit={handleManualInvoice}>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Client *</label>
+                <select value={manualFormData.clientId} onChange={(e) => setManualFormData({ ...manualFormData, clientId: e.target.value })} required>
+                  <option value="">Select client...</option>
+                  {clients.map(client => <option key={client.id} value={client.id}>{client.first_name} {client.last_name}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Billing Period Start *</label>
+                <input type="date" value={manualFormData.billingPeriodStart} onChange={(e) => setManualFormData({ ...manualFormData, billingPeriodStart: e.target.value })} required />
+              </div>
+              <div className="form-group">
+                <label>Billing Period End *</label>
+                <input type="date" value={manualFormData.billingPeriodEnd} onChange={(e) => setManualFormData({ ...manualFormData, billingPeriodEnd: e.target.value })} required />
+              </div>
+            </div>
+            
+            <h4 style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>Line Items</h4>
+            <table className="table" style={{ marginBottom: '1rem' }}>
+              <thead>
+                <tr>
+                  <th>Caregiver</th>
+                  <th>Description</th>
+                  <th>Hours</th>
+                  <th>Rate</th>
+                  <th>Amount</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {manualLineItems.map((item, index) => (
+                  <tr key={index}>
+                    <td>
+                      <select 
+                        value={item.caregiverId} 
+                        onChange={(e) => updateManualLineItem(index, 'caregiverId', e.target.value)}
+                        style={{ minWidth: '150px' }}
+                      >
+                        <option value="">Select caregiver...</option>
+                        {caregivers.map(cg => (
+                          <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input 
+                        type="text" 
+                        value={item.description} 
+                        onChange={(e) => updateManualLineItem(index, 'description', e.target.value)}
+                        placeholder="Description"
+                        style={{ minWidth: '150px' }}
+                      />
+                    </td>
+                    <td>
+                      <input 
+                        type="number" 
+                        step="0.25" 
+                        min="0" 
+                        value={item.hours} 
+                        onChange={(e) => updateManualLineItem(index, 'hours', e.target.value)}
+                        placeholder="0.00"
+                        style={{ width: '80px' }}
+                        required
+                      />
+                    </td>
+                    <td>
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        min="0" 
+                        value={item.rate} 
+                        onChange={(e) => updateManualLineItem(index, 'rate', e.target.value)}
+                        placeholder="0.00"
+                        style={{ width: '80px' }}
+                        required
+                      />
+                    </td>
+                    <td>
+                      <strong>{formatCurrency((parseFloat(item.hours) || 0) * (parseFloat(item.rate) || 0))}</strong>
+                    </td>
+                    <td>
+                      {manualLineItems.length > 1 && (
+                        <button type="button" className="btn btn-sm btn-danger" onClick={() => removeManualLineItem(index)}>✕</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan="4" style={{ textAlign: 'right' }}><strong>Total:</strong></td>
+                  <td colSpan="2"><strong style={{ fontSize: '1.2rem' }}>{formatCurrency(calculateManualTotal())}</strong></td>
+                </tr>
+              </tfoot>
+            </table>
+            
+            <button type="button" className="btn btn-secondary" onClick={addManualLineItem} style={{ marginBottom: '1rem' }}>
+              + Add Line Item
+            </button>
+
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea 
+                value={manualFormData.notes} 
+                onChange={(e) => setManualFormData({ ...manualFormData, notes: e.target.value })}
+                rows="2"
+                placeholder="Optional notes..."
+              />
+            </div>
+            
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary">Create Invoice</button>
+              <button type="button" className="btn btn-secondary" onClick={() => { setShowManualForm(false); setManualLineItems([{ caregiverId: '', caregiverName: '', description: 'Home Care Services', hours: '', rate: '' }]); }}>Cancel</button>
             </div>
           </form>
         </div>
