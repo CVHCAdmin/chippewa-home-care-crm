@@ -12,6 +12,7 @@ const claimsRoutes = require('./routes/claimsRoutes');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const billingRoutes = require('./routes/billingRoutes');
 
 // Load environment variables
 dotenv.config();
@@ -36,7 +37,6 @@ const limiter = rateLimit({
   max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
-
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -581,95 +581,6 @@ app.get('/api/referral-sources', verifyToken, async (req, res) => {
   }
 });
 
-// ---- INVOICING ----
-app.post('/api/invoices/generate', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { clientId, billingPeriodStart, billingPeriodEnd } = req.body;
-    const invoiceId = uuidv4();
-    const invoiceNumber = `INV-${Date.now()}`;
-
-    // Get time entries for billing period
-    const entriesResult = await db.query(
-      `SELECT te.*, ca.pay_rate FROM time_entries te
-       LEFT JOIN client_assignments ca ON te.assignment_id = ca.id
-       WHERE te.client_id = $1 AND te.start_time::date >= $2 AND te.end_time::date <= $3 AND te.is_complete = true`,
-      [clientId, billingPeriodStart, billingPeriodEnd]
-    );
-
-    let total = 0;
-    const lineItems = [];
-
-    for (const entry of entriesResult.rows) {
-      const amount = (entry.duration_minutes / 60) * (entry.pay_rate || 25);
-      total += amount;
-      lineItems.push({
-        timeEntryId: entry.id,
-        caregiverId: entry.caregiver_id,
-        hours: entry.duration_minutes / 60,
-        rate: entry.pay_rate,
-        amount: amount
-      });
-    }
-
-    // Create invoice
-    const invoiceResult = await db.query(
-      `INSERT INTO invoices (id, invoice_number, client_id, billing_period_start, billing_period_end, subtotal, total, payment_due_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [invoiceId, invoiceNumber, clientId, billingPeriodStart, billingPeriodEnd, total, total, new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)]
-    );
-
-    // Create line items
-    for (const item of lineItems) {
-      await db.query(
-        `INSERT INTO invoice_line_items (invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [invoiceId, item.timeEntryId, item.caregiverId, 'Care Services', item.hours, item.rate, item.amount]
-      );
-    }
-
-    await auditLog(req.user.id, 'CREATE', 'invoices', invoiceId, null, invoiceResult.rows[0]);
-    res.status(201).json(invoiceResult.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/invoices', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT i.*, c.first_name, c.last_name, rs.name as referral_source_name
-       FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       LEFT JOIN referral_sources rs ON i.referral_source_id = rs.id
-       ORDER BY i.created_at DESC`
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/invoices/:id/payment-status', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { status, paymentDate } = req.body;
-    const result = await db.query(
-      `UPDATE invoices SET payment_status = $1, payment_date = $2, updated_at = NOW()
-       WHERE id = $3 RETURNING *`,
-      [status, paymentDate, req.params.id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    await auditLog(req.user.id, 'UPDATE', 'invoices', req.params.id, null, result.rows[0]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // ---- DASHBOARD ANALYTICS ----
 app.get('/api/dashboard/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
@@ -729,30 +640,6 @@ app.get('/api/dashboard/caregiver-hours', verifyToken, requireAdmin, async (req,
        ORDER BY total_hours DESC`
     );
     res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ---- EXPORTS ----
-app.get('/api/export/invoices-csv', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT i.invoice_number, c.first_name, c.last_name, i.billing_period_start, 
-              i.billing_period_end, i.total, i.payment_status
-       FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       ORDER BY i.created_at DESC`
-    );
-
-    let csv = 'Invoice #,Client Name,Period Start,Period End,Total,Status\n';
-    result.rows.forEach(row => {
-      csv += `"${row.invoice_number}","${row.first_name} ${row.last_name}","${row.billing_period_start}","${row.billing_period_end}","${row.total}","${row.payment_status}"\n`;
-    });
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="invoices.csv"');
-    res.send(csv);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1023,145 +910,6 @@ app.put('/api/caregiver-rates/:caregiverId', verifyToken, requireAdmin, async (r
     }
 
     await auditLog(req.user.id, 'UPDATE', 'caregiver_rates', req.params.caregiverId, null, result.rows[0]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ---- ENHANCED INVOICING ----
-
-// GET /api/invoices/:id - Get invoice details with line items
-app.get('/api/invoices/:id', verifyToken, async (req, res) => {
-  try {
-    const invoiceResult = await db.query(
-      `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.address, c.city, c.state, c.zip,
-              rs.name as referral_source_name
-       FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       LEFT JOIN referral_sources rs ON i.referral_source_id = rs.id
-       WHERE i.id = $1`,
-      [req.params.id]
-    );
-
-    if (invoiceResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    const lineItemsResult = await db.query(
-      `SELECT ili.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
-              te.start_time as service_date
-       FROM invoice_line_items ili
-       LEFT JOIN users u ON ili.caregiver_id = u.id
-       LEFT JOIN time_entries te ON ili.time_entry_id = te.id
-       WHERE ili.invoice_id = $1
-       ORDER BY ili.created_at`,
-      [req.params.id]
-    );
-
-    res.json({
-      ...invoiceResult.rows[0],
-      line_items: lineItemsResult.rows
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST /api/invoices/generate-from-schedules - Enhanced invoice generation
-app.post('/api/invoices/generate-from-schedules', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { clientId, billingPeriodStart, billingPeriodEnd } = req.body;
-    const invoiceId = uuidv4();
-    const invoiceNumber = `INV-${Date.now()}`;
-
-    // Get schedules for the billing period
-    const schedulesResult = await db.query(
-      `SELECT s.*, u.first_name, u.last_name
-       FROM schedules s
-       JOIN users u ON s.caregiver_id = u.id
-       WHERE s.client_id = $1
-       AND s.is_active = true
-       AND s.date >= $2
-       AND s.date <= $3`,
-      [clientId, billingPeriodStart, billingPeriodEnd]
-    );
-
-    let subtotal = 0;
-    const lineItems = [];
-
-    // Calculate billing from schedules
-    for (const schedule of schedulesResult.rows) {
-      const [startHour, startMin] = schedule.start_time.split(':');
-      const [endHour, endMin] = schedule.end_time.split(':');
-      
-      const startMinutes = parseInt(startHour) * 60 + parseInt(startMin);
-      const endMinutes = parseInt(endHour) * 60 + parseInt(endMin);
-      const hours = ((endMinutes - startMinutes) / 60).toFixed(2);
-
-      // Get caregiver rate
-      const rateResult = await db.query(
-        `SELECT base_hourly_rate FROM caregiver_rates WHERE caregiver_id = $1`,
-        [schedule.caregiver_id]
-      );
-      const rate = rateResult.rows[0]?.base_hourly_rate || 18.50;
-      const amount = (hours * rate).toFixed(2);
-
-      subtotal += parseFloat(amount);
-      lineItems.push({
-        caregiverId: schedule.caregiver_id,
-        caregiver_name: `${schedule.first_name} ${schedule.last_name}`,
-        description: `Care Services - ${schedule.date}`,
-        hours: hours,
-        rate: rate,
-        amount: amount
-      });
-    }
-
-    const tax = (subtotal * 0.08).toFixed(2);
-    const total = (subtotal + parseFloat(tax)).toFixed(2);
-
-    // Create invoice
-    const invoiceResult = await db.query(
-      `INSERT INTO invoices (id, invoice_number, client_id, billing_period_start, billing_period_end, subtotal, tax, total, payment_due_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [invoiceId, invoiceNumber, clientId, billingPeriodStart, billingPeriodEnd, subtotal, tax, total, 
-       new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)]
-    );
-
-    // Create line items
-    for (const item of lineItems) {
-      await db.query(
-        `INSERT INTO invoice_line_items (invoice_id, caregiver_id, description, hours, rate, amount)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [invoiceId, item.caregiverId, item.description, item.hours, item.rate, item.amount]
-      );
-    }
-
-    await auditLog(req.user.id, 'CREATE', 'invoices', invoiceId, null, invoiceResult.rows[0]);
-    res.status(201).json({
-      ...invoiceResult.rows[0],
-      lineItems: lineItems
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET /api/invoices/billing-summary - Revenue report
-app.get('/api/invoices/billing-summary', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT 
-        COUNT(*) as total_invoices,
-        SUM(CASE WHEN payment_status = 'paid' THEN total ELSE 0 END) as paid_amount,
-        SUM(CASE WHEN payment_status = 'pending' THEN total ELSE 0 END) as pending_amount,
-        SUM(CASE WHEN payment_status = 'overdue' THEN total ELSE 0 END) as overdue_amount,
-        SUM(total) as total_billed,
-        AVG(total) as average_invoice
-       FROM invoices`
-    );
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3450,7 +3198,6 @@ app.get('/api/referral-sources/stats', verifyToken, requireAdmin, async (req, re
   }
 });
 
-
 // ---- REPORTS (POST ENDPOINTS) ----
 
 // POST /api/reports/overview
@@ -4108,6 +3855,7 @@ app.use('/api/background-checks', verifyToken, require('./routes/backgroundCheck
 app.use('/api/family-portal', require('./routes/familyPortalRoutes')); // No verifyToken - has its own auth
 app.use('/api/shift-swaps', verifyToken, require('./routes/shiftSwapsRoutes'));
 app.use('/api/alerts', verifyToken, require('./routes/alertsRoutes'));
+app.use('/api', billingRoutes);
 
 // ============ CARE TYPES ============
 app.get('/api/care-types', verifyToken, async (req, res) => {
@@ -4154,99 +3902,6 @@ app.put('/api/care-types/:id', verifyToken, requireAdmin, async (req, res) => {
     
     await auditLog(req.user.id, 'UPDATE', 'care_types', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ REFERRAL SOURCE RATES ============
-app.get('/api/referral-source-rates', verifyToken, async (req, res) => {
-  try {
-    const { referralSourceId } = req.query;
-    
-    let query = `
-      SELECT rsr.*, rs.name as referral_source_name, ct.name as care_type_name
-      FROM referral_source_rates rsr
-      JOIN referral_sources rs ON rsr.referral_source_id = rs.id
-      JOIN care_types ct ON rsr.care_type_id = ct.id
-      WHERE rsr.is_active = true
-    `;
-    const params = [];
-    
-    if (referralSourceId) {
-      params.push(referralSourceId);
-      query += ` AND rsr.referral_source_id = $${params.length}`;
-    }
-    
-    query += ` ORDER BY rs.name, ct.name`;
-    
-    const result = await db.query(query, params);
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/referral-source-rates', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { referralSourceId, careTypeId, rateAmount, rateType, effectiveDate } = req.body;
-    const id = uuidv4();
-    
-    // Deactivate any existing rate for this combo
-    await db.query(
-      `UPDATE referral_source_rates SET is_active = false, end_date = $1, updated_at = NOW()
-       WHERE referral_source_id = $2 AND care_type_id = $3 AND is_active = true`,
-      [effectiveDate || new Date(), referralSourceId, careTypeId]
-    );
-    
-    const result = await db.query(
-      `INSERT INTO referral_source_rates (id, referral_source_id, care_type_id, rate_amount, rate_type, effective_date)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, referralSourceId, careTypeId, rateAmount, rateType || 'hourly', effectiveDate || new Date()]
-    );
-    
-    await auditLog(req.user.id, 'CREATE', 'referral_source_rates', id, null, result.rows[0]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { rateAmount, rateType } = req.body;
-    
-    const result = await db.query(
-      `UPDATE referral_source_rates SET rate_amount = $1, rate_type = $2, updated_at = NOW()
-       WHERE id = $3 RETURNING *`,
-      [rateAmount, rateType, req.params.id]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Rate not found' });
-    }
-    
-    await auditLog(req.user.id, 'UPDATE', 'referral_source_rates', req.params.id, null, result.rows[0]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/referral-source-rates/:id', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const result = await db.query(
-      `UPDATE referral_source_rates SET is_active = false, end_date = CURRENT_DATE, updated_at = NOW()
-       WHERE id = $1 RETURNING *`,
-      [req.params.id]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Rate not found' });
-    }
-    
-    await auditLog(req.user.id, 'DELETE', 'referral_source_rates', req.params.id, null, result.rows[0]);
-    res.json({ message: 'Rate deactivated' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -4440,139 +4095,6 @@ app.put('/api/clients/:id/billing', verifyToken, requireAdmin, async (req, res) 
     await auditLog(req.user.id, 'UPDATE', 'clients', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
   } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ ENHANCED INVOICE GENERATION ============
-app.post('/api/invoices/generate-with-rates', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const { clientId, billingPeriodStart, billingPeriodEnd, notes } = req.body;
-    const invoiceId = uuidv4();
-    const invoiceNumber = `INV-${Date.now()}`;
-
-    // Get client billing info
-    const clientResult = await db.query(`
-      SELECT c.*, 
-             rs.name as referral_source_name, rs.id as rs_id,
-             ct.name as care_type_name,
-             CASE 
-               WHEN c.is_private_pay THEN c.private_pay_rate
-               ELSE rsr.rate_amount
-             END as billing_rate,
-             CASE 
-               WHEN c.is_private_pay THEN c.private_pay_rate_type
-               ELSE rsr.rate_type
-             END as rate_type
-      FROM clients c
-      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
-      LEFT JOIN care_types ct ON c.care_type_id = ct.id
-      LEFT JOIN referral_source_rates rsr ON 
-        rsr.referral_source_id = c.referral_source_id 
-        AND rsr.care_type_id = c.care_type_id
-        AND rsr.is_active = true
-      WHERE c.id = $1
-    `, [clientId]);
-
-    if (clientResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    const client = clientResult.rows[0];
-    const billingRate = parseFloat(client.billing_rate) || 25;
-    const rateType = client.rate_type || 'hourly';
-
-    // Get time entries for billing period
-    const entriesResult = await db.query(`
-      SELECT te.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
-             ccr.hourly_rate as caregiver_rate
-      FROM time_entries te
-      JOIN users u ON te.caregiver_id = u.id
-      LEFT JOIN caregiver_client_rates ccr ON 
-        ccr.caregiver_id = te.caregiver_id 
-        AND ccr.client_id = te.client_id
-        AND (ccr.end_date IS NULL OR ccr.end_date >= te.start_time::date)
-      WHERE te.client_id = $1 
-        AND te.start_time::date >= $2 
-        AND te.end_time::date <= $3 
-        AND te.is_complete = true
-      ORDER BY te.start_time
-    `, [clientId, billingPeriodStart, billingPeriodEnd]);
-
-    let subtotal = 0;
-    const lineItems = [];
-
-    for (const entry of entriesResult.rows) {
-      const hours = entry.duration_minutes / 60;
-      // Round to 15-minute increments
-      const roundedHours = Math.ceil(hours * 4) / 4;
-      
-      let amount;
-      if (rateType === '15min') {
-        amount = roundedHours * 4 * billingRate; // rate is per 15 minutes
-      } else {
-        amount = roundedHours * billingRate;
-      }
-      
-      subtotal += amount;
-      lineItems.push({
-        timeEntryId: entry.id,
-        caregiverId: entry.caregiver_id,
-        caregiverName: `${entry.caregiver_first_name} ${entry.caregiver_last_name}`,
-        serviceDate: entry.start_time,
-        hours: roundedHours,
-        rate: billingRate,
-        rateType,
-        amount,
-        caregiverPayRate: parseFloat(entry.caregiver_rate) || parseFloat(entry.pay_rate) || 15
-      });
-    }
-
-    // Create invoice
-    const invoiceResult = await db.query(`
-      INSERT INTO invoices (
-        id, invoice_number, client_id, referral_source_id, invoice_type,
-        billing_period_start, billing_period_end, subtotal, total, 
-        payment_due_date, notes
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      RETURNING *
-    `, [
-      invoiceId, invoiceNumber, clientId, 
-      client.is_private_pay ? null : client.rs_id,
-      client.is_private_pay ? 'private' : 'referral_source',
-      billingPeriodStart, billingPeriodEnd, 
-      subtotal, subtotal,
-      new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      notes
-    ]);
-
-    // Create line items
-    for (const item of lineItems) {
-      await db.query(`
-        INSERT INTO invoice_line_items (
-          invoice_id, time_entry_id, caregiver_id, description, 
-          hours, rate, amount
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `, [
-        invoiceId, item.timeEntryId, item.caregiverId,
-        `Care Services - ${new Date(item.serviceDate).toLocaleDateString()}`,
-        item.hours, item.rate, item.amount
-      ]);
-    }
-
-    await auditLog(req.user.id, 'CREATE', 'invoices', invoiceId, null, invoiceResult.rows[0]);
-    
-    res.status(201).json({
-      ...invoiceResult.rows[0],
-      line_items: lineItems,
-      client_name: `${client.first_name} ${client.last_name}`,
-      referral_source_name: client.referral_source_name,
-      care_type_name: client.care_type_name
-    });
-  } catch (error) {
-    console.error('Invoice generation error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -5303,6 +4825,4 @@ app.listen(port, () => {
   console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
   console.log(`📊 Admin Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
 });
-
-
 
