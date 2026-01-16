@@ -1191,16 +1191,16 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                   color: #333;
                   background: white;
-                  padding: 30px;
-                  line-height: 1.4;
-                  font-size: 13px;
+                  padding: 20px;
+                  line-height: 1.3;
+                  font-size: 12px;
                 }
                 /* Header: Logo+Company LEFT, Invoice Info RIGHT */
                 .invoice-header-row {
                   display: flex;
                   justify-content: space-between;
                   align-items: flex-start;
-                  margin-bottom: 25px;
+                  margin-bottom: 20px;
                 }
                 .invoice-header-left {
                   display: flex;
@@ -1255,8 +1255,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 .invoice-details-row {
                   display: flex;
                   justify-content: space-between;
-                  margin-bottom: 25px;
-                  padding-bottom: 20px;
+                  margin-bottom: 15px;
+                  padding-bottom: 15px;
                 }
                 .invoice-bill-to {
                   flex: 1;
@@ -1306,7 +1306,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 }
                 .invoice-table th {
                   color: white;
-                  padding: 10px 12px;
+                  padding: 8px 12px;
                   text-align: left;
                   font-size: 11px;
                   font-weight: 600;
@@ -1319,10 +1319,10 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 .invoice-table th:nth-child(4) { width: 70px; text-align: right; }
                 .invoice-table th:last-child { width: 90px; text-align: right; }
                 .invoice-table td {
-                  padding: 10px 12px;
+                  padding: 6px 12px;
                   border-bottom: 1px solid #eee;
                   font-size: 13px;
-                  vertical-align: top;
+                  vertical-align: middle;
                 }
                 .invoice-table td:first-child { text-align: center; color: #888; }
                 .invoice-table td:nth-child(3) { text-align: right; }
@@ -1372,8 +1372,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 }
                 /* Notes */
                 .invoice-notes-section {
-                  margin-top: 30px;
-                  padding-top: 15px;
+                  margin-top: 20px;
+                  padding-top: 10px;
                 }
                 .invoice-notes-label {
                   font-size: 12px;
@@ -1387,8 +1387,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 }
                 /* Footer */
                 .invoice-footer-section {
-                  margin-top: 40px;
-                  padding-top: 15px;
+                  margin-top: 25px;
+                  padding-top: 10px;
                   border-top: 1px solid #ddd;
                   text-align: center;
                   color: #888;
@@ -1478,7 +1478,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                             </div>
                           )}
                         </td>
-                        <td>{parseFloat(item.hours).toFixed(2)}<br /><span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
+                        <td>{parseFloat(item.hours).toFixed(2)} <span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
                         <td>{parseFloat(item.rate).toFixed(2)}</td>
                         <td>{parseFloat(item.amount).toFixed(2)}</td>
                       </tr>
@@ -1492,7 +1492,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                           {new Date(selectedInvoice.billing_period_start).toLocaleDateString()} - {new Date(selectedInvoice.billing_period_end).toLocaleDateString()}
                         </div>
                       </td>
-                      <td>{selectedInvoice.total_hours?.toFixed(2) || '0.00'}<br /><span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
+                      <td>{selectedInvoice.total_hours?.toFixed(2) || '0.00'} <span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
                       <td>{selectedInvoice.line_items?.[0]?.rate?.toFixed(2) || '33.00'}</td>
                       <td>{parseFloat(selectedInvoice.total).toFixed(2)}</td>
                     </tr>
