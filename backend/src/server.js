@@ -190,7 +190,30 @@ app.post('/api/auth/register-admin', verifyToken, requireAdmin, async (req, res)
     res.status(500).json({ error: 'Registration failed' });
   }
 });
+// GET /api/users - Get users with optional role filter
+app.get('/api/users', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { role } = req.query;
+    let query = `
+      SELECT id, email, first_name, last_name, phone, role, is_active, hire_date, default_pay_rate
+      FROM users
+      WHERE 1=1
+    `;
+    const params = [];
 
+    if (role) {
+      params.push(role);
+      query += ` AND role = $${params.length}`;
+    }
+
+    query += ` ORDER BY first_name, last_name`;
+    
+    const result = await db.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 // ---- USER MANAGEMENT ----
 app.get('/api/users/caregivers', verifyToken, requireAdmin, async (req, res) => {
   try {
