@@ -545,7 +545,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
 
       {/* Manual Invoice Form */}
       {showManualForm && (
-        <div className="card card-form">
+        <div className="card" style={{ maxWidth: 'none' }}>
           <h3>✏️ Manual Invoice Entry</h3>
           <p className="text-muted">Create an invoice with manually entered line items (no time entries required).</p>
           <form onSubmit={handleManualInvoice}>
@@ -614,7 +614,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   )}
                 </div>
                 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
                   {detailedMode && (
                     <div className="form-group" style={{ margin: 0 }}>
                       <label style={{ fontSize: '0.8rem' }}>Date *</label>
@@ -640,7 +640,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     </select>
                   </div>
                   
-                  <div className="form-group" style={{ margin: 0, gridColumn: detailedMode ? 'span 1' : 'span 2' }}>
+                  <div className="form-group" style={{ margin: 0, gridColumn: 'span 2' }}>
                     <label style={{ fontSize: '0.8rem' }}>Description</label>
                     <input 
                       type="text" 
