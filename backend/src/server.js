@@ -17,6 +17,7 @@ const { v4: uuidv4 } = require('uuid');
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', 1);
 const port = process.env.PORT || 5000;
 
 // ============ SECURITY MIDDLEWARE ============
