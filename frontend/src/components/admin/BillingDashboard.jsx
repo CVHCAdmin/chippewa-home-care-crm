@@ -1058,53 +1058,20 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <div id="printable-invoice" className="invoice-print-container">
               <style>{`
                 @media print {
-                  @page {
-                    margin: 10mm;
-                    size: letter;
-                  }
-                  html, body {
-                    height: auto !important;
-                    overflow: visible !important;
-                  }
-                  body * { 
-                    visibility: hidden; 
-                  }
-                  #printable-invoice, 
-                  #printable-invoice * { 
-                    visibility: visible; 
-                  }
+                  body * { visibility: hidden; }
+                  #printable-invoice, #printable-invoice * { visibility: visible; }
                   #printable-invoice { 
                     position: absolute; 
                     left: 0; 
                     top: 0; 
                     width: 100%;
-                    padding: 10mm;
+                    padding: 0;
                     margin: 0;
                   }
-                  .no-print { 
-                    display: none !important; 
-                  }
+                  .no-print { display: none !important; }
                   .invoice-print-container { 
                     box-shadow: none !important; 
                     border: none !important;
-                  }
-                  .modal, .modal-content {
-                    overflow: visible !important;
-                    height: auto !important;
-                    max-height: none !important;
-                  }
-                  /* Prevent breaks inside sections */
-                  .invoice-header,
-                  .invoice-title-section,
-                  .invoice-parties,
-                  .invoice-totals,
-                  .invoice-footer,
-                  .invoice-notes {
-                    page-break-inside: avoid !important;
-                    break-inside: avoid !important;
-                  }
-                  .invoice-table tr {
-                    page-break-inside: avoid !important;
                   }
                 }
                 .invoice-print-container {
