@@ -949,5 +949,33 @@ router.get('/billing-summary', auth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// ==================== DELETE INVOICE ====================
 
+router.delete('/invoices/:id', auth, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    // First check if invoice exists
+    const invoiceCheck = await db.query('SELECT id, invoice_number FROM invoices WHERE id = $1', [id]);
+    if (invoiceCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    
+    const invoiceNumber = invoiceCheck.rows[0].invoice_number;
+    
+    // Delete line items first (foreign key constraint)
+    await db.query('DELETE FROM invoice_line_items WHERE invoice_id = $1', [id]);
+    
+    // Delete any payments associated with this invoice
+    await db.query('DELETE FROM invoice_payments WHERE invoice_id = $1', [id]);
+    
+    // Delete the invoice
+    await db.query('DELETE FROM invoices WHERE id = $1', [id]);
+    
+    res.json({ message: `Invoice ${invoiceNumber} deleted successfully` });
+  } catch (error) {
+    console.error('Error deleting invoice:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 module.exports = router;
