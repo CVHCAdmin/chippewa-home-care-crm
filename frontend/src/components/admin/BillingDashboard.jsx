@@ -227,6 +227,29 @@ const BillingDashboard = ({ token }) => {
       }
     }
     
+    // Auto-calculate hours when start/end times are both set
+    if (field === 'startTime' || field === 'endTime') {
+      const startTime = field === 'startTime' ? value : updated[index].startTime;
+      const endTime = field === 'endTime' ? value : updated[index].endTime;
+      
+      if (startTime && endTime) {
+        const [startHour, startMin] = startTime.split(':').map(Number);
+        const [endHour, endMin] = endTime.split(':').map(Number);
+        
+        let hours = (endHour + endMin / 60) - (startHour + startMin / 60);
+        
+        // Handle overnight shifts
+        if (hours < 0) {
+          hours += 24;
+        }
+        
+        // Round to nearest 0.25 (15 minutes)
+        hours = Math.round(hours * 4) / 4;
+        
+        updated[index].hours = hours.toFixed(2);
+      }
+    }
+    
     setManualLineItems(updated);
   };
 
@@ -656,6 +679,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                         <label style={{ fontSize: '0.8rem' }}>Start Time</label>
                         <input 
                           type="time" 
+                          step="900"
                           value={item.startTime} 
                           onChange={(e) => updateManualLineItem(index, 'startTime', e.target.value)}
                         />
@@ -664,6 +688,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                         <label style={{ fontSize: '0.8rem' }}>End Time</label>
                         <input 
                           type="time" 
+                          step="900"
                           value={item.endTime} 
                           onChange={(e) => updateManualLineItem(index, 'endTime', e.target.value)}
                         />
@@ -1470,13 +1495,11 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                         <td>{idx + 1}</td>
                         <td>
                           <div className="invoice-item-description">{item.description || 'Home Care Services'}</div>
-                          {item.service_date && (
-                            <div className="invoice-item-details">
-                              {new Date(item.service_date).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })}
-                              {item.caregiver_first_name && ` - ${item.caregiver_first_name} ${item.caregiver_last_name}`}
-                              {item.time_range && ` ${item.time_range}`}
-                            </div>
-                          )}
+                          <div className="invoice-item-details">
+                            {item.service_date && new Date(item.service_date).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })}
+                            {item.caregiver_first_name && ` - ${item.caregiver_first_name} ${item.caregiver_last_name}`}
+                            {item.time_range && ` ${item.time_range}`}
+                          </div>
                         </td>
                         <td>{parseFloat(item.hours).toFixed(2)}</td>
                         <td>{parseFloat(item.rate).toFixed(2)}</td>
