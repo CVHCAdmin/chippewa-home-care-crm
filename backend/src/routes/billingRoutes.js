@@ -298,6 +298,132 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
   }
 });
 
+// Create manual invoice with custom line items
+router.post('/invoices/manual', auth, async (req, res) => {
+  const { clientId, billingPeriodStart, billingPeriodEnd, notes, lineItems } = req.body;
+
+  if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
+    return res.status(400).json({ error: 'Client and billing period are required' });
+  }
+
+  if (!lineItems || lineItems.length === 0) {
+    return res.status(400).json({ error: 'At least one line item is required' });
+  }
+
+  try {
+    // Get client info
+    const clientResult = await db.query(`
+      SELECT id, first_name, last_name, referral_source_id, care_type_id, is_private_pay
+      FROM clients WHERE id = $1
+    `, [clientId]);
+
+    if (clientResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const client = clientResult.rows[0];
+
+    // Check for existing invoice
+    const existingResult = await db.query(`
+      SELECT id, invoice_number FROM invoices 
+      WHERE client_id = $1 
+        AND billing_period_start = $2 
+        AND billing_period_end = $3
+    `, [clientId, billingPeriodStart, billingPeriodEnd]);
+
+    if (existingResult.rows.length > 0) {
+      return res.status(400).json({ 
+        error: `Invoice ${existingResult.rows[0].invoice_number} already exists for this period` 
+      });
+    }
+
+    // Calculate total from line items
+    let total = 0;
+    for (const item of lineItems) {
+      const amount = parseFloat(item.hours || 0) * parseFloat(item.rate || 0);
+      total += amount;
+    }
+
+    // Generate invoice number
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const clientPart = clientId.slice(0, 4).toUpperCase();
+    const invoiceNumber = `INV-${timestamp}-${clientPart}`;
+
+    // Calculate due date
+    const dueDate = new Date(billingPeriodEnd);
+    dueDate.setDate(dueDate.getDate() + 30);
+
+    // Create invoice
+    const invoiceResult = await db.query(`
+      INSERT INTO invoices (
+        client_id, invoice_number, billing_period_start, billing_period_end,
+        subtotal, total, payment_status, payment_due_date, notes,
+        referral_source_id, invoice_type
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)
+      RETURNING *
+    `, [
+      clientId, invoiceNumber, billingPeriodStart, billingPeriodEnd,
+      total, total, dueDate, notes,
+      client.referral_source_id,
+      client.is_private_pay ? 'private_pay' : 'insurance'
+    ]);
+
+    const invoice = invoiceResult.rows[0];
+
+    // Insert line items
+    const insertedLineItems = [];
+    for (const item of lineItems) {
+      const amount = parseFloat(item.hours || 0) * parseFloat(item.rate || 0);
+      
+      await db.query(`
+        INSERT INTO invoice_line_items (
+          invoice_id, caregiver_id, description, hours, rate, amount
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        invoice.id,
+        item.caregiverId || null,
+        item.description || 'Home Care Services',
+        item.hours,
+        item.rate,
+        amount
+      ]);
+
+      insertedLineItems.push({
+        caregiver_id: item.caregiverId,
+        caregiver_first_name: item.caregiverName?.split(' ')[0] || '',
+        caregiver_last_name: item.caregiverName?.split(' ').slice(1).join(' ') || '',
+        description: item.description || 'Home Care Services',
+        hours: item.hours,
+        rate: item.rate,
+        amount: amount
+      });
+    }
+
+    // Get referral source name
+    let referralSourceName = null;
+    if (client.referral_source_id) {
+      const rsResult = await db.query(
+        'SELECT name FROM referral_sources WHERE id = $1',
+        [client.referral_source_id]
+      );
+      referralSourceName = rsResult.rows[0]?.name;
+    }
+
+    res.json({
+      ...invoice,
+      first_name: client.first_name,
+      last_name: client.last_name,
+      referral_source_name: referralSourceName,
+      line_items: insertedLineItems,
+      total_hours: insertedLineItems.reduce((sum, item) => sum + parseFloat(item.hours), 0)
+    });
+
+  } catch (error) {
+    console.error('Error creating manual invoice:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Batch generate invoices
 router.post('/invoices/batch-generate', auth, async (req, res) => {
   const { billingPeriodStart, billingPeriodEnd, clientFilter, referralSourceId } = req.body;
