@@ -1521,7 +1521,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   </div>
                   <div className="invoice-date-row">
                     <span className="invoice-date-label">Due Date :</span>
-                    <span className="invoice-date-value">{formatDate(selectedInvoice.payment_due_date, { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                    <span className="invoice-date-value">{formatDate(selectedInvoice.created_at, { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
                 </div>
               </div>
