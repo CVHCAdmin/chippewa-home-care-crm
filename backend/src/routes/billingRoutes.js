@@ -180,12 +180,12 @@ router.get('/invoices/:id', auth, async (req, res) => {
         ili.*,
         u.first_name as caregiver_first_name,
         u.last_name as caregiver_last_name,
-        te.start_time as service_date
+        COALESCE(ili.service_date, DATE(te.start_time)) as service_date
       FROM invoice_line_items ili
       LEFT JOIN users u ON ili.caregiver_id = u.id
       LEFT JOIN time_entries te ON ili.time_entry_id = te.id
       WHERE ili.invoice_id = $1
-      ORDER BY te.start_time, u.last_name
+      ORDER BY COALESCE(ili.service_date, DATE(te.start_time)), u.last_name
     `, [req.params.id]);
 
     let lineItems = lineItemsResult.rows;
