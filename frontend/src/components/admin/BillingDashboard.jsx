@@ -1058,36 +1058,126 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <div id="printable-invoice" className="invoice-print-container">
               <style>{`
                 @media print {
-                  body * { visibility: hidden; }
-                  #printable-invoice, #printable-invoice * { visibility: visible; }
-                  #printable-invoice { 
-                    position: fixed !important; 
-                    left: 0 !important; 
-                    top: 0 !important; 
+                  @page {
+                    margin: 15mm;
+                    size: letter;
+                  }
+                  
+                  /* Hide everything first */
+                  body * {
+                    visibility: hidden;
+                  }
+                  
+                  /* Show only the invoice */
+                  #printable-invoice,
+                  #printable-invoice * {
+                    visibility: visible;
+                  }
+                  
+                  /* Reset containers */
+                  html, body {
+                    height: auto !important;
+                    overflow: visible !important;
+                  }
+                  
+                  #root, .main-content, .container {
+                    overflow: visible !important;
+                    height: auto !important;
+                  }
+                  
+                  /* Hide sidebar completely */
+                  .sidebar {
+                    display: none !important;
+                  }
+                  
+                  .main-content {
+                    margin-left: 0 !important;
                     width: 100% !important;
-                    padding: 10mm !important;
+                  }
+                  
+                  /* Reset modal to flow normally */
+                  .modal, .modal.active {
+                    position: absolute !important;
+                    left: 0 !important;
+                    top: 0 !important;
+                    width: 100% !important;
+                    height: auto !important;
+                    overflow: visible !important;
+                    background: none !important;
+                    padding: 0 !important;
+                    display: block !important;
+                  }
+                  
+                  .modal-content, .modal-large {
+                    position: relative !important;
+                    overflow: visible !important;
+                    max-height: none !important;
+                    height: auto !important;
+                    box-shadow: none !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    max-width: 100% !important;
+                    width: 100% !important;
+                  }
+                  
+                  /* Invoice container - NO absolute positioning */
+                  #printable-invoice {
+                    position: relative !important;
+                    width: 100% !important;
+                    padding: 0 !important;
                     margin: 0 !important;
                     background: white !important;
                   }
-                  .modal {
-                    position: static !important;
-                    overflow: visible !important;
+                  
+                  .invoice-print-container {
+                    padding: 0 !important;
                   }
-                  .modal-content {
-                    position: static !important;
-                    overflow: visible !important;
-                    transform: none !important;
+                  
+                  /* Hide non-print elements */
+                  .no-print {
+                    display: none !important;
+                    visibility: hidden !important;
                   }
-                  .no-print { display: none !important; }
-                  .invoice-print-container { 
-                    box-shadow: none !important; 
-                    border: none !important;
-                  }
-                  .invoice-footer {
+                  
+                  /* Prevent page breaks inside key sections */
+                  .invoice-header {
                     page-break-inside: avoid;
+                    break-inside: avoid;
                   }
+                  
+                  .invoice-title-section {
+                    page-break-inside: avoid;
+                    break-inside: avoid;
+                  }
+                  
+                  .invoice-parties {
+                    page-break-inside: avoid;
+                    break-inside: avoid;
+                  }
+                  
                   .invoice-totals {
                     page-break-inside: avoid;
+                    break-inside: avoid;
+                  }
+                  
+                  .invoice-footer {
+                    page-break-inside: avoid;
+                    break-inside: avoid;
+                  }
+                  
+                  .invoice-notes {
+                    page-break-inside: avoid;
+                    break-inside: avoid;
+                  }
+                  
+                  /* Table handling */
+                  .invoice-table {
+                    page-break-inside: auto;
+                  }
+                  
+                  .invoice-table tr {
+                    page-break-inside: avoid;
+                    break-inside: avoid;
                   }
                 }
                 .invoice-print-container {
