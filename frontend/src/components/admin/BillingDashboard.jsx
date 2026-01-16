@@ -1458,7 +1458,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   <tr>
                     <th>#</th>
                     <th>Item & Description</th>
-                    <th>Qty</th>
+                    <th>HOURS</th>
                     <th>Rate</th>
                     <th>Amount</th>
                   </tr>
@@ -1478,7 +1478,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                             </div>
                           )}
                         </td>
-                        <td>{parseFloat(item.hours).toFixed(2)} <span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
+                        <td>{parseFloat(item.hours).toFixed(2)}</td>
                         <td>{parseFloat(item.rate).toFixed(2)}</td>
                         <td>{parseFloat(item.amount).toFixed(2)}</td>
                       </tr>
@@ -1492,7 +1492,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                           {new Date(selectedInvoice.billing_period_start).toLocaleDateString()} - {new Date(selectedInvoice.billing_period_end).toLocaleDateString()}
                         </div>
                       </td>
-                      <td>{selectedInvoice.total_hours?.toFixed(2) || '0.00'} <span style={{ fontSize: '10px', color: '#888' }}>Hr</span></td>
+                      <td>{selectedInvoice.total_hours?.toFixed(2) || '0.00'}</td>
                       <td>{selectedInvoice.line_items?.[0]?.rate?.toFixed(2) || '33.00'}</td>
                       <td>{parseFloat(selectedInvoice.total).toFixed(2)}</td>
                     </tr>
