@@ -1,6 +1,6 @@
 // routes/billingRoutes.js
-// ROBUST billing routes - MATCHED TO ACTUAL SCHEMA
-// Uses: start_time/end_time, duration_minutes, is_complete, caregiver_profiles.caregiver_id
+// Consolidated billing routes - invoices, payments, authorizations, rates
+// All billing-related endpoints in one place
 
 const express = require('express');
 const router = express.Router();
@@ -11,12 +11,8 @@ const auth = require('../middleware/auth');
 
 /**
  * Generate line items for a client's billing period
- * Groups time entries by caregiver + date
- * Looks up correct rate for referral_source + care_type with effective date logic
  */
 async function generateLineItems(clientId, referralSourceId, careTypeId, billingPeriodStart, billingPeriodEnd) {
-  // Get all completed time entries for this client in the billing period
-  // Group by caregiver and date
   const entriesResult = await db.query(`
     SELECT 
       te.id as time_entry_id,
@@ -37,9 +33,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     ORDER BY te.start_time
   `, [clientId, billingPeriodStart, billingPeriodEnd]);
 
-  // Look up the correct rate
-  // First try: referral_source + care_type with valid effective dates
-  let rate = 25.00; // default
+  let rate = 25.00;
   let rateType = 'hourly';
 
   if (referralSourceId) {
@@ -67,7 +61,6 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
   let invoiceTotal = 0;
 
   for (const entry of entriesResult.rows) {
-    // Calculate hours from duration_minutes or from start_time/end_time
     let hours = 0;
     if (entry.duration_minutes) {
       hours = entry.duration_minutes / 60.0;
@@ -131,118 +124,35 @@ function generateInvoiceNumber(clientId) {
   return `INV-${timestamp}-${clientPart}`;
 }
 
-// ==================== SINGLE INVOICE GENERATION ====================
+// ==================== INVOICES ====================
 
-router.post('/invoices/generate-with-rates', auth, async (req, res) => {
-  const { clientId, billingPeriodStart, billingPeriodEnd, notes } = req.body;
-
-  if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
-    return res.status(400).json({ error: 'Client and billing period are required' });
-  }
-
+// List all invoices
+router.get('/invoices', auth, async (req, res) => {
   try {
-    // Get client info
-    const clientResult = await db.query(`
-      SELECT id, first_name, last_name, referral_source_id, care_type_id,
-             is_private_pay, private_pay_rate, private_pay_rate_type
-      FROM clients WHERE id = $1
-    `, [clientId]);
-
-    if (clientResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    const client = clientResult.rows[0];
-
-    // Check for existing invoice in this period
-    const existingResult = await db.query(`
-      SELECT id, invoice_number FROM invoices 
-      WHERE client_id = $1 
-        AND billing_period_start = $2 
-        AND billing_period_end = $3
-    `, [clientId, billingPeriodStart, billingPeriodEnd]);
-
-    if (existingResult.rows.length > 0) {
-      return res.status(400).json({ 
-        error: `Invoice ${existingResult.rows[0].invoice_number} already exists for this period` 
-      });
-    }
-
-    // Generate line items from time entries
-    const { lineItems, total } = await generateLineItems(
-      clientId, 
-      client.referral_source_id,
-      client.care_type_id,
-      billingPeriodStart, 
-      billingPeriodEnd
-    );
-
-    if (lineItems.length === 0) {
-      return res.status(400).json({ 
-        error: 'No completed time entries found for this client in the selected period' 
-      });
-    }
-
-    // Calculate due date (30 days after period end)
-    const dueDate = new Date(billingPeriodEnd);
-    dueDate.setDate(dueDate.getDate() + 30);
-
-    // Create invoice
-    const invoiceNumber = generateInvoiceNumber(clientId);
-    
-    const invoiceResult = await db.query(`
-      INSERT INTO invoices (
-        client_id, invoice_number, billing_period_start, billing_period_end,
-        subtotal, total, payment_status, payment_due_date, notes,
-        referral_source_id, invoice_type
-      ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)
-      RETURNING *
-    `, [
-      clientId, invoiceNumber, billingPeriodStart, billingPeriodEnd,
-      total, total, dueDate, notes,
-      client.referral_source_id,
-      client.is_private_pay ? 'private_pay' : 'insurance'
-    ]);
-
-    const invoice = invoiceResult.rows[0];
-
-    // Insert line items
-    await insertLineItems(invoice.id, lineItems);
-
-    // Get referral source name
-    let referralSourceName = null;
-    if (client.referral_source_id) {
-      const rsResult = await db.query(
-        'SELECT name FROM referral_sources WHERE id = $1',
-        [client.referral_source_id]
-      );
-      referralSourceName = rsResult.rows[0]?.name;
-    }
-
-    // Return complete invoice with line items
-    res.json({
-      ...invoice,
-      first_name: client.first_name,
-      last_name: client.last_name,
-      referral_source_name: referralSourceName,
-      line_items: lineItems,
-      total_hours: lineItems.reduce((sum, item) => sum + parseFloat(item.hours), 0)
-    });
-
+    const result = await db.query(`
+      SELECT i.*, 
+        c.first_name, c.last_name,
+        rs.name as referral_source_name,
+        (SELECT COALESCE(SUM(hours), 0) FROM invoice_line_items WHERE invoice_id = i.id) as total_hours
+      FROM invoices i
+      JOIN clients c ON i.client_id = c.id
+      LEFT JOIN referral_sources rs ON i.referral_source_id = rs.id
+      ORDER BY i.created_at DESC
+    `);
+    res.json(result.rows);
   } catch (error) {
-    console.error('Error generating invoice:', error);
+    console.error('Error fetching invoices:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ==================== GET SINGLE INVOICE WITH LINE ITEMS ====================
-
+// Get single invoice with line items
 router.get('/invoices/:id', auth, async (req, res) => {
   try {
-    // Get invoice header
     const invoiceResult = await db.query(`
       SELECT i.*, 
         c.first_name, c.last_name, c.referral_source_id, c.care_type_id,
+        c.email, c.phone, c.address, c.city, c.state, c.zip,
         rs.name as referral_source_name
       FROM invoices i
       JOIN clients c ON i.client_id = c.id
@@ -256,7 +166,6 @@ router.get('/invoices/:id', auth, async (req, res) => {
 
     const invoice = invoiceResult.rows[0];
 
-    // Get line items with caregiver names
     const lineItemsResult = await db.query(`
       SELECT 
         ili.*,
@@ -272,7 +181,6 @@ router.get('/invoices/:id', auth, async (req, res) => {
 
     let lineItems = lineItemsResult.rows;
 
-    // If no line items exist in DB, try to regenerate them
     if (lineItems.length === 0) {
       const regenerated = await generateLineItems(
         invoice.client_id,
@@ -296,29 +204,101 @@ router.get('/invoices/:id', auth, async (req, res) => {
   }
 });
 
-// ==================== LIST ALL INVOICES ====================
+// Generate single invoice
+router.post('/invoices/generate-with-rates', auth, async (req, res) => {
+  const { clientId, billingPeriodStart, billingPeriodEnd, notes } = req.body;
 
-router.get('/invoices', auth, async (req, res) => {
+  if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
+    return res.status(400).json({ error: 'Client and billing period are required' });
+  }
+
   try {
-    const result = await db.query(`
-      SELECT i.*, 
-        c.first_name, c.last_name,
-        rs.name as referral_source_name,
-        (SELECT COALESCE(SUM(hours), 0) FROM invoice_line_items WHERE invoice_id = i.id) as total_hours
-      FROM invoices i
-      JOIN clients c ON i.client_id = c.id
-      LEFT JOIN referral_sources rs ON i.referral_source_id = rs.id
-      ORDER BY i.created_at DESC
-    `);
-    res.json(result.rows);
+    const clientResult = await db.query(`
+      SELECT id, first_name, last_name, referral_source_id, care_type_id,
+             is_private_pay, private_pay_rate, private_pay_rate_type
+      FROM clients WHERE id = $1
+    `, [clientId]);
+
+    if (clientResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const client = clientResult.rows[0];
+
+    const existingResult = await db.query(`
+      SELECT id, invoice_number FROM invoices 
+      WHERE client_id = $1 
+        AND billing_period_start = $2 
+        AND billing_period_end = $3
+    `, [clientId, billingPeriodStart, billingPeriodEnd]);
+
+    if (existingResult.rows.length > 0) {
+      return res.status(400).json({ 
+        error: `Invoice ${existingResult.rows[0].invoice_number} already exists for this period` 
+      });
+    }
+
+    const { lineItems, total } = await generateLineItems(
+      clientId, 
+      client.referral_source_id,
+      client.care_type_id,
+      billingPeriodStart, 
+      billingPeriodEnd
+    );
+
+    if (lineItems.length === 0) {
+      return res.status(400).json({ 
+        error: 'No completed time entries found for this client in the selected period' 
+      });
+    }
+
+    const dueDate = new Date(billingPeriodEnd);
+    dueDate.setDate(dueDate.getDate() + 30);
+
+    const invoiceNumber = generateInvoiceNumber(clientId);
+    
+    const invoiceResult = await db.query(`
+      INSERT INTO invoices (
+        client_id, invoice_number, billing_period_start, billing_period_end,
+        subtotal, total, payment_status, payment_due_date, notes,
+        referral_source_id, invoice_type
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)
+      RETURNING *
+    `, [
+      clientId, invoiceNumber, billingPeriodStart, billingPeriodEnd,
+      total, total, dueDate, notes,
+      client.referral_source_id,
+      client.is_private_pay ? 'private_pay' : 'insurance'
+    ]);
+
+    const invoice = invoiceResult.rows[0];
+    await insertLineItems(invoice.id, lineItems);
+
+    let referralSourceName = null;
+    if (client.referral_source_id) {
+      const rsResult = await db.query(
+        'SELECT name FROM referral_sources WHERE id = $1',
+        [client.referral_source_id]
+      );
+      referralSourceName = rsResult.rows[0]?.name;
+    }
+
+    res.json({
+      ...invoice,
+      first_name: client.first_name,
+      last_name: client.last_name,
+      referral_source_name: referralSourceName,
+      line_items: lineItems,
+      total_hours: lineItems.reduce((sum, item) => sum + parseFloat(item.hours), 0)
+    });
+
   } catch (error) {
-    console.error('Error fetching invoices:', error);
+    console.error('Error generating invoice:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ==================== BATCH INVOICE GENERATION ====================
-
+// Batch generate invoices
 router.post('/invoices/batch-generate', auth, async (req, res) => {
   const { billingPeriodStart, billingPeriodEnd, clientFilter, referralSourceId } = req.body;
 
@@ -327,7 +307,6 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
   }
 
   try {
-    // Get all clients with completed time entries in this period
     let clientQuery = `
       SELECT DISTINCT c.id, c.first_name, c.last_name, c.referral_source_id, c.care_type_id,
                       c.is_private_pay
@@ -363,7 +342,6 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
     const skippedClients = [];
 
     for (const client of clientsResult.rows) {
-      // Check for existing invoice
       const existingResult = await db.query(`
         SELECT id, invoice_number FROM invoices 
         WHERE client_id = $1 
@@ -380,7 +358,6 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
         continue;
       }
 
-      // Generate line items
       const { lineItems, total } = await generateLineItems(
         client.id,
         client.referral_source_id,
@@ -398,11 +375,9 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
         continue;
       }
 
-      // Calculate due date
       const dueDate = new Date(billingPeriodEnd);
       dueDate.setDate(dueDate.getDate() + 30);
 
-      // Create invoice
       const invoiceNumber = generateInvoiceNumber(client.id);
 
       const invoiceResult = await db.query(`
@@ -420,8 +395,6 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
       ]);
 
       const invoice = invoiceResult.rows[0];
-
-      // Insert line items
       await insertLineItems(invoice.id, lineItems);
 
       const hours = lineItems.reduce((sum, item) => sum + parseFloat(item.hours), 0);
@@ -453,8 +426,7 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
   }
 });
 
-// ==================== UPDATE INVOICE STATUS ====================
-
+// Update invoice payment status
 router.put('/invoices/:id/payment-status', auth, async (req, res) => {
   const { status, paymentDate } = req.body;
   
@@ -464,7 +436,8 @@ router.put('/invoices/:id/payment-status', auth, async (req, res) => {
       SET payment_status = $1,
           payment_date = $2,
           paid_at = CASE WHEN $1 = 'paid' THEN NOW() ELSE paid_at END,
-          amount_paid = CASE WHEN $1 = 'paid' THEN total ELSE amount_paid END
+          amount_paid = CASE WHEN $1 = 'paid' THEN total ELSE amount_paid END,
+          updated_at = NOW()
       WHERE id = $3
       RETURNING *
     `, [status, paymentDate || new Date(), req.params.id]);
@@ -480,11 +453,18 @@ router.put('/invoices/:id/payment-status', auth, async (req, res) => {
   }
 });
 
-// ==================== DELETE INVOICE ====================
-
+// Delete invoice
 router.delete('/invoices/:id', auth, async (req, res) => {
   try {
-    // Delete line items first
+    // Check if invoice exists
+    const invoiceCheck = await db.query('SELECT id, invoice_number FROM invoices WHERE id = $1', [req.params.id]);
+    if (invoiceCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    
+    const invoiceNumber = invoiceCheck.rows[0].invoice_number;
+
+    // Delete line items first (foreign key constraint)
     await db.query('DELETE FROM invoice_line_items WHERE invoice_id = $1', [req.params.id]);
     
     // Delete payments if table exists
@@ -498,13 +478,9 @@ router.delete('/invoices/:id', auth, async (req, res) => {
     } catch (e) { /* table might not exist */ }
     
     // Delete invoice
-    const result = await db.query('DELETE FROM invoices WHERE id = $1 RETURNING *', [req.params.id]);
+    await db.query('DELETE FROM invoices WHERE id = $1', [req.params.id]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    res.json({ message: 'Invoice deleted', invoice: result.rows[0] });
+    res.json({ message: `Invoice ${invoiceNumber} deleted successfully` });
   } catch (error) {
     console.error('Error deleting invoice:', error);
     res.status(500).json({ error: error.message });
@@ -719,7 +695,6 @@ router.get('/referral-source-rates', auth, async (req, res) => {
 router.post('/referral-source-rates', auth, async (req, res) => {
   const { referralSourceId, careTypeId, rateAmount, rateType, effectiveDate } = req.body;
   try {
-    // Check for existing active rate
     const existing = await db.query(`
       SELECT id FROM referral_source_rates 
       WHERE referral_source_id = $1 
@@ -728,7 +703,6 @@ router.post('/referral-source-rates', auth, async (req, res) => {
     `, [referralSourceId, careTypeId || null]);
 
     if (existing.rows.length > 0) {
-      // Deactivate old rate
       await db.query(`
         UPDATE referral_source_rates 
         SET is_active = false, end_date = $1
@@ -762,7 +736,7 @@ router.delete('/referral-source-rates/:id', auth, async (req, res) => {
   }
 });
 
-// ==================== CSV EXPORT ====================
+// ==================== EXPORTS ====================
 
 router.get('/export/invoices-csv', auth, async (req, res) => {
   try {
@@ -817,8 +791,6 @@ router.get('/export/invoices-csv', auth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-// ==================== EVV EXPORT ====================
 
 router.get('/export/evv', auth, async (req, res) => {
   try {
@@ -949,33 +921,5 @@ router.get('/billing-summary', auth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-// ==================== DELETE INVOICE ====================
 
-router.delete('/invoices/:id', auth, async (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    // First check if invoice exists
-    const invoiceCheck = await db.query('SELECT id, invoice_number FROM invoices WHERE id = $1', [id]);
-    if (invoiceCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-    
-    const invoiceNumber = invoiceCheck.rows[0].invoice_number;
-    
-    // Delete line items first (foreign key constraint)
-    await db.query('DELETE FROM invoice_line_items WHERE invoice_id = $1', [id]);
-    
-    // Delete any payments associated with this invoice
-    await db.query('DELETE FROM invoice_payments WHERE invoice_id = $1', [id]);
-    
-    // Delete the invoice
-    await db.query('DELETE FROM invoices WHERE id = $1', [id]);
-    
-    res.json({ message: `Invoice ${invoiceNumber} deleted successfully` });
-  } catch (error) {
-    console.error('Error deleting invoice:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 module.exports = router;
