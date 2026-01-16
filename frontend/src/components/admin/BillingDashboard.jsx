@@ -1061,17 +1061,33 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   body * { visibility: hidden; }
                   #printable-invoice, #printable-invoice * { visibility: visible; }
                   #printable-invoice { 
-                    position: absolute; 
-                    left: 0; 
-                    top: 0; 
-                    width: 100%;
-                    padding: 0;
-                    margin: 0;
+                    position: fixed !important; 
+                    left: 0 !important; 
+                    top: 0 !important; 
+                    width: 100% !important;
+                    padding: 10mm !important;
+                    margin: 0 !important;
+                    background: white !important;
+                  }
+                  .modal {
+                    position: static !important;
+                    overflow: visible !important;
+                  }
+                  .modal-content {
+                    position: static !important;
+                    overflow: visible !important;
+                    transform: none !important;
                   }
                   .no-print { display: none !important; }
                   .invoice-print-container { 
                     box-shadow: none !important; 
                     border: none !important;
+                  }
+                  .invoice-footer {
+                    page-break-inside: avoid;
+                  }
+                  .invoice-totals {
+                    page-break-inside: avoid;
                   }
                 }
                 .invoice-print-container {
