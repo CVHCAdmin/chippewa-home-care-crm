@@ -12,9 +12,9 @@ router.get('/', auth, async (req, res) => {
   try {
     let query = `
       SELECT bc.*, 
-        cp.first_name as caregiver_first, cp.last_name as caregiver_last
+        u.first_name as caregiver_first, u.last_name as caregiver_last
       FROM background_checks bc
-      JOIN caregiver_profiles cp ON bc.caregiver_id = cp.id
+      JOIN users u ON bc.caregiver_id = u.id
       WHERE 1=1
     `;
     const params = [];
@@ -108,9 +108,9 @@ router.get('/reports/expiring', auth, async (req, res) => {
   const { days = 30 } = req.query;
   try {
     const result = await db.query(`
-      SELECT bc.*, cp.first_name, cp.last_name, cp.phone, cp.email
+      SELECT bc.*, u.first_name, u.last_name, u.phone, u.email
       FROM background_checks bc
-      JOIN caregiver_profiles cp ON bc.caregiver_id = cp.id
+      JOIN users u ON bc.caregiver_id = u.id
       WHERE bc.expiration_date IS NOT NULL
       AND bc.expiration_date <= CURRENT_DATE + $1::integer
       AND bc.status = 'completed'
@@ -127,15 +127,15 @@ router.get('/reports/expiring', auth, async (req, res) => {
 router.get('/reports/compliance', auth, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT cp.id, cp.first_name, cp.last_name,
+      SELECT u.id, u.first_name, u.last_name,
         ARRAY_AGG(DISTINCT bc.check_type) FILTER (WHERE bc.status = 'completed' AND bc.result = 'clear' AND (bc.expiration_date IS NULL OR bc.expiration_date > CURRENT_DATE)) as passed_checks,
         ARRAY_AGG(DISTINCT bc.check_type) FILTER (WHERE bc.result = 'disqualifying') as failed_checks,
         ARRAY_AGG(DISTINCT bc.check_type) FILTER (WHERE bc.status = 'pending' OR bc.status = 'in_progress') as pending_checks
-      FROM caregiver_profiles cp
-      LEFT JOIN background_checks bc ON bc.caregiver_id = cp.id
-      WHERE cp.status = 'active'
-      GROUP BY cp.id, cp.first_name, cp.last_name
-      ORDER BY cp.last_name
+      FROM users u
+      LEFT JOIN background_checks bc ON bc.caregiver_id = u.id
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      GROUP BY u.id, u.first_name, u.last_name
+      ORDER BY u.last_name
     `);
     res.json(result.rows);
   } catch (error) {

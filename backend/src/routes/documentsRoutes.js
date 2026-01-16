@@ -38,6 +38,46 @@ const upload = multer({
   }
 });
 
+// Get all documents (with optional filters)
+router.get('/', auth, async (req, res) => {
+  const { entityType, entityId, documentType } = req.query;
+  try {
+    let query = `
+      SELECT d.*, 
+        u.first_name as uploaded_by_first, u.last_name as uploaded_by_last,
+        CASE 
+          WHEN d.entity_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = d.entity_id)
+          WHEN d.entity_type = 'client' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM clients WHERE id = d.entity_id)
+          ELSE 'Company'
+        END as entity_name
+      FROM documents d
+      LEFT JOIN users u ON d.uploaded_by = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (entityType) {
+      params.push(entityType);
+      query += ` AND d.entity_type = $${params.length}`;
+    }
+    if (entityId) {
+      params.push(entityId);
+      query += ` AND d.entity_id = $${params.length}`;
+    }
+    if (documentType) {
+      params.push(documentType);
+      query += ` AND d.document_type = $${params.length}`;
+    }
+
+    query += ` ORDER BY d.created_at DESC`;
+    
+    const result = await db.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get documents for an entity
 router.get('/:entityType/:entityId', auth, async (req, res) => {
   const { entityType, entityId } = req.params;
@@ -138,7 +178,7 @@ router.get('/reports/expiring', auth, async (req, res) => {
     const result = await db.query(`
       SELECT d.*, 
         CASE 
-          WHEN d.entity_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM caregiver_profiles WHERE id = d.entity_id)
+          WHEN d.entity_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = d.entity_id)
           WHEN d.entity_type = 'client' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM clients WHERE id = d.entity_id)
           ELSE 'Company'
         END as entity_name
@@ -163,7 +203,7 @@ router.get('/unsigned/:userId', auth, async (req, res) => {
       AND d.signed_at IS NULL
       AND (
         (d.entity_type = 'company')
-        OR (d.entity_type = 'caregiver' AND d.entity_id = (SELECT id FROM caregiver_profiles WHERE user_id = $1))
+        OR (d.entity_type = 'caregiver' AND d.entity_id = $1)
       )
       ORDER BY d.created_at DESC
     `, [req.params.userId]);

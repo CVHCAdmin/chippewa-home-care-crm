@@ -22,7 +22,7 @@ router.get('/messages', auth, async (req, res) => {
     let query = `
       SELECT sm.*,
         CASE 
-          WHEN sm.recipient_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM caregiver_profiles WHERE id = sm.recipient_id)
+          WHEN sm.recipient_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = sm.recipient_id)
           WHEN sm.recipient_type = 'client' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM clients WHERE id = sm.recipient_id)
           ELSE NULL
         END as recipient_name
@@ -61,7 +61,7 @@ router.post('/send', auth, async (req, res) => {
     if (!phone && recipientType && recipientId) {
       let phoneQuery;
       if (recipientType === 'caregiver') {
-        phoneQuery = await db.query('SELECT phone FROM caregiver_profiles WHERE id = $1', [recipientId]);
+        phoneQuery = await db.query('SELECT phone FROM users WHERE id = $1', [recipientId]);
       } else if (recipientType === 'client') {
         phoneQuery = await db.query('SELECT phone FROM clients WHERE id = $1', [recipientId]);
       }
@@ -124,7 +124,7 @@ router.post('/send-bulk', auth, async (req, res) => {
       try {
         let phoneQuery;
         if (recipientType === 'caregiver') {
-          phoneQuery = await db.query('SELECT id, phone, first_name, last_name FROM caregiver_profiles WHERE id = $1', [recipientId]);
+          phoneQuery = await db.query('SELECT id, phone, first_name, last_name FROM users WHERE id = $1', [recipientId]);
         } else if (recipientType === 'client') {
           phoneQuery = await db.query('SELECT id, phone, first_name, last_name FROM clients WHERE id = $1', [recipientId]);
         }
@@ -274,14 +274,13 @@ router.post('/shift-reminders', auth, async (req, res) => {
   try {
     const schedules = await db.query(`
       SELECT s.*, 
-        cp.id as caregiver_id, cp.phone, cp.first_name as cg_first,
+        u.id as caregiver_id, u.phone, u.first_name as cg_first,
         c.first_name as client_first, c.last_name as client_last
       FROM schedules s
-      JOIN caregiver_profiles cp ON s.caregiver_id = cp.id
+      JOIN users u ON s.caregiver_id = u.id
       JOIN clients c ON s.client_id = c.id
-      WHERE s.scheduled_date = CURRENT_DATE + INTERVAL '1 day'
+      WHERE s.date = CURRENT_DATE + INTERVAL '1 day'
       AND s.status = 'scheduled'
-      AND cp.sms_enabled = true
     `);
 
     let sent = 0;
