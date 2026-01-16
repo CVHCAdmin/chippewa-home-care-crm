@@ -1058,30 +1058,43 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <div id="printable-invoice" className="invoice-print-container">
               <style>{`
                 @media print {
-                  body * { visibility: hidden; }
-                  #printable-invoice, #printable-invoice * { visibility: visible; }
-                  #printable-invoice { 
-                    position: absolute; 
-                    left: 0; 
-                    top: 0; 
-                    width: 100%;
-                    padding: 20px;
-                    margin: 0;
+                  /* Hide everything except the invoice */
+                  html, body {
+                    height: auto !important;
+                    overflow: visible !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                  }
+                  body > *:not(.modal) { display: none !important; }
+                  .modal { 
+                    position: static !important;
+                    display: block !important;
+                    overflow: visible !important;
+                    background: none !important;
+                  }
+                  .modal-content {
+                    position: static !important;
+                    max-width: 100% !important;
+                    max-height: none !important;
+                    overflow: visible !important;
+                    box-shadow: none !important;
+                    border: none !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
                   }
                   .no-print { display: none !important; }
                   .invoice-print-container { 
                     box-shadow: none !important; 
                     border: none !important;
-                    padding: 20px !important;
+                    padding: 15mm !important;
+                    margin: 0 !important;
                   }
                   /* Page break controls */
-                  .invoice-header {
-                    page-break-inside: avoid;
-                  }
-                  .invoice-title-section {
-                    page-break-inside: avoid;
-                  }
-                  .invoice-parties {
+                  .invoice-header,
+                  .invoice-title-section,
+                  .invoice-parties,
+                  .invoice-totals,
+                  .invoice-notes {
                     page-break-inside: avoid;
                   }
                   .invoice-table {
@@ -1092,19 +1105,10 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   }
                   .invoice-table tr {
                     page-break-inside: avoid;
-                    page-break-after: auto;
-                  }
-                  .invoice-totals {
-                    page-break-inside: avoid;
                   }
                   .invoice-footer {
                     page-break-inside: avoid;
-                    page-break-before: auto;
-                    position: relative !important;
-                    margin-top: 30px !important;
-                  }
-                  .invoice-notes {
-                    page-break-inside: avoid;
+                    margin-top: 20px !important;
                   }
                 }
                 .invoice-print-container {
