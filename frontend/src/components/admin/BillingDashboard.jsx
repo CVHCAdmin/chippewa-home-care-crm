@@ -1065,13 +1065,46 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     left: 0; 
                     top: 0; 
                     width: 100%;
-                    padding: 0;
+                    padding: 20px;
                     margin: 0;
                   }
                   .no-print { display: none !important; }
                   .invoice-print-container { 
                     box-shadow: none !important; 
                     border: none !important;
+                    padding: 20px !important;
+                  }
+                  /* Page break controls */
+                  .invoice-header {
+                    page-break-inside: avoid;
+                  }
+                  .invoice-title-section {
+                    page-break-inside: avoid;
+                  }
+                  .invoice-parties {
+                    page-break-inside: avoid;
+                  }
+                  .invoice-table {
+                    page-break-inside: auto;
+                  }
+                  .invoice-table thead {
+                    display: table-header-group;
+                  }
+                  .invoice-table tr {
+                    page-break-inside: avoid;
+                    page-break-after: auto;
+                  }
+                  .invoice-totals {
+                    page-break-inside: avoid;
+                  }
+                  .invoice-footer {
+                    page-break-inside: avoid;
+                    page-break-before: auto;
+                    position: relative !important;
+                    margin-top: 30px !important;
+                  }
+                  .invoice-notes {
+                    page-break-inside: avoid;
                   }
                 }
                 .invoice-print-container {
