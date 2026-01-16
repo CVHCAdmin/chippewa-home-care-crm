@@ -1281,8 +1281,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   flex-direction: column;
                 }
                 .invoice-logo-large {
-                  max-width: 250px;
-                  max-height: 160px;
+                  width: 280px;
+                  height: auto;
                   margin-bottom: 15px;
                 }
                 .invoice-company-info {
