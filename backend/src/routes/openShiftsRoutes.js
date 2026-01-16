@@ -15,11 +15,11 @@ router.get('/', auth, async (req, res) => {
         c.first_name as client_first_name, c.last_name as client_last_name,
         c.address as client_address, c.city as client_city,
         ct.name as care_type_name,
-        cp.first_name as claimed_by_first, cp.last_name as claimed_by_last
+        u.first_name as claimed_by_first, u.last_name as claimed_by_last
       FROM open_shifts os
       JOIN clients c ON os.client_id = c.id
       LEFT JOIN care_types ct ON os.care_type_id = ct.id
-      LEFT JOIN caregiver_profiles cp ON os.claimed_by = cp.id
+      LEFT JOIN users u ON os.claimed_by = u.id
       WHERE 1=1
     `;
     const params = [];
@@ -244,8 +244,12 @@ router.post('/:id/broadcast', auth, async (req, res) => {
 
     // Get eligible caregivers
     const caregivers = await db.query(`
-      SELECT id, phone FROM caregiver_profiles
-      WHERE status = 'active' AND sms_enabled = true AND sms_open_shifts = true
+      SELECT u.id, u.phone 
+      FROM users u
+      LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
+      WHERE u.role = 'caregiver' AND u.is_active = true 
+        AND (cp.sms_enabled = true OR cp.sms_enabled IS NULL)
+        AND (cp.sms_open_shifts = true OR cp.sms_open_shifts IS NULL)
     `);
 
     // This would integrate with SMS routes
@@ -268,9 +272,9 @@ router.post('/:id/broadcast', auth, async (req, res) => {
 router.get('/:id/claims', auth, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT osc.*, cp.first_name, cp.last_name, cp.phone
+      SELECT osc.*, u.first_name, u.last_name, u.phone
       FROM open_shift_claims osc
-      JOIN caregiver_profiles cp ON osc.caregiver_id = cp.id
+      JOIN users u ON osc.caregiver_id = u.id
       WHERE osc.open_shift_id = $1
       ORDER BY osc.created_at
     `, [req.params.id]);

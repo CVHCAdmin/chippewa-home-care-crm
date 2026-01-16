@@ -63,8 +63,8 @@ const auditLog = async (userId, action, tableName, recordId, oldData, newData) =
     }
     
     await db.query(
-      `INSERT INTO audit_logs (user_id, action, table_name, record_id, old_data, new_data, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+      `INSERT INTO audit_logs (user_id, action, table_name, record_id, old_data, new_data, created_at)
+ VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
       [userId || '00000000-0000-0000-0000-000000000000', action, tableName, recordId, JSON.stringify(oldData), JSON.stringify(newData)]
     );
   } catch (error) {
