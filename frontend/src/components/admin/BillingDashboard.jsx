@@ -169,7 +169,29 @@ const BillingDashboard = ({ token }) => {
       alert('Failed to load invoice: ' + error.message);
     }
   };
-
+const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
+  if (!window.confirm(`Are you sure you want to delete invoice ${invoiceNumber}? This cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/invoices/${invoiceId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to delete invoice');
+    }
+    
+    setMessage(`✓ Invoice ${invoiceNumber} deleted`);
+    setTimeout(() => setMessage(''), 3000);
+    loadData();
+  } catch (error) {
+    alert('Failed to delete invoice: ' + error.message);
+  }
+};
   const handleMarkPaid = async (invoiceId) => {
     try {
       await fetch(`${API_BASE_URL}/api/invoices/${invoiceId}/payment-status`, {
@@ -497,11 +519,12 @@ const BillingDashboard = ({ token }) => {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: '0.25rem' }}>
-                        <button className="btn btn-sm btn-primary" onClick={() => handleViewInvoice(invoice.id)}>View</button>
-                        {invoice.payment_status !== 'paid' && (
-                          <button className="btn btn-sm btn-success" onClick={() => { setPaymentFormData({ ...paymentFormData, invoiceId: invoice.id }); setShowPaymentModal(true); }}>Pay</button>
-                        )}
-                      </div>
+  <button className="btn btn-sm btn-primary" onClick={() => handleViewInvoice(invoice.id)}>View</button>
+  {invoice.payment_status !== 'paid' && (
+    <button className="btn btn-sm btn-success" onClick={() => { setPaymentFormData({ ...paymentFormData, invoiceId: invoice.id }); setShowPaymentModal(true); }}>Pay</button>
+  )}
+  <button className="btn btn-sm btn-danger" onClick={() => handleDeleteInvoice(invoice.id, invoice.invoice_number)}>🗑️</button>
+</div>
                     </td>
                   </tr>
                 );
