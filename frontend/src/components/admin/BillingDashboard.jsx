@@ -1044,62 +1044,388 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
         </div>
       )}
 
-      {/* INVOICE DETAIL MODAL */}
+      {/* INVOICE DETAIL MODAL - Professional Print Layout */}
       {showInvoiceModal && selectedInvoice && (
         <div className="modal active">
-          <div className="modal-content modal-large">
-            <div className="modal-header">
+          <div className="modal-content modal-large" style={{ maxWidth: '900px' }}>
+            {/* Screen-only header */}
+            <div className="modal-header no-print">
               <h2>Invoice {selectedInvoice.invoice_number}</h2>
               <button className="close-btn" onClick={() => setShowInvoiceModal(false)}>×</button>
             </div>
-            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-              <div className="card" style={{ margin: 0 }}>
-                <h4 style={{ margin: '0 0 0.5rem 0' }}>Bill To</h4>
-                <p style={{ margin: 0 }}><strong>{selectedInvoice.first_name} {selectedInvoice.last_name}</strong><br />{selectedInvoice.referral_source_name || <span className="badge badge-info">Private Pay</span>}</p>
+            
+            {/* Printable Invoice */}
+            <div id="printable-invoice" className="invoice-print-container">
+              <style>{`
+                @media print {
+                  body * { visibility: hidden; }
+                  #printable-invoice, #printable-invoice * { visibility: visible; }
+                  #printable-invoice { 
+                    position: absolute; 
+                    left: 0; 
+                    top: 0; 
+                    width: 100%;
+                    padding: 0;
+                    margin: 0;
+                  }
+                  .no-print { display: none !important; }
+                  .invoice-print-container { 
+                    box-shadow: none !important; 
+                    border: none !important;
+                  }
+                }
+                .invoice-print-container {
+                  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                  color: #1a1a2e;
+                  background: white;
+                  padding: 40px;
+                  line-height: 1.6;
+                }
+                .invoice-header {
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: flex-start;
+                  margin-bottom: 40px;
+                  padding-bottom: 30px;
+                  border-bottom: 3px solid #c9a227;
+                }
+                .invoice-logo img {
+                  max-height: 100px;
+                  width: auto;
+                }
+                .invoice-company {
+                  text-align: right;
+                  color: #555;
+                  font-size: 14px;
+                }
+                .invoice-company h1 {
+                  color: #c9a227;
+                  font-size: 28px;
+                  margin: 0 0 8px 0;
+                  font-weight: 600;
+                  letter-spacing: -0.5px;
+                }
+                .invoice-title-section {
+                  display: flex;
+                  justify-content: space-between;
+                  margin-bottom: 40px;
+                }
+                .invoice-title {
+                  font-size: 42px;
+                  font-weight: 700;
+                  color: #1a1a2e;
+                  letter-spacing: -1px;
+                }
+                .invoice-meta {
+                  text-align: right;
+                }
+                .invoice-meta-item {
+                  margin-bottom: 8px;
+                }
+                .invoice-meta-label {
+                  color: #888;
+                  font-size: 12px;
+                  text-transform: uppercase;
+                  letter-spacing: 1px;
+                }
+                .invoice-meta-value {
+                  font-size: 16px;
+                  font-weight: 600;
+                  color: #1a1a2e;
+                }
+                .invoice-parties {
+                  display: grid;
+                  grid-template-columns: 1fr 1fr;
+                  gap: 60px;
+                  margin-bottom: 40px;
+                }
+                .invoice-party h3 {
+                  font-size: 11px;
+                  text-transform: uppercase;
+                  letter-spacing: 2px;
+                  color: #888;
+                  margin: 0 0 12px 0;
+                  font-weight: 600;
+                }
+                .invoice-party-name {
+                  font-size: 18px;
+                  font-weight: 600;
+                  color: #1a1a2e;
+                  margin-bottom: 4px;
+                }
+                .invoice-party-detail {
+                  color: #555;
+                  font-size: 14px;
+                  line-height: 1.5;
+                }
+                .invoice-table {
+                  width: 100%;
+                  border-collapse: collapse;
+                  margin-bottom: 30px;
+                }
+                .invoice-table th {
+                  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                  color: white;
+                  padding: 14px 16px;
+                  text-align: left;
+                  font-size: 11px;
+                  text-transform: uppercase;
+                  letter-spacing: 1px;
+                  font-weight: 600;
+                }
+                .invoice-table th:last-child {
+                  text-align: right;
+                }
+                .invoice-table td {
+                  padding: 16px;
+                  border-bottom: 1px solid #eee;
+                  font-size: 14px;
+                }
+                .invoice-table td:last-child {
+                  text-align: right;
+                  font-weight: 600;
+                }
+                .invoice-table tbody tr:hover {
+                  background: #fafafa;
+                }
+                .invoice-table tbody tr:last-child td {
+                  border-bottom: 2px solid #1a1a2e;
+                }
+                .invoice-totals {
+                  display: flex;
+                  justify-content: flex-end;
+                  margin-bottom: 40px;
+                }
+                .invoice-totals-table {
+                  width: 300px;
+                }
+                .invoice-totals-row {
+                  display: flex;
+                  justify-content: space-between;
+                  padding: 10px 0;
+                  border-bottom: 1px solid #eee;
+                }
+                .invoice-totals-row.total {
+                  border-bottom: none;
+                  border-top: 2px solid #1a1a2e;
+                  margin-top: 10px;
+                  padding-top: 15px;
+                }
+                .invoice-totals-label {
+                  color: #555;
+                  font-size: 14px;
+                }
+                .invoice-totals-value {
+                  font-weight: 600;
+                  font-size: 14px;
+                }
+                .invoice-totals-row.total .invoice-totals-label,
+                .invoice-totals-row.total .invoice-totals-value {
+                  font-size: 20px;
+                  font-weight: 700;
+                  color: #1a1a2e;
+                }
+                .invoice-status {
+                  display: inline-block;
+                  padding: 6px 16px;
+                  border-radius: 20px;
+                  font-size: 12px;
+                  font-weight: 600;
+                  text-transform: uppercase;
+                  letter-spacing: 1px;
+                }
+                .invoice-status.paid {
+                  background: #d4edda;
+                  color: #155724;
+                }
+                .invoice-status.pending {
+                  background: #fff3cd;
+                  color: #856404;
+                }
+                .invoice-status.partial {
+                  background: #cce5ff;
+                  color: #004085;
+                }
+                .invoice-footer {
+                  margin-top: 50px;
+                  padding-top: 30px;
+                  border-top: 1px solid #eee;
+                  text-align: center;
+                  color: #888;
+                  font-size: 12px;
+                }
+                .invoice-footer-brand {
+                  color: #c9a227;
+                  font-weight: 600;
+                  font-size: 14px;
+                  margin-bottom: 8px;
+                }
+                .invoice-notes {
+                  background: #f8f9fa;
+                  padding: 20px;
+                  border-radius: 8px;
+                  margin-bottom: 30px;
+                  border-left: 4px solid #c9a227;
+                }
+                .invoice-notes h4 {
+                  margin: 0 0 8px 0;
+                  font-size: 12px;
+                  text-transform: uppercase;
+                  letter-spacing: 1px;
+                  color: #888;
+                }
+                .invoice-notes p {
+                  margin: 0;
+                  color: #555;
+                  font-size: 14px;
+                }
+              `}</style>
+              
+              {/* Invoice Header with Logo */}
+              <div className="invoice-header">
+                <div className="invoice-logo">
+                  <img src="/logo.png" alt="Chippewa Valley Home Care" onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }} />
+                  <div style={{ display: 'none' }}>
+                    <h1 style={{ color: '#c9a227', fontSize: '24px', margin: 0 }}>Chippewa Valley</h1>
+                    <p style={{ color: '#4ecdc4', fontStyle: 'italic', margin: 0 }}>Home Care</p>
+                  </div>
+                </div>
+                <div className="invoice-company">
+                  <h1>Chippewa Valley Home Care</h1>
+                  <div>Eau Claire, Wisconsin</div>
+                  <div>info@chippewavalleyhomecare.com</div>
+                  <div>(715) 555-0100</div>
+                </div>
               </div>
-              <div className="card" style={{ margin: 0 }}>
-                <h4 style={{ margin: '0 0 0.5rem 0' }}>Details</h4>
-                <p style={{ margin: 0 }}>
-                  <strong>Period:</strong> {new Date(selectedInvoice.billing_period_start).toLocaleDateString()} - {new Date(selectedInvoice.billing_period_end).toLocaleDateString()}<br />
-                  <strong>Due:</strong> {new Date(selectedInvoice.payment_due_date).toLocaleDateString()}<br />
-                  <strong>Status:</strong> <span className={`badge ${selectedInvoice.payment_status === 'paid' ? 'badge-success' : 'badge-warning'}`}>{selectedInvoice.payment_status?.toUpperCase()}</span>
-                </p>
+
+              {/* Invoice Title & Meta */}
+              <div className="invoice-title-section">
+                <div>
+                  <div className="invoice-title">INVOICE</div>
+                  <span className={`invoice-status ${selectedInvoice.payment_status}`}>
+                    {selectedInvoice.payment_status}
+                  </span>
+                </div>
+                <div className="invoice-meta">
+                  <div className="invoice-meta-item">
+                    <div className="invoice-meta-label">Invoice Number</div>
+                    <div className="invoice-meta-value">{selectedInvoice.invoice_number}</div>
+                  </div>
+                  <div className="invoice-meta-item">
+                    <div className="invoice-meta-label">Invoice Date</div>
+                    <div className="invoice-meta-value">{new Date(selectedInvoice.created_at).toLocaleDateString()}</div>
+                  </div>
+                  <div className="invoice-meta-item">
+                    <div className="invoice-meta-label">Due Date</div>
+                    <div className="invoice-meta-value">{new Date(selectedInvoice.payment_due_date).toLocaleDateString()}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bill To / Service Period */}
+              <div className="invoice-parties">
+                <div className="invoice-party">
+                  <h3>Bill To</h3>
+                  <div className="invoice-party-name">{selectedInvoice.first_name} {selectedInvoice.last_name}</div>
+                  <div className="invoice-party-detail">
+                    {selectedInvoice.address && <>{selectedInvoice.address}<br /></>}
+                    {selectedInvoice.city && <>{selectedInvoice.city}, {selectedInvoice.state} {selectedInvoice.zip}<br /></>}
+                    {selectedInvoice.email && <>{selectedInvoice.email}<br /></>}
+                    {selectedInvoice.phone && <>{selectedInvoice.phone}</>}
+                  </div>
+                </div>
+                <div className="invoice-party">
+                  <h3>Service Period</h3>
+                  <div className="invoice-party-name">
+                    {new Date(selectedInvoice.billing_period_start).toLocaleDateString()} — {new Date(selectedInvoice.billing_period_end).toLocaleDateString()}
+                  </div>
+                  <div className="invoice-party-detail">
+                    {selectedInvoice.referral_source_name ? (
+                      <>Payer: {selectedInvoice.referral_source_name}</>
+                    ) : (
+                      <>Payment Type: Private Pay</>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Line Items Table */}
+              {selectedInvoice.line_items?.length > 0 && (
+                <table className="invoice-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '15%' }}>Date</th>
+                      <th style={{ width: '25%' }}>Caregiver</th>
+                      <th style={{ width: '30%' }}>Description</th>
+                      <th style={{ width: '10%', textAlign: 'center' }}>Hours</th>
+                      <th style={{ width: '10%', textAlign: 'right' }}>Rate</th>
+                      <th style={{ width: '10%', textAlign: 'right' }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedInvoice.line_items.map((item, idx) => (
+                      <tr key={idx}>
+                        <td>{item.service_date ? new Date(item.service_date).toLocaleDateString() : '—'}</td>
+                        <td>{item.caregiver_first_name} {item.caregiver_last_name}</td>
+                        <td>{item.description}</td>
+                        <td style={{ textAlign: 'center' }}>{parseFloat(item.hours).toFixed(2)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatCurrency(item.rate)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatCurrency(item.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* Totals */}
+              <div className="invoice-totals">
+                <div className="invoice-totals-table">
+                  <div className="invoice-totals-row">
+                    <span className="invoice-totals-label">Subtotal</span>
+                    <span className="invoice-totals-value">{formatCurrency(selectedInvoice.subtotal || selectedInvoice.total)}</span>
+                  </div>
+                  <div className="invoice-totals-row">
+                    <span className="invoice-totals-label">Total Hours</span>
+                    <span className="invoice-totals-value">{selectedInvoice.line_items?.reduce((sum, item) => sum + parseFloat(item.hours || 0), 0).toFixed(2) || '0.00'}</span>
+                  </div>
+                  {parseFloat(selectedInvoice.amount_paid || 0) > 0 && (
+                    <div className="invoice-totals-row">
+                      <span className="invoice-totals-label">Amount Paid</span>
+                      <span className="invoice-totals-value" style={{ color: '#28a745' }}>-{formatCurrency(selectedInvoice.amount_paid)}</span>
+                    </div>
+                  )}
+                  <div className="invoice-totals-row total">
+                    <span className="invoice-totals-label">{parseFloat(selectedInvoice.amount_paid || 0) > 0 ? 'Balance Due' : 'Total Due'}</span>
+                    <span className="invoice-totals-value">{formatCurrency(parseFloat(selectedInvoice.total || 0) - parseFloat(selectedInvoice.amount_paid || 0))}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Notes */}
+              {selectedInvoice.notes && (
+                <div className="invoice-notes">
+                  <h4>Notes</h4>
+                  <p>{selectedInvoice.notes}</p>
+                </div>
+              )}
+
+              {/* Footer */}
+              <div className="invoice-footer">
+                <div className="invoice-footer-brand">Chippewa Valley Home Care</div>
+                <div>Thank you for choosing us for your home care needs.</div>
+                <div style={{ marginTop: '8px' }}>Payment is due within 30 days of invoice date. Please include invoice number with payment.</div>
               </div>
             </div>
-            {selectedInvoice.line_items?.length > 0 && (
-              <table className="table">
-                <thead><tr><th>Date</th><th>Caregiver</th><th>Description</th><th>Hours</th><th>Rate</th><th>Amount</th></tr></thead>
-                <tbody>
-                  {selectedInvoice.line_items.map((item, idx) => (
-                    <tr key={idx}>
-                      <td>{item.service_date ? new Date(item.service_date).toLocaleDateString() : '-'}</td>
-                      <td>{item.caregiver_first_name} {item.caregiver_last_name}</td>
-                      <td>{item.description}</td>
-                      <td>{parseFloat(item.hours).toFixed(2)}</td>
-                      <td>{formatCurrency(item.rate)}</td>
-                      <td><strong>{formatCurrency(item.amount)}</strong></td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr><td colSpan="5" style={{ textAlign: 'right' }}><strong>Total:</strong></td><td><strong style={{ fontSize: '1.2rem' }}>{formatCurrency(selectedInvoice.total)}</strong></td></tr>
-                  {parseFloat(selectedInvoice.amount_paid || 0) > 0 && (
-                    <>
-                      <tr><td colSpan="5" style={{ textAlign: 'right' }}>Paid:</td><td style={{ color: '#28a745' }}>{formatCurrency(selectedInvoice.amount_paid)}</td></tr>
-                      <tr><td colSpan="5" style={{ textAlign: 'right' }}><strong>Balance:</strong></td><td style={{ color: '#dc3545' }}><strong>{formatCurrency(parseFloat(selectedInvoice.total || 0) - parseFloat(selectedInvoice.amount_paid || 0))}</strong></td></tr>
-                    </>
-                  )}
-                </tfoot>
-              </table>
-            )}
-            <div className="modal-actions">
+
+            {/* Action Buttons (screen only) */}
+            <div className="modal-actions no-print" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #eee' }}>
               {selectedInvoice.payment_status !== 'paid' && (
                 <>
-                  <button className="btn btn-success" onClick={() => { setPaymentFormData({ ...paymentFormData, invoiceId: selectedInvoice.id }); setShowInvoiceModal(false); setShowPaymentModal(true); }}>Record Payment</button>
-                  <button className="btn btn-warning" onClick={() => handleMarkPaid(selectedInvoice.id)}>Mark Paid</button>
+                  <button className="btn btn-success" onClick={() => { setPaymentFormData({ ...paymentFormData, invoiceId: selectedInvoice.id }); setShowInvoiceModal(false); setShowPaymentModal(true); }}>💳 Record Payment</button>
+                  <button className="btn btn-warning" onClick={() => handleMarkPaid(selectedInvoice.id)}>✓ Mark Paid</button>
                 </>
               )}
-              <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Print</button>
+              <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Print Invoice</button>
               <button className="btn btn-secondary" onClick={() => setShowInvoiceModal(false)}>Close</button>
             </div>
           </div>
