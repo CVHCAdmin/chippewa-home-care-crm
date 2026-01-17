@@ -19,6 +19,8 @@
     "multer": "^2.0.2",
     "papaparse": "5.4.1",
     "pdfkit": "^0.12.3",
+    "react-router-dom": "^7.12.0",
+    "stripe": "^20.2.0",
     "twilio": "^5.11.2"
   },
   "devDependencies": {
