@@ -2200,16 +2200,6 @@ app.get('/api/expenses/summary', verifyToken, requireAdmin, async (req, res) => 
   }
 });
 
-    res.json({
-      total: totalResult.rows[0].total,
-      byStatus: statusResult.rows,
-      hiredCertifications: certResult.rows[0],
-      hiredCount: hiredResult.rows[0].hired_count
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
 // ---- CARE PLANS ----
 
