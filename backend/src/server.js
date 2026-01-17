@@ -13,6 +13,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const billingRoutes = require('./routes/billingRoutes');
+const reportsRoutes = require('./routes/reportsRoutes');
 
 // Load environment variables
 dotenv.config();
@@ -97,6 +98,7 @@ const requireAdmin = (req, res, next) => {
 };
 
 // ============ ROUTES ============
+app.use('/api/reports', reportsRoutes);
 app.use('/api/claims', claimsRoutes);
 
 // ---- AUTHENTICATION ROUTES ----
@@ -653,14 +655,14 @@ app.get('/api/dashboard/caregiver-hours', verifyToken, requireAdmin, async (req,
     const result = await db.query(
       `SELECT u.id, u.first_name, u.last_name,
               COUNT(te.id) as shifts,
-              SUM(te.duration_minutes)::integer / 60 as total_hours,
-              AVG(pr.satisfaction_score) as avg_satisfaction
+              COALESCE(SUM(te.duration_minutes)::integer / 60, 0) as total_hours,
+              COALESCE(AVG(pr.satisfaction_score), 0) as avg_satisfaction
        FROM users u
-       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.is_complete = true
+       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.end_time IS NOT NULL
        LEFT JOIN performance_ratings pr ON u.id = pr.caregiver_id
        WHERE u.role = 'caregiver' AND u.is_active = true
        GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY total_hours DESC`
+       ORDER BY total_hours DESC NULLS LAST`
     );
     res.json(result.rows);
   } catch (error) {
