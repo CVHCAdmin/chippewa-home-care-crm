@@ -1,10 +1,27 @@
 // src/App.jsx - Main application component
 import React, { useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import CaregiverDashboard from './components/CaregiverDashboard';
+import PaymentPage, { PaymentSuccess } from './components/PaymentPage';
 
 const App = () => {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Public payment routes - no auth required */}
+        <Route path="/pay/:invoiceId" element={<PaymentPage />} />
+        <Route path="/payment-success" element={<PaymentSuccess />} />
+        
+        {/* Main app */}
+        <Route path="/*" element={<MainApp />} />
+      </Routes>
+    </BrowserRouter>
+  );
+};
+
+const MainApp = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(localStorage.getItem('token'));
