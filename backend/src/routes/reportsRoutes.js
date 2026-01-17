@@ -1,10 +1,23 @@
 // routes/reportsRoutes.js
-// Reports & Analytics API - Matches frontend ReportsAnalytics.jsx
+// Reports & Analytics API
+// 
+// IMPORTANT BUSINESS LOGIC:
+// - Client hours = from SCHEDULES table (planned/authorized service hours)
+// - Caregiver payroll hours = from TIME_ENTRIES table (actual clock in/out for payroll)
+//
+// Column names:
+// - schedules: start_time, end_time, date, day_of_week, is_active
+// - time_entries: start_time, end_time, duration_minutes
+// - users (caregivers): role = 'caregiver', default_pay_rate
+// - clients: is_active, service_type
 
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+
+// Helper to calculate hours from schedule time range
+const SCHEDULE_HOURS_CALC = `EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600`;
 
 // ==================== OVERVIEW REPORT ====================
 // POST /api/reports/overview
@@ -12,82 +25,93 @@ router.post('/overview', auth, async (req, res) => {
   const { startDate, endDate, caregiverId, clientId } = req.body;
 
   try {
-    // Build WHERE clauses for filters
-    let caregiverWhere = '';
-    let clientWhere = '';
+    // Build filter clauses
+    let scheduleFilters = '';
     const params = [startDate, endDate];
     let paramIndex = 3;
 
     if (caregiverId) {
-      caregiverWhere = ` AND te.caregiver_id = $${paramIndex}`;
+      scheduleFilters += ` AND s.caregiver_id = $${paramIndex}`;
       params.push(caregiverId);
       paramIndex++;
     }
     if (clientId) {
-      clientWhere = ` AND te.client_id = $${paramIndex}`;
+      scheduleFilters += ` AND s.client_id = $${paramIndex}`;
       params.push(clientId);
       paramIndex++;
     }
 
-    // Summary stats
+    // Summary stats - CLIENT HOURS from schedules
     const summaryQuery = await db.query(`
       SELECT 
-        COALESCE(SUM(te.hours), 0) as "totalHours",
-        COUNT(DISTINCT te.id) as "totalShifts",
-        COALESCE(AVG(pr.rating), 0) as "avgSatisfaction"
-      FROM time_entries te
-      LEFT JOIN performance_ratings pr ON pr.caregiver_id = te.caregiver_id 
-        AND pr.created_at >= $1 AND pr.created_at <= $2
-      WHERE te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-        ${caregiverWhere}
-        ${clientWhere}
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as "totalHours",
+        COUNT(DISTINCT s.id) as "totalShifts"
+      FROM schedules s
+      WHERE s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
+        ${scheduleFilters}
     `, params);
 
-    // Calculate revenue from invoices or estimate from hours
+    // Average satisfaction from performance ratings
+    const satisfactionQuery = await db.query(`
+      SELECT COALESCE(AVG(pr.satisfaction_score), 0) as "avgSatisfaction"
+      FROM performance_ratings pr
+      WHERE pr.created_at >= $1 AND pr.created_at <= $2
+    `, [startDate, endDate]);
+
+    // Revenue from invoices
     const revenueQuery = await db.query(`
       SELECT COALESCE(SUM(i.total), 0) as "totalRevenue"
       FROM invoices i
       WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
     `, [startDate, endDate]);
 
-    // Top caregivers
+    // Top caregivers - by SCHEDULED hours with clients
     const topCaregiversQuery = await db.query(`
       SELECT 
-        cp.id,
-        cp.first_name,
-        cp.last_name,
-        COALESCE(SUM(te.hours), 0) as total_hours,
-        COALESCE(SUM(te.hours * COALESCE(cp.hourly_rate, 25)), 0) as total_revenue,
-        COALESCE(AVG(pr.rating), 0) as avg_satisfaction,
-        COUNT(DISTINCT te.client_id) as clients_served
-      FROM caregiver_profiles cp
-      LEFT JOIN time_entries te ON te.caregiver_id = cp.id 
-        AND te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-      LEFT JOIN performance_ratings pr ON pr.caregiver_id = cp.id
+        u.id,
+        u.first_name,
+        u.last_name,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}) * COALESCE(u.default_pay_rate, 25), 0) as total_revenue,
+        COALESCE(AVG(pr.satisfaction_score), 0) as avg_satisfaction,
+        COUNT(DISTINCT s.client_id) as clients_served
+      FROM users u
+      LEFT JOIN schedules s ON s.caregiver_id = u.id 
+        AND s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
+      LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id
         AND pr.created_at >= $1 AND pr.created_at <= $2
-      WHERE cp.status = 'active'
-      GROUP BY cp.id, cp.first_name, cp.last_name, cp.hourly_rate
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      GROUP BY u.id, u.first_name, u.last_name, u.default_pay_rate
       ORDER BY total_hours DESC
       LIMIT 10
     `, [startDate, endDate]);
 
-    // Top clients
+    // Top clients - by SCHEDULED hours
     const topClientsQuery = await db.query(`
       SELECT 
         c.id,
         c.first_name,
         c.last_name,
         c.service_type,
-        COALESCE(SUM(te.hours), 0) as total_hours,
-        COALESCE(SUM(te.hours * 25), 0) as total_cost,
-        COUNT(DISTINCT te.caregiver_id) as caregiver_count
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}) * 25, 0) as total_cost,
+        COUNT(DISTINCT s.caregiver_id) as caregiver_count
       FROM clients c
-      LEFT JOIN time_entries te ON te.client_id = c.id 
-        AND te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-      WHERE c.status = 'active'
+      LEFT JOIN schedules s ON s.client_id = c.id 
+        AND s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
+      WHERE c.is_active = true
       GROUP BY c.id, c.first_name, c.last_name, c.service_type
       ORDER BY total_hours DESC
       LIMIT 10
@@ -95,10 +119,10 @@ router.post('/overview', auth, async (req, res) => {
 
     res.json({
       summary: {
-        totalHours: summaryQuery.rows[0]?.totalHours || 0,
-        totalRevenue: revenueQuery.rows[0]?.totalRevenue || 0,
-        totalShifts: summaryQuery.rows[0]?.totalShifts || 0,
-        avgSatisfaction: summaryQuery.rows[0]?.avgSatisfaction || null
+        totalHours: parseFloat(summaryQuery.rows[0]?.totalHours) || 0,
+        totalRevenue: parseFloat(revenueQuery.rows[0]?.totalRevenue) || 0,
+        totalShifts: parseInt(summaryQuery.rows[0]?.totalShifts) || 0,
+        avgSatisfaction: parseFloat(satisfactionQuery.rows[0]?.avgSatisfaction) || null
       },
       topCaregivers: topCaregiversQuery.rows,
       topClients: topClientsQuery.rows
@@ -115,29 +139,46 @@ router.post('/hours', auth, async (req, res) => {
   const { startDate, endDate, caregiverId, clientId } = req.body;
 
   try {
-    // Hours by week
+    let params = [startDate, endDate];
+    let filterClause = '';
+    
+    if (caregiverId) {
+      filterClause += ` AND s.caregiver_id = $${params.length + 1}`;
+      params.push(caregiverId);
+    }
+    if (clientId) {
+      filterClause += ` AND s.client_id = $${params.length + 1}`;
+      params.push(clientId);
+    }
+
+    // Hours by week - from SCHEDULES
     const hoursByWeekQuery = await db.query(`
       SELECT 
-        DATE_TRUNC('week', te.clock_in) as week_start,
-        COALESCE(SUM(te.hours), 0) as hours
-      FROM time_entries te
-      WHERE te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-        ${caregiverId ? 'AND te.caregiver_id = $3' : ''}
-        ${clientId ? `AND te.client_id = $${caregiverId ? 4 : 3}` : ''}
-      GROUP BY DATE_TRUNC('week', te.clock_in)
+        DATE_TRUNC('week', COALESCE(s.date, CURRENT_DATE)) as week_start,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as hours
+      FROM schedules s
+      WHERE s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
+        ${filterClause}
+      GROUP BY DATE_TRUNC('week', COALESCE(s.date, CURRENT_DATE))
       ORDER BY week_start
-    `, caregiverId ? (clientId ? [startDate, endDate, caregiverId, clientId] : [startDate, endDate, caregiverId]) : (clientId ? [startDate, endDate, clientId] : [startDate, endDate]));
+    `, params);
 
-    // Hours by service type
+    // Hours by service type - from SCHEDULES joined with clients
     const hoursByTypeQuery = await db.query(`
       SELECT 
-        c.service_type,
-        COALESCE(SUM(te.hours), 0) as hours
-      FROM time_entries te
-      JOIN clients c ON te.client_id = c.id
-      WHERE te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
+        COALESCE(c.service_type, 'unspecified') as service_type,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as hours
+      FROM schedules s
+      JOIN clients c ON s.client_id = c.id
+      WHERE s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
       GROUP BY c.service_type
       ORDER BY hours DESC
     `, [startDate, endDate]);
@@ -145,22 +186,25 @@ router.post('/hours', auth, async (req, res) => {
     // Calculate total for percentages
     const totalHours = hoursByTypeQuery.rows.reduce((sum, row) => sum + parseFloat(row.hours || 0), 0);
 
-    // Caregiver breakdown
+    // Caregiver breakdown - SCHEDULED hours
     const caregiverBreakdownQuery = await db.query(`
       SELECT 
-        cp.id,
-        cp.first_name,
-        cp.last_name,
-        COALESCE(SUM(te.hours), 0) as total_hours,
-        COUNT(DISTINCT te.client_id) as client_count,
-        COALESCE(AVG(te.hours), 0) as avg_shift_hours
-      FROM caregiver_profiles cp
-      LEFT JOIN time_entries te ON te.caregiver_id = cp.id
-        AND te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-      WHERE cp.status = 'active'
-      GROUP BY cp.id, cp.first_name, cp.last_name
-      HAVING SUM(te.hours) > 0
+        u.id,
+        u.first_name,
+        u.last_name,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
+        COUNT(DISTINCT s.client_id) as client_count,
+        COALESCE(AVG(${SCHEDULE_HOURS_CALC}), 0) as avg_shift_hours
+      FROM users u
+      LEFT JOIN schedules s ON s.caregiver_id = u.id
+        AND s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      GROUP BY u.id, u.first_name, u.last_name
+      HAVING SUM(${SCHEDULE_HOURS_CALC}) > 0
       ORDER BY total_hours DESC
     `, [startDate, endDate]);
 
@@ -182,62 +226,66 @@ router.post('/hours', auth, async (req, res) => {
 // ==================== PERFORMANCE REPORT ====================
 // POST /api/reports/performance
 router.post('/performance', auth, async (req, res) => {
-  const { startDate, endDate, caregiverId, clientId } = req.body;
+  const { startDate, endDate, caregiverId } = req.body;
 
   try {
-    // Performance by caregiver
+    // Performance by caregiver - scheduled hours + ratings
     const performanceQuery = await db.query(`
       SELECT 
-        cp.id,
-        cp.first_name,
-        cp.last_name,
-        COALESCE(AVG(pr.rating), 0) as avg_rating,
-        COUNT(pr.id) as rating_count,
-        COALESCE(SUM(te.hours), 0) as total_hours,
-        COUNT(DISTINCT te.client_id) as clients_served,
+        u.id,
+        u.first_name,
+        u.last_name,
+        COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
+        COUNT(DISTINCT pr.id) as rating_count,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
+        COUNT(DISTINCT s.client_id) as clients_served,
         COALESCE(
-          (SELECT COUNT(*) FROM incidents i WHERE i.caregiver_id = cp.id AND i.created_at >= $1 AND i.created_at <= $2),
+          (SELECT COUNT(*) FROM incidents i WHERE i.reported_by = u.id AND i.created_at >= $1 AND i.created_at <= $2),
           0
         ) as incident_count
-      FROM caregiver_profiles cp
-      LEFT JOIN performance_ratings pr ON pr.caregiver_id = cp.id
+      FROM users u
+      LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id
         AND pr.created_at >= $1 AND pr.created_at <= $2
-      LEFT JOIN time_entries te ON te.caregiver_id = cp.id
-        AND te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-      WHERE cp.status = 'active'
-        ${caregiverId ? 'AND cp.id = $3' : ''}
-      GROUP BY cp.id, cp.first_name, cp.last_name
+      LEFT JOIN schedules s ON s.caregiver_id = u.id
+        AND s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
+      WHERE u.role = 'caregiver' AND u.is_active = true
+        ${caregiverId ? 'AND u.id = $3' : ''}
+      GROUP BY u.id, u.first_name, u.last_name
       ORDER BY avg_rating DESC, total_hours DESC
     `, caregiverId ? [startDate, endDate, caregiverId] : [startDate, endDate]);
 
     // Rating distribution
     const ratingDistributionQuery = await db.query(`
       SELECT 
-        pr.rating,
+        pr.satisfaction_score as rating,
         COUNT(*) as count
       FROM performance_ratings pr
       WHERE pr.created_at >= $1 AND pr.created_at <= $2
-      GROUP BY pr.rating
-      ORDER BY pr.rating DESC
+      GROUP BY pr.satisfaction_score
+      ORDER BY pr.satisfaction_score DESC
     `, [startDate, endDate]);
 
-    // On-time metrics (from time entries)
+    // Punctuality - from TIME_ENTRIES (actual clock-ins vs scheduled)
     const punctualityQuery = await db.query(`
       SELECT 
-        cp.id,
-        cp.first_name,
-        cp.last_name,
-        COUNT(*) as total_shifts,
-        COUNT(CASE WHEN te.clock_in <= s.start_time::time + INTERVAL '5 minutes' THEN 1 END) as on_time_count
-      FROM time_entries te
-      JOIN caregiver_profiles cp ON te.caregiver_id = cp.id
-      LEFT JOIN schedules s ON te.schedule_id = s.id
-      WHERE te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-      GROUP BY cp.id, cp.first_name, cp.last_name
-      HAVING COUNT(*) > 0
-      ORDER BY (COUNT(CASE WHEN te.clock_in <= s.start_time::time + INTERVAL '5 minutes' THEN 1 END)::float / COUNT(*)) DESC
+        u.id,
+        u.first_name,
+        u.last_name,
+        COUNT(te.id) as total_shifts,
+        COUNT(CASE WHEN te.start_time::time <= sch.start_time::time + INTERVAL '5 minutes' THEN 1 END) as on_time_count
+      FROM users u
+      LEFT JOIN time_entries te ON te.caregiver_id = u.id
+        AND te.start_time >= $1 AND te.start_time <= ($2::date + interval '1 day')
+        AND te.end_time IS NOT NULL
+      LEFT JOIN schedules sch ON te.schedule_id = sch.id
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      GROUP BY u.id, u.first_name, u.last_name
+      HAVING COUNT(te.id) > 0
+      ORDER BY (COUNT(CASE WHEN te.start_time::time <= sch.start_time::time + INTERVAL '5 minutes' THEN 1 END)::float / NULLIF(COUNT(te.id), 0)) DESC
     `, [startDate, endDate]);
 
     res.json({
@@ -257,17 +305,17 @@ router.post('/performance', auth, async (req, res) => {
 // ==================== SATISFACTION REPORT ====================
 // POST /api/reports/satisfaction
 router.post('/satisfaction', auth, async (req, res) => {
-  const { startDate, endDate, caregiverId, clientId } = req.body;
+  const { startDate, endDate, caregiverId } = req.body;
 
   try {
     // Overall satisfaction metrics
     const satisfactionQuery = await db.query(`
       SELECT 
-        COALESCE(AVG(pr.rating), 0) as avg_rating,
+        COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
         COUNT(pr.id) as total_ratings,
-        COUNT(CASE WHEN pr.rating >= 4 THEN 1 END) as positive_count,
-        COUNT(CASE WHEN pr.rating = 3 THEN 1 END) as neutral_count,
-        COUNT(CASE WHEN pr.rating < 3 THEN 1 END) as negative_count
+        COUNT(CASE WHEN pr.satisfaction_score >= 4 THEN 1 END) as positive_count,
+        COUNT(CASE WHEN pr.satisfaction_score = 3 THEN 1 END) as neutral_count,
+        COUNT(CASE WHEN pr.satisfaction_score < 3 THEN 1 END) as negative_count
       FROM performance_ratings pr
       WHERE pr.created_at >= $1 AND pr.created_at <= $2
         ${caregiverId ? 'AND pr.caregiver_id = $3' : ''}
@@ -277,7 +325,7 @@ router.post('/satisfaction', auth, async (req, res) => {
     const trendQuery = await db.query(`
       SELECT 
         DATE_TRUNC('week', pr.created_at) as week_start,
-        COALESCE(AVG(pr.rating), 0) as avg_rating,
+        COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
         COUNT(*) as count
       FROM performance_ratings pr
       WHERE pr.created_at >= $1 AND pr.created_at <= $2
@@ -291,18 +339,18 @@ router.post('/satisfaction', auth, async (req, res) => {
         c.id,
         c.first_name,
         c.last_name,
-        COALESCE(AVG(pr.rating), 0) as avg_rating,
+        COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
         COUNT(pr.id) as rating_count
       FROM clients c
       LEFT JOIN performance_ratings pr ON pr.client_id = c.id
         AND pr.created_at >= $1 AND pr.created_at <= $2
-      WHERE c.status = 'active'
+      WHERE c.is_active = true
       GROUP BY c.id, c.first_name, c.last_name
       HAVING COUNT(pr.id) > 0
       ORDER BY avg_rating DESC
     `, [startDate, endDate]);
 
-    // Feedback themes (from notes if available)
+    // Feedback themes (from notes)
     const feedbackQuery = await db.query(`
       SELECT 
         CASE 
@@ -327,7 +375,7 @@ router.post('/satisfaction', auth, async (req, res) => {
 
     res.json({
       satisfaction: {
-        avg_rating: satisfactionQuery.rows[0]?.avg_rating || 0,
+        avg_rating: parseFloat(satisfactionQuery.rows[0]?.avg_rating) || 0,
         total_ratings: totalRatings,
         positive_percentage: totalRatings > 0 ? ((satisfactionQuery.rows[0]?.positive_count / totalRatings) * 100).toFixed(1) : 0,
         neutral_percentage: totalRatings > 0 ? ((satisfactionQuery.rows[0]?.neutral_count / totalRatings) * 100).toFixed(1) : 0,
@@ -346,10 +394,10 @@ router.post('/satisfaction', auth, async (req, res) => {
 // ==================== REVENUE REPORT ====================
 // POST /api/reports/revenue
 router.post('/revenue', auth, async (req, res) => {
-  const { startDate, endDate, caregiverId, clientId } = req.body;
+  const { startDate, endDate, clientId } = req.body;
 
   try {
-    // Overall revenue
+    // Overall revenue from invoices
     const revenueQuery = await db.query(`
       SELECT 
         COALESCE(SUM(i.total), 0) as total,
@@ -360,32 +408,38 @@ router.post('/revenue', auth, async (req, res) => {
         ${clientId ? 'AND i.client_id = $3' : ''}
     `, clientId ? [startDate, endDate, clientId] : [startDate, endDate]);
 
-    // Get billable hours
+    // Get billable hours from SCHEDULES (client hours)
     const hoursQuery = await db.query(`
-      SELECT COALESCE(SUM(te.hours), 0) as billable_hours
-      FROM time_entries te
-      WHERE te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
+      SELECT COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as billable_hours
+      FROM schedules s
+      WHERE s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
     `, [startDate, endDate]);
 
     const totalRevenue = parseFloat(revenueQuery.rows[0]?.total) || 0;
     const billableHours = parseFloat(hoursQuery.rows[0]?.billable_hours) || 0;
 
-    // Revenue by service type
+    // Revenue by service type - from SCHEDULES
     const byServiceTypeQuery = await db.query(`
       SELECT 
-        c.service_type,
-        COALESCE(SUM(te.hours), 0) as hours,
-        COALESCE(SUM(te.hours * 25), 0) as revenue
-      FROM time_entries te
-      JOIN clients c ON te.client_id = c.id
-      WHERE te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
+        COALESCE(c.service_type, 'unspecified') as service_type,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as hours,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}) * 25, 0) as revenue
+      FROM schedules s
+      JOIN clients c ON s.client_id = c.id
+      WHERE s.is_active = true
+        AND (
+          (s.date >= $1 AND s.date <= $2)
+          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
+        )
       GROUP BY c.service_type
       ORDER BY revenue DESC
     `, [startDate, endDate]);
 
-    // Revenue by client
+    // Revenue by client - from invoices
     const byClientQuery = await db.query(`
       SELECT 
         c.id,
@@ -395,7 +449,7 @@ router.post('/revenue', auth, async (req, res) => {
       FROM clients c
       LEFT JOIN invoices i ON i.client_id = c.id
         AND i.billing_period_start >= $1 AND i.billing_period_end <= $2
-      WHERE c.status = 'active'
+      WHERE c.is_active = true
       GROUP BY c.id, c.first_name, c.last_name
       HAVING SUM(i.total) > 0
       ORDER BY revenue DESC
@@ -405,7 +459,7 @@ router.post('/revenue', auth, async (req, res) => {
     res.json({
       revenue: {
         total: totalRevenue,
-        collected: revenueQuery.rows[0]?.collected || 0,
+        collected: parseFloat(revenueQuery.rows[0]?.collected) || 0,
         avgPerHour: billableHours > 0 ? (totalRevenue / billableHours).toFixed(2) : 0,
         billableHours
       },
@@ -422,28 +476,25 @@ router.post('/revenue', auth, async (req, res) => {
 // POST /api/reports/:type/export
 router.post('/:type/export', auth, async (req, res) => {
   const { type } = req.params;
-  const { startDate, endDate, caregiverId, clientId, format } = req.body;
+  const { startDate, endDate, format } = req.body;
 
   try {
-    // For now, return a simple CSV
-    // In production, you'd use a library like json2csv or pdfkit
-    
     let data = [];
     let filename = `report-${type}-${new Date().toISOString().split('T')[0]}`;
 
-    // Fetch the same data as the report type
     if (type === 'overview') {
       const result = await db.query(`
         SELECT 
-          cp.first_name || ' ' || cp.last_name as caregiver,
-          COALESCE(SUM(te.hours), 0) as hours,
-          COUNT(DISTINCT te.client_id) as clients
-        FROM caregiver_profiles cp
-        LEFT JOIN time_entries te ON te.caregiver_id = cp.id
-          AND te.clock_in >= $1 AND te.clock_in <= $2
-          AND te.status = 'approved'
-        GROUP BY cp.id, cp.first_name, cp.last_name
-        ORDER BY hours DESC
+          u.first_name || ' ' || u.last_name as caregiver,
+          COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as scheduled_hours,
+          COUNT(DISTINCT s.client_id) as clients
+        FROM users u
+        LEFT JOIN schedules s ON s.caregiver_id = u.id
+          AND s.is_active = true
+          AND (s.date >= $1 AND s.date <= $2)
+        WHERE u.role = 'caregiver'
+        GROUP BY u.id, u.first_name, u.last_name
+        ORDER BY scheduled_hours DESC
       `, [startDate, endDate]);
       data = result.rows;
     }
@@ -457,7 +508,6 @@ router.post('/:type/export', auth, async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
       res.send(csv);
     } else {
-      // For PDF, you'd use pdfkit or similar
       res.status(400).json({ error: 'PDF export not yet implemented' });
     }
   } catch (error) {
@@ -466,15 +516,15 @@ router.post('/:type/export', auth, async (req, res) => {
   }
 });
 
-// ==================== LEGACY ENDPOINTS (keep for backwards compatibility) ====================
-
-// GET /api/reports/pnl - P&L Dashboard
+// ==================== P&L REPORT (LEGACY) ====================
+// GET /api/reports/pnl
 router.get('/pnl', auth, async (req, res) => {
   const { startDate, endDate } = req.query;
   const start = startDate || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
   const end = endDate || new Date().toISOString().split('T')[0];
 
   try {
+    // Revenue from invoices
     const revenue = await db.query(`
       SELECT 
         COALESCE(SUM(total), 0) as total_billed,
@@ -484,6 +534,7 @@ router.get('/pnl', auth, async (req, res) => {
       WHERE billing_period_start >= $1 AND billing_period_end <= $2
     `, [start, end]);
 
+    // Revenue by payer
     const revenueByPayer = await db.query(`
       SELECT 
         COALESCE(rs.name, 'Private Pay') as payer_name,
@@ -498,9 +549,9 @@ router.get('/pnl', auth, async (req, res) => {
       ORDER BY billed DESC
     `, [start, end]);
 
+    // Expenses
     const expenses = await db.query(`
       SELECT 
-        COALESCE(SUM(amount), 0) as total_expenses,
         category,
         COALESCE(SUM(amount), 0) as category_total
       FROM expenses
@@ -511,13 +562,14 @@ router.get('/pnl', auth, async (req, res) => {
 
     const totalExpenses = expenses.rows.reduce((sum, e) => sum + parseFloat(e.category_total || 0), 0);
 
+    // Payroll from TIME_ENTRIES (actual worked hours for caregiver pay)
     const payroll = await db.query(`
       SELECT 
-        COALESCE(SUM(te.hours * cp.hourly_rate), 0) as gross_payroll
+        COALESCE(SUM(te.duration_minutes / 60.0 * COALESCE(u.default_pay_rate, 15)), 0) as gross_payroll
       FROM time_entries te
-      JOIN caregiver_profiles cp ON te.caregiver_id = cp.id
-      WHERE te.clock_in >= $1 AND te.clock_in <= $2
-      AND te.status = 'approved'
+      JOIN users u ON te.caregiver_id = u.id
+      WHERE te.start_time >= $1 AND te.start_time <= ($2::date + interval '1 day')
+        AND te.end_time IS NOT NULL
     `, [start, end]);
 
     const totalRevenue = parseFloat(revenue.rows[0]?.total_collected || 0);
@@ -541,10 +593,12 @@ router.get('/pnl', auth, async (req, res) => {
       margin: totalRevenue > 0 ? ((netIncome / totalRevenue) * 100).toFixed(2) : 0
     });
   } catch (error) {
+    console.error('P&L report error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// ==================== CAREGIVER PRODUCTIVITY (LEGACY) ====================
 // GET /api/reports/caregiver-productivity
 router.get('/caregiver-productivity', auth, async (req, res) => {
   const { startDate, endDate } = req.query;
@@ -554,25 +608,26 @@ router.get('/caregiver-productivity', auth, async (req, res) => {
   try {
     const result = await db.query(`
       SELECT 
-        cp.id,
-        cp.first_name,
-        cp.last_name,
-        COUNT(DISTINCT te.id) as visit_count,
-        COUNT(DISTINCT te.client_id) as client_count,
-        COALESCE(SUM(te.hours), 0) as total_hours,
-        COALESCE(AVG(te.hours), 0) as avg_hours_per_visit,
-        cp.hourly_rate,
-        COALESCE(SUM(te.hours), 0) * cp.hourly_rate as total_pay
-      FROM caregiver_profiles cp
-      LEFT JOIN time_entries te ON te.caregiver_id = cp.id
-        AND te.clock_in >= $1 AND te.clock_in <= $2
-        AND te.status = 'approved'
-      WHERE cp.status = 'active'
-      GROUP BY cp.id, cp.first_name, cp.last_name, cp.hourly_rate
+        u.id,
+        u.first_name,
+        u.last_name,
+        COUNT(DISTINCT s.id) as visit_count,
+        COUNT(DISTINCT s.client_id) as client_count,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
+        COALESCE(AVG(${SCHEDULE_HOURS_CALC}), 0) as avg_hours_per_visit,
+        u.default_pay_rate as hourly_rate,
+        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) * COALESCE(u.default_pay_rate, 0) as total_pay
+      FROM users u
+      LEFT JOIN schedules s ON s.caregiver_id = u.id
+        AND s.is_active = true
+        AND (s.date >= $1 AND s.date <= $2)
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      GROUP BY u.id, u.first_name, u.last_name, u.default_pay_rate
       ORDER BY total_hours DESC
     `, [start, end]);
     res.json(result.rows);
   } catch (error) {
+    console.error('Caregiver productivity error:', error);
     res.status(500).json({ error: error.message });
   }
 });
