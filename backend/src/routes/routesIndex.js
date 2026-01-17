@@ -18,6 +18,7 @@ const familyPortalRoutes = require('./familyPortalRoutes');
 const shiftSwapsRoutes = require('./shiftSwapsRoutes');
 const reportsRoutes = require('./reportsRoutes');
 const alertsRoutes = require('./alertsRoutes');
+const applicationsRoutes = require('./applicationsRoutes'); // NEW: Job applications
 
 // Register routes with their prefixes
 router.use('/billing', billingRoutes);
@@ -33,6 +34,7 @@ router.use('/family-portal', familyPortalRoutes);
 router.use('/shift-swaps', shiftSwapsRoutes);
 router.use('/reports', reportsRoutes);
 router.use('/alerts', alertsRoutes);
+router.use('/applications', applicationsRoutes); // NEW: Job applications
 
 // Also expose billing/payroll endpoints at root level for backwards compatibility
 router.use('/', billingRoutes);  // For /api/authorizations, /api/invoice-payments, etc.
@@ -166,5 +168,15 @@ DOCUMENTS:
   POST   /api/documents/upload          - Upload document
   DELETE /api/documents/:id             - Delete document
   POST   /api/documents/:id/acknowledge - Sign/acknowledge
+
+JOB APPLICATIONS:
+  POST   /api/applications              - Submit application (PUBLIC - no auth)
+  GET    /api/applications              - Get all applications (admin)
+  GET    /api/applications/:id          - Get application details (admin)
+  PUT    /api/applications/:id/status   - Update status (admin)
+  POST   /api/applications/:id/notes    - Add interview notes (admin)
+  POST   /api/applications/:id/hire     - Convert to caregiver (admin)
+  DELETE /api/applications/:id          - Delete application (admin)
+  GET    /api/applications/stats/summary - Get application stats (admin)
 
 */

@@ -27,7 +27,12 @@ const port = process.env.PORT || 5000;
 app.use(helmet());
 app.use(compression());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: [
+    'https://cvhc-crm.netlify.app',
+    'https://chippewavalleyhomecare.com',
+    'https://www.chippewavalleyhomecare.com',
+    process.env.FRONTEND_URL || 'http://localhost:3000'
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization']
