@@ -32,15 +32,15 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
 
   const handleUpdateStatus = async (newStatus) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/applications/${applicationId}`, {
-        method: 'PATCH',
+      const response = await fetch(`${API_BASE_URL}/api/applications/${applicationId}/status`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           status: newStatus,
-          interview_notes: interviewNotes
+          notes: interviewNotes
         })
       });
 
@@ -52,6 +52,26 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
       loadApplication();
     } catch (error) {
       alert('Failed to update: ' + error.message);
+    }
+  };
+
+  const handleSaveNotes = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/applications/${applicationId}/notes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ notes: interviewNotes })
+      });
+
+      if (!response.ok) throw new Error('Failed to save notes');
+      
+      setMessage('Notes saved');
+      setTimeout(() => setMessage(''), 2000);
+    } catch (error) {
+      alert('Failed to save notes: ' + error.message);
     }
   };
 
@@ -67,7 +87,7 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          interview_notes: interviewNotes
+          hourlyRate: 15.00
         })
       });
 
@@ -93,12 +113,14 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
     return <div className="card card-centered"><p>Application not found</p></div>;
   }
 
-  const certs = [];
-  if (app.has_cna) certs.push('CNA');
-  if (app.has_lpn) certs.push('LPN');
-  if (app.has_rn) certs.push('RN');
-  if (app.has_cpr) certs.push('CPR');
-  if (app.has_first_aid) certs.push('First Aid');
+  // Parse certifications from comma-separated string
+  const certifications = app.certifications ? app.certifications.split(',').map(c => c.trim()).filter(Boolean) : [];
+  
+  // Parse availability days
+  const availabilityDays = app.availability_days ? app.availability_days.split(',').map(d => d.trim()).filter(Boolean) : [];
+  
+  // Parse shifts
+  const shifts = app.availability_shifts ? app.availability_shifts.split(',').map(s => s.trim()).filter(Boolean) : [];
 
   return (
     <div>
@@ -109,7 +131,7 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
           app.status === 'hired' ? 'badge-success' :
           app.status === 'rejected' ? 'badge-danger' :
           'badge-warning'
-        }`}>{app.status.toUpperCase()}</span>
+        }`}>{app.status?.toUpperCase()}</span>
       </div>
 
       {message && <div className="alert alert-success">{message}</div>}
@@ -128,70 +150,96 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
         {/* Experience */}
         <div className="card">
           <h3>Experience</h3>
-          {app.years_of_experience && <p><strong>Years:</strong> {app.years_of_experience} years</p>}
-          
-          {app.previous_employer_1 && (
+          {app.years_experience && <p><strong>Years:</strong> {app.years_experience} years</p>}
+          {app.cna_license && <p><strong>CNA License:</strong> {app.cna_license}</p>}
+          {app.previous_employer && (
             <div className="experience-item">
-              <p><strong>{app.previous_employer_1}</strong></p>
-              <p>{app.job_title_1} {app.employment_dates_1}</p>
-            </div>
-          )}
-          {app.previous_employer_2 && (
-            <div className="experience-item">
-              <p><strong>{app.previous_employer_2}</strong></p>
-              <p>{app.job_title_2} {app.employment_dates_2}</p>
-            </div>
-          )}
-          {app.previous_employer_3 && (
-            <div className="experience-item">
-              <p><strong>{app.previous_employer_3}</strong></p>
-              <p>{app.job_title_3} {app.employment_dates_3}</p>
+              <p><strong>Previous Employer:</strong> {app.previous_employer}</p>
+              {app.reason_for_leaving && <p><strong>Reason for Leaving:</strong> {app.reason_for_leaving}</p>}
             </div>
           )}
         </div>
       </div>
 
       {/* Certifications */}
-      {certs.length > 0 && (
+      {certifications.length > 0 && (
         <div className="card">
           <h3>Certifications</h3>
           <div className="cert-badges">
-            {certs.map(cert => (
-              <span key={cert} className="badge badge-success">{cert}</span>
+            {certifications.map(cert => (
+              <span key={cert} className="badge badge-success" style={{ marginRight: '0.5rem' }}>{cert}</span>
             ))}
           </div>
-          {app.other_certifications && (
-            <p><strong>Other:</strong> {app.other_certifications}</p>
-          )}
         </div>
       )}
+
+      {/* Eligibility */}
+      <div className="card">
+        <h3>Eligibility</h3>
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+          <p><strong>Driver's License:</strong> {app.has_drivers_license ? '✓ Yes' : '✗ No'}</p>
+          <p><strong>Transportation:</strong> {app.has_transportation ? '✓ Yes' : '✗ No'}</p>
+          <p><strong>Legal to Work:</strong> {app.legal_to_work ? '✓ Yes' : '✗ No'}</p>
+          <p><strong>Background Check:</strong> {app.willing_background_check ? '✓ Yes' : '✗ No'}</p>
+          <p><strong>Felony:</strong> {app.felony_conviction ? 'Yes' : 'No'}</p>
+        </div>
+        {app.felony_conviction && app.felony_explanation && (
+          <p style={{ marginTop: '1rem' }}><strong>Felony Explanation:</strong> {app.felony_explanation}</p>
+        )}
+      </div>
 
       {/* References */}
       <div className="card">
         <h3>Professional References</h3>
-        {[1, 2, 3].map(num => (
-          app[`reference_${num}_name`] && (
-            <div key={num} className="reference-item">
-              <p><strong>{app[`reference_${num}_name`]}</strong> ({app[`reference_${num}_relationship`]})</p>
-              <p><a href={`tel:${app[`reference_${num}_phone`]}`}>{app[`reference_${num}_phone`]}</a></p>
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          {app.ref1_name && (
+            <div className="reference-item">
+              <p><strong>{app.ref1_name}</strong> ({app.ref1_relationship})</p>
+              <p>Phone: <a href={`tel:${app.ref1_phone}`}>{app.ref1_phone}</a></p>
+              {app.ref1_email && <p>Email: <a href={`mailto:${app.ref1_email}`}>{app.ref1_email}</a></p>}
             </div>
-          )
-        ))}
+          )}
+          {app.ref2_name && (
+            <div className="reference-item">
+              <p><strong>{app.ref2_name}</strong> ({app.ref2_relationship})</p>
+              <p>Phone: <a href={`tel:${app.ref2_phone}`}>{app.ref2_phone}</a></p>
+              {app.ref2_email && <p>Email: <a href={`mailto:${app.ref2_email}`}>{app.ref2_email}</a></p>}
+            </div>
+          )}
+        </div>
+        {!app.ref1_name && !app.ref2_name && <p style={{ color: '#666' }}>No references provided</p>}
       </div>
 
       {/* Availability & Expectations */}
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <div className="card">
           <h3>Availability</h3>
-          {app.preferred_hours && <p><strong>Hours:</strong> {app.preferred_hours}</p>}
-          <p><strong>Weekends:</strong> {app.can_work_weekends ? '✓ Yes' : '✗ No'}</p>
-          <p><strong>Nights:</strong> {app.can_work_nights ? '✓ Yes' : '✗ No'}</p>
+          {availabilityDays.length > 0 && (
+            <p><strong>Days:</strong> {availabilityDays.join(', ')}</p>
+          )}
+          {shifts.length > 0 && (
+            <p><strong>Shifts:</strong> {shifts.join(', ')}</p>
+          )}
+          {app.hours_desired && <p><strong>Hours Desired:</strong> {app.hours_desired}</p>}
+          {app.earliest_start_date && (
+            <p><strong>Can Start:</strong> {new Date(app.earliest_start_date).toLocaleDateString()}</p>
+          )}
         </div>
 
         <div className="card">
-          <h3>Expectations</h3>
-          {app.expected_hourly_rate && <p><strong>Rate:</strong> {app.expected_hourly_rate}</p>}
-          {app.motivation && <p><strong>Motivation:</strong> {app.motivation}</p>}
+          <h3>Additional Information</h3>
+          {app.why_interested && (
+            <div>
+              <p><strong>Why Interested:</strong></p>
+              <p style={{ color: '#666' }}>{app.why_interested}</p>
+            </div>
+          )}
+          {app.additional_info && (
+            <div style={{ marginTop: '1rem' }}>
+              <p><strong>Additional Notes:</strong></p>
+              <p style={{ color: '#666' }}>{app.additional_info}</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -203,14 +251,16 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
           onChange={(e) => setInterviewNotes(e.target.value)}
           placeholder="Add interview observations, concerns, or recommendations..."
           rows="5"
+          style={{ width: '100%', marginBottom: '1rem' }}
         ></textarea>
+        <button className="btn btn-secondary" onClick={handleSaveNotes}>Save Notes</button>
       </div>
 
       {/* Status & Actions */}
       <div className="card">
         <h3>Application Status</h3>
-        <div className="status-buttons">
-          {['applied', 'reviewing', 'interviewed', 'offered', 'hired', 'rejected'].map(s => (
+        <div className="status-buttons" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {['new', 'reviewing', 'interviewed', 'offered', 'hired', 'rejected'].map(s => (
             <button
               key={s}
               className={`btn ${status === s ? 'btn-primary' : 'btn-secondary'}`}
@@ -228,6 +278,7 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
               className="btn btn-success btn-large"
               onClick={handleHireApplicant}
               disabled={hiring}
+              style={{ padding: '1rem 2rem', fontSize: '1.1rem' }}
             >
               {hiring ? 'Creating account...' : '✓ Hire & Create Account'}
             </button>
