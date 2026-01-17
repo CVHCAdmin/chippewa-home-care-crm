@@ -13,6 +13,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const billingRoutes = require('./routes/billingRoutes');
+const reports = require('./routes/reports');
 
 // Load environment variables
 dotenv.config();
@@ -97,7 +98,7 @@ const requireAdmin = (req, res, next) => {
 };
 
 // ============ ROUTES ============
-app.use('/api/reports', reportsRoutes);
+app.use('/api/reports', reports);
 app.use('/api/claims', claimsRoutes);
 
 // ---- AUTHENTICATION ROUTES ----
