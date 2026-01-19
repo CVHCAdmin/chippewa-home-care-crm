@@ -320,8 +320,31 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
   const getDayName = (n) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][n] || '';
 
+  // Get today's appointments from schedules
+  const getTodaysAppointments = () => {
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const todayStr = today.toISOString().split('T')[0];
+    
+    // Get recurring schedules for today's day of week
+    const recurring = schedules.filter(s => s.day_of_week === dayOfWeek);
+    // Get one-time schedules for today's date
+    const oneTime = schedules.filter(s => s.date && s.date.split('T')[0] === todayStr);
+    
+    return [...recurring, ...oneTime].sort((a, b) => {
+      const timeA = a.start_time || '00:00';
+      const timeB = b.start_time || '00:00';
+      return timeA.localeCompare(timeB);
+    });
+  };
+
+  const getClientById = (id) => clients.find(c => c.id === id);
+
   // RENDER PAGES
-  const renderHomePage = () => (
+  const renderHomePage = () => {
+    const todaysAppointments = getTodaysAppointments();
+    
+    return (
     <>
       <div className="card" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: '#fff', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -334,6 +357,73 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         {myHoursThisWeek > 35 && (
           <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'rgba(255,255,255,0.2)', borderRadius: '6px', fontSize: '0.85rem' }}>
             ⚠️ Approaching 40 hour limit
+          </div>
+        )}
+      </div>
+
+      {/* Today's Appointments Section */}
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div className="card-title">📅 Today's Appointments</div>
+        {todaysAppointments.length === 0 ? (
+          <p className="text-muted text-center" style={{ padding: '1rem 0' }}>No appointments scheduled for today</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {todaysAppointments.map((appt, idx) => {
+              const client = getClientById(appt.client_id);
+              const isCurrentClient = activeSession?.client_id === appt.client_id;
+              return (
+                <div 
+                  key={appt.id || idx} 
+                  style={{ 
+                    padding: '1rem', 
+                    borderRadius: '8px', 
+                    background: isCurrentClient ? '#DBEAFE' : '#F9FAFB',
+                    border: isCurrentClient ? '2px solid #2563eb' : '1px solid #E5E7EB'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '600', fontSize: '1.1rem', color: '#1F2937' }}>
+                        {client ? `${client.first_name} ${client.last_name}` : 'Unknown Client'}
+                        {isCurrentClient && <span style={{ marginLeft: '0.5rem', color: '#059669', fontSize: '0.85rem' }}>● Active</span>}
+                      </div>
+                      <div style={{ fontSize: '0.9rem', color: '#6B7280', marginTop: '0.25rem' }}>
+                        🕐 {formatTime(appt.start_time)} - {formatTime(appt.end_time)}
+                      </div>
+                      {client && (
+                        <div style={{ fontSize: '0.85rem', color: '#6B7280', marginTop: '0.5rem' }}>
+                          {client.phone && <span>📞 {client.phone}</span>}
+                          {client.address && <span style={{ marginLeft: client.phone ? '1rem' : 0 }}>📍 {client.address}{client.city ? `, ${client.city}` : ''}</span>}
+                        </div>
+                      )}
+                      {appt.notes && (
+                        <div style={{ fontSize: '0.85rem', color: '#4B5563', marginTop: '0.5rem', padding: '0.5rem', background: '#FEF3C7', borderRadius: '4px' }}>
+                          📝 {appt.notes}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginLeft: '1rem' }}>
+                      <button 
+                        className="btn btn-sm" 
+                        style={{ background: '#E5E7EB', color: '#374151', padding: '0.4rem 0.75rem' }}
+                        onClick={() => setViewingClientId(appt.client_id)}
+                      >
+                        View
+                      </button>
+                      {!activeSession && (
+                        <button 
+                          className="btn btn-sm btn-primary" 
+                          style={{ padding: '0.4rem 0.75rem' }}
+                          onClick={() => setSelectedClient(appt.client_id)}
+                        >
+                          Select
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -374,7 +464,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </div>
       </div>
     </>
-  );
+    );
+  };
 
   const renderOpenShiftsPage = () => (
     <>
