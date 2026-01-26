@@ -24,6 +24,10 @@ const SmartScheduling = ({ token }) => {
   const [conflicts, setConflicts] = useState([]);
   const [saving, setSaving] = useState(false);
 
+  // Multi-day scheduling (same week, same time, multiple days)
+  const [multiDayMode, setMultiDayMode] = useState(false);
+  const [selectedDays, setSelectedDays] = useState([]); // [0-6] for Sun-Sat
+
   // Recurring template state
   const [showRecurring, setShowRecurring] = useState(false);
   const [recurringTemplate, setRecurringTemplate] = useState([]);
@@ -160,6 +164,33 @@ const SmartScheduling = ({ token }) => {
     setTimeout(() => setMessage({ text: '', type: '' }), 4000);
   };
 
+  // Toggle day selection for multi-day mode
+  const toggleDaySelection = (dayIndex) => {
+    setSelectedDays(prev => 
+      prev.includes(dayIndex) 
+        ? prev.filter(d => d !== dayIndex)
+        : [...prev, dayIndex].sort((a, b) => a - b)
+    );
+  };
+
+  // Quick select weekdays (Mon-Fri)
+  const selectWeekdays = () => {
+    setSelectedDays([1, 2, 3, 4, 5]);
+  };
+
+  // Get dates for selected days based on the selected start date's week
+  const getMultiDayDates = () => {
+    const baseDate = new Date(selectedDate);
+    const startOfWeek = new Date(baseDate);
+    startOfWeek.setDate(baseDate.getDate() - baseDate.getDay());
+    
+    return selectedDays.map(dayIndex => {
+      const date = new Date(startOfWeek);
+      date.setDate(startOfWeek.getDate() + dayIndex);
+      return date.toISOString().split('T')[0];
+    }).filter(date => date >= new Date().toISOString().split('T')[0]); // Filter out past dates
+  };
+
   // Create single schedule
   const handleCreateSchedule = async () => {
     if (!selectedClient || !selectedCaregiver) {
@@ -198,6 +229,70 @@ const SmartScheduling = ({ token }) => {
       setSelectedCaregiver(null);
       setNotes('');
       fetchSuggestions();
+    } catch (error) {
+      showMessage('Error: ' + error.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Create multi-day schedules (same week, multiple days)
+  const handleCreateMultiDay = async () => {
+    if (!selectedClient || !selectedCaregiver) {
+      showMessage('Please select client and caregiver', 'error');
+      return;
+    }
+
+    const dates = getMultiDayDates();
+    if (dates.length === 0) {
+      showMessage('Please select at least one future day', 'error');
+      return;
+    }
+
+    setSaving(true);
+    let created = 0;
+    let failed = 0;
+
+    try {
+      for (const date of dates) {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/schedules`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              caregiverId: selectedCaregiver.id,
+              clientId: selectedClient,
+              scheduleType: 'one-time',
+              date,
+              startTime,
+              endTime,
+              notes
+            })
+          });
+
+          if (res.ok) {
+            created++;
+          } else {
+            failed++;
+          }
+        } catch {
+          failed++;
+        }
+      }
+
+      if (created > 0) {
+        showMessage(`Created ${created} schedule${created > 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`);
+        setSelectedCaregiver(null);
+        setNotes('');
+        setSelectedDays([]);
+        setMultiDayMode(false);
+        fetchSuggestions();
+      } else {
+        showMessage('Failed to create schedules', 'error');
+      }
     } catch (error) {
       showMessage('Error: ' + error.message, 'error');
     } finally {
@@ -368,7 +463,7 @@ const SmartScheduling = ({ token }) => {
 
             {/* Date */}
             <div className="form-group">
-              <label>Date *</label>
+              <label>{multiDayMode ? 'Week Starting' : 'Date'} *</label>
               <input
                 type="date"
                 value={selectedDate}
@@ -421,13 +516,80 @@ const SmartScheduling = ({ token }) => {
               />
             </div>
 
+            {/* Multi-Day Toggle */}
+            <div className="form-group">
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={multiDayMode}
+                  onChange={(e) => {
+                    setMultiDayMode(e.target.checked);
+                    if (e.target.checked) {
+                      setShowRecurring(false);
+                      setSelectedDays([]);
+                    }
+                  }}
+                  style={{ width: 'auto' }}
+                />
+                Schedule multiple days (same week, same time)
+              </label>
+            </div>
+
+            {/* Multi-Day Options */}
+            {multiDayMode && (
+              <div style={{ background: '#EFF6FF', padding: '1rem', borderRadius: '8px', marginBottom: '1rem', border: '1px solid #BFDBFE' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <label style={{ fontWeight: '600', margin: 0 }}>
+                    Select days:
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={selectWeekdays}
+                    style={{ background: '#3B82F6', color: '#fff', fontSize: '0.75rem' }}
+                  >
+                    Mon-Fri
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                    <button
+                      key={day}
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => toggleDaySelection(idx)}
+                      style={{
+                        background: selectedDays.includes(idx) ? '#3B82F6' : '#E5E7EB',
+                        color: selectedDays.includes(idx) ? '#fff' : '#374151',
+                        minWidth: '45px'
+                      }}
+                    >
+                      {day}
+                    </button>
+                  ))}
+                </div>
+                {selectedDays.length > 0 && (
+                  <div style={{ fontSize: '0.85rem', color: '#1E40AF' }}>
+                    📅 Will create {getMultiDayDates().length} schedule{getMultiDayDates().length !== 1 ? 's' : ''}: {' '}
+                    {getMultiDayDates().map(d => new Date(d + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })).join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Recurring Toggle */}
             <div className="form-group">
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                 <input
                   type="checkbox"
                   checked={showRecurring}
-                  onChange={(e) => setShowRecurring(e.target.checked)}
+                  onChange={(e) => {
+                    setShowRecurring(e.target.checked);
+                    if (e.target.checked) {
+                      setMultiDayMode(false);
+                      setSelectedDays([]);
+                    }
+                  }}
                   style={{ width: 'auto' }}
                 />
                 Create recurring schedule (multiple weeks)
@@ -499,48 +661,60 @@ const SmartScheduling = ({ token }) => {
                       style={{
                         padding: '1rem',
                         borderRadius: '8px',
+                        cursor: 'pointer',
                         border: isSelected ? '2px solid #3B82F6' : '1px solid #E5E7EB',
                         background: isSelected ? '#EFF6FF' : hasIssue ? '#FEF2F2' : isTop ? '#F0FDF4' : '#fff',
-                        cursor: 'pointer',
-                        opacity: hasIssue ? 0.7 : 1
+                        transition: 'all 0.2s'
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div>
-                          <div style={{ fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            {cg.first_name} {cg.last_name}
-                            {isTop && !hasIssue && <span style={{ fontSize: '0.8rem' }}>⭐</span>}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <div style={{
+                            width: '40px', height: '40px', borderRadius: '50%',
+                            background: getCaregiverColor(cg.id),
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: '#fff', fontWeight: '600'
+                          }}>
+                            {cg.first_name?.[0]}{cg.last_name?.[0]}
                           </div>
-                          <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>
-                            {cg.weeklyHours}h this week • Max {cg.maxHours}h
+                          <div>
+                            <div style={{ fontWeight: '600' }}>
+                              {cg.first_name} {cg.last_name}
+                              {isTop && <span style={{ marginLeft: '0.5rem', color: '#10B981' }}>⭐ Top Match</span>}
+                            </div>
+                            <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>
+                              {cg.weeklyHours || 0}h this week
+                              {cg.clientHistory > 0 && ` • ${cg.clientHistory} prior visits`}
+                            </div>
                           </div>
                         </div>
                         <div style={{
-                          padding: '0.25rem 0.5rem',
-                          borderRadius: '12px',
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
+                          padding: '0.25rem 0.75rem', borderRadius: '999px',
                           background: cg.score > 80 ? '#D1FAE5' : cg.score > 50 ? '#FEF3C7' : '#FEE2E2',
-                          color: cg.score > 80 ? '#059669' : cg.score > 50 ? '#D97706' : '#DC2626'
+                          color: cg.score > 80 ? '#065F46' : cg.score > 50 ? '#92400E' : '#991B1B',
+                          fontWeight: '600', fontSize: '0.85rem'
                         }}>
                           {cg.score}%
                         </div>
                       </div>
 
+                      {/* Warnings */}
+                      {hasIssue && (
+                        <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                          {cg.hasConflict && <div style={{ color: '#DC2626' }}>⚠️ Has conflicting schedule</div>}
+                          {!cg.isAvailable && <div style={{ color: '#DC2626' }}>⚠️ Marked unavailable</div>}
+                          {cg.wouldExceedHours && <div style={{ color: '#F59E0B' }}>⚠️ Would exceed weekly hours</div>}
+                        </div>
+                      )}
+
                       {/* Reasons */}
                       {cg.reasons && cg.reasons.length > 0 && (
                         <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                          {cg.reasons.map((reason, i) => (
-                            <span
-                              key={i}
-                              style={{
-                                fontSize: '0.7rem',
-                                padding: '0.125rem 0.5rem',
-                                borderRadius: '10px',
-                                background: reason.includes('⚠️') ? '#FEE2E2' : '#E5E7EB',
-                                color: reason.includes('⚠️') ? '#DC2626' : '#374151'
-                              }}
-                            >
+                          {cg.reasons.slice(0, 3).map((reason, i) => (
+                            <span key={i} style={{
+                              fontSize: '0.7rem', padding: '0.15rem 0.5rem',
+                              background: '#F3F4F6', borderRadius: '4px', color: '#4B5563'
+                            }}>
                               {reason}
                             </span>
                           ))}
@@ -549,6 +723,12 @@ const SmartScheduling = ({ token }) => {
                     </div>
                   );
                 })}
+
+                {suggestions.length === 0 && (
+                  <p style={{ color: '#6B7280', textAlign: 'center', padding: '2rem' }}>
+                    No caregivers available for this time slot
+                  </p>
+                )}
               </div>
             )}
 
@@ -578,13 +758,15 @@ const SmartScheduling = ({ token }) => {
               <div style={{ marginTop: '1rem' }}>
                 <button
                   className="btn btn-primary"
-                  onClick={showRecurring ? handleCreateRecurring : handleCreateSchedule}
-                  disabled={saving}
+                  onClick={multiDayMode ? handleCreateMultiDay : (showRecurring ? handleCreateRecurring : handleCreateSchedule)}
+                  disabled={saving || (multiDayMode && selectedDays.length === 0)}
                   style={{ width: '100%' }}
                 >
-                  {saving ? 'Creating...' : showRecurring
-                    ? `Create ${recurringWeeks} weeks of schedules`
-                    : `Schedule ${selectedCaregiver.first_name} for ${formatTime(startTime)}-${formatTime(endTime)}`
+                  {saving ? 'Creating...' : multiDayMode
+                    ? `Create ${getMultiDayDates().length} schedule${getMultiDayDates().length !== 1 ? 's' : ''} for ${selectedCaregiver.first_name}`
+                    : showRecurring
+                      ? `Create ${recurringWeeks} weeks of schedules`
+                      : `Schedule ${selectedCaregiver.first_name} for ${formatTime(startTime)}-${formatTime(endTime)}`
                   }
                 </button>
               </div>
@@ -638,7 +820,7 @@ const SmartScheduling = ({ token }) => {
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                           <div style={{
-                            width: '10px', height: '10px', borderRadius: '50%',
+                            width: '8px', height: '8px', borderRadius: '50%',
                             background: getCaregiverColor(caregiver.id)
                           }} />
                           <strong>{caregiver.first_name} {caregiver.last_name?.[0]}.</strong>
