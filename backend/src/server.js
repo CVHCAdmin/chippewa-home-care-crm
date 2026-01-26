@@ -16,6 +16,7 @@ const billingRoutes = require('./routes/billingRoutes');
 const reports = require('./routes/reports');
 const stripeRoutes = require('./routes/stripeRoutes');
 const applicationsRoutes = require('./routes/applicationsRoutes');
+const schedulesRoutes = require('./routes/schedulesRoutes');
 
 // Load environment variables
 dotenv.config();
@@ -109,6 +110,7 @@ app.use('/api/reports', reports);
 app.use('/api/claims', claimsRoutes); 
 app.use('/api/stripe', stripeRoutes);
 app.use('/api/applications', applicationsRoutes);
+app.use('/api/schedules', schedulesRoutes);
 
 // ---- AUTHENTICATION ROUTES ----
 app.post('/api/auth/login', async (req, res) => {
@@ -3167,18 +3169,7 @@ app.put('/api/notifications/preferences', verifyToken, async (req, res) => {
 
 // ---- SCHEDULES ----
 
-// GET /api/schedules/:caregiverId - Get schedules for a specific caregiver
-app.get('/api/schedules/:caregiverId', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT * FROM schedules WHERE caregiver_id = $1 AND is_active = true ORDER BY day_of_week, date, start_time`,
-      [req.params.caregiverId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+
 
 // GET /api/schedules-all - Get all schedules for calendar view
 app.get('/api/schedules-all', verifyToken, async (req, res) => {
@@ -3198,44 +3189,6 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
   }
 });
 
-// POST /api/schedules - Create new schedule
-app.post('/api/schedules', verifyToken, async (req, res) => {
-  try {
-    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes } = req.body;
-    
-    const scheduleId = uuidv4();
-    const result = await db.query(
-      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [scheduleId, caregiverId, clientId, scheduleType, dayOfWeek || null, date || null, startTime, endTime, notes || null]
-    );
-
-    await auditLog(req.user.id, 'CREATE', 'schedules', scheduleId, null, result.rows[0]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// DELETE /api/schedules/:scheduleId - Delete a schedule
-app.delete('/api/schedules/:scheduleId', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(
-      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [req.params.scheduleId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Schedule not found' });
-    }
-
-    await auditLog(req.user.id, 'DELETE', 'schedules', req.params.scheduleId, null, result.rows[0]);
-    res.json({ message: 'Schedule deleted' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
 // ---- CAREGIVER PROFILES ----
 
