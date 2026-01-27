@@ -9,7 +9,7 @@ const SmartScheduling = ({ token }) => {
   const [caregivers, setCaregivers] = useState([]);
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('create'); // 'create', 'week', 'availability'
+  const [activeTab, setActiveTab] = useState('create'); // 'create', 'week', 'coverage', 'availability'
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   // Create schedule state
@@ -47,6 +47,10 @@ const SmartScheduling = ({ token }) => {
     notes: ''
   });
 
+  // Coverage overview state
+  const [coverageData, setCoverageData] = useState(null);
+  const [coverageLoading, setCoverageLoading] = useState(false);
+
   // Message state
   const [message, setMessage] = useState({ text: '', type: '' });
 
@@ -59,6 +63,7 @@ const SmartScheduling = ({ token }) => {
 
   useEffect(() => {
     if (activeTab === 'week') loadWeekView();
+    if (activeTab === 'coverage') loadCoverage();
   }, [activeTab, weekOf]);
 
   const loadData = async () => {
@@ -84,6 +89,20 @@ const SmartScheduling = ({ token }) => {
       if (res.ok) setWeekData(await res.json());
     } catch (error) {
       console.error('Failed to load week view:', error);
+    }
+  };
+
+  const loadCoverage = async () => {
+    setCoverageLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/scheduling/coverage-overview`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) setCoverageData(await res.json());
+    } catch (error) {
+      console.error('Failed to load coverage:', error);
+    } finally {
+      setCoverageLoading(false);
     }
   };
 
@@ -431,6 +450,7 @@ const SmartScheduling = ({ token }) => {
         {[
           { id: 'create', label: '➕ Create Schedule', icon: '📝' },
           { id: 'week', label: '📅 Week View', icon: '📊' },
+          { id: 'coverage', label: '📈 Coverage', icon: '📈' },
           { id: 'availability', label: '⏰ Availability', icon: '👤' }
         ].map(tab => (
           <button
@@ -922,6 +942,233 @@ const SmartScheduling = ({ token }) => {
               <button className="btn btn-secondary" onClick={() => setReassignModal(null)}>Cancel</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* COVERAGE TAB */}
+      {activeTab === 'coverage' && (
+        <div>
+          {coverageLoading ? (
+            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+              Loading coverage data...
+            </div>
+          ) : coverageData ? (
+            <>
+              {/* Summary Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2563EB' }}>
+                    {coverageData.summary.totalCaregivers}
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: '#666' }}>Active Caregivers</div>
+                </div>
+                <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#059669' }}>
+                    {coverageData.summary.totalScheduledHours}h
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: '#666' }}>Scheduled This Week</div>
+                </div>
+                <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: coverageData.summary.underScheduledClientCount > 0 ? '#DC2626' : '#059669' }}>
+                    {coverageData.summary.underScheduledClientCount}
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: '#666' }}>Under-Scheduled Clients</div>
+                </div>
+                <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: parseFloat(coverageData.summary.totalShortfallHours) > 0 ? '#DC2626' : '#059669' }}>
+                    {coverageData.summary.totalShortfallHours}h
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: '#666' }}>Hours Shortfall</div>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '1rem' }}>
+                {/* Caregiver Hours */}
+                <div className="card">
+                  <h3 style={{ margin: '0 0 1rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    👥 Caregiver Weekly Hours
+                  </h3>
+                  <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                    {coverageData.caregivers.map(cg => (
+                      <div key={cg.id} style={{ 
+                        padding: '0.75rem', 
+                        borderBottom: '1px solid #eee',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '1rem'
+                      }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: '600' }}>{cg.name}</div>
+                          <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                            {cg.scheduledHours.toFixed(1)}h / {cg.maxHours}h
+                          </div>
+                        </div>
+                        <div style={{ width: '100px' }}>
+                          <div style={{ 
+                            height: '8px', 
+                            background: '#E5E7EB', 
+                            borderRadius: '4px',
+                            overflow: 'hidden'
+                          }}>
+                            <div style={{ 
+                              width: `${Math.min(cg.utilizationPercent, 100)}%`, 
+                              height: '100%',
+                              background: cg.utilizationPercent > 100 ? '#DC2626' : 
+                                         cg.utilizationPercent > 80 ? '#F59E0B' : '#10B981',
+                              transition: 'width 0.3s'
+                            }} />
+                          </div>
+                        </div>
+                        <div style={{ 
+                          minWidth: '45px', 
+                          textAlign: 'right',
+                          fontWeight: '600',
+                          color: cg.utilizationPercent > 100 ? '#DC2626' : 
+                                 cg.utilizationPercent > 80 ? '#F59E0B' : '#10B981'
+                        }}>
+                          {cg.utilizationPercent}%
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Under-Scheduled Clients */}
+                <div className="card">
+                  <h3 style={{ margin: '0 0 1rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    ⚠️ Under-Scheduled Clients
+                    {coverageData.underScheduledClients.length > 0 && (
+                      <span style={{ 
+                        background: '#FEE2E2', 
+                        color: '#DC2626', 
+                        padding: '0.25rem 0.5rem', 
+                        borderRadius: '12px',
+                        fontSize: '0.75rem',
+                        fontWeight: '600'
+                      }}>
+                        {coverageData.underScheduledClients.length} need attention
+                      </span>
+                    )}
+                  </h3>
+                  {coverageData.underScheduledClients.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: '#059669' }}>
+                      <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✅</div>
+                      All clients with billing hours are fully scheduled!
+                    </div>
+                  ) : (
+                    <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                      {coverageData.underScheduledClients.map(cl => (
+                        <div key={cl.id} style={{ 
+                          padding: '0.75rem', 
+                          borderBottom: '1px solid #eee',
+                          background: '#FEF2F2'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <div style={{ fontWeight: '600' }}>{cl.name}</div>
+                              <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                                Scheduled: {cl.scheduledHours.toFixed(1)}h / {cl.billingHours}h approved
+                              </div>
+                            </div>
+                            <div style={{ 
+                              background: '#DC2626',
+                              color: '#fff',
+                              padding: '0.25rem 0.75rem',
+                              borderRadius: '12px',
+                              fontSize: '0.85rem',
+                              fontWeight: '600'
+                            }}>
+                              -{cl.shortfall.toFixed(1)}h
+                            </div>
+                          </div>
+                          <div style={{ marginTop: '0.5rem' }}>
+                            <div style={{ 
+                              height: '6px', 
+                              background: '#FECACA', 
+                              borderRadius: '3px',
+                              overflow: 'hidden'
+                            }}>
+                              <div style={{ 
+                                width: `${cl.coveragePercent}%`, 
+                                height: '100%',
+                                background: '#DC2626'
+                              }} />
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '0.25rem' }}>
+                              {cl.coveragePercent}% coverage
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* All Clients with Billing Hours */}
+              <div className="card" style={{ marginTop: '1rem' }}>
+                <h3 style={{ margin: '0 0 1rem 0' }}>📋 All Clients with Billing Hours</h3>
+                {coverageData.clientsWithBillingHours.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '1rem', color: '#666' }}>
+                    No clients have weekly billing hours set. Add billing hours to clients to track coverage.
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="table" style={{ fontSize: '0.9rem' }}>
+                      <thead>
+                        <tr>
+                          <th>Client</th>
+                          <th style={{ textAlign: 'right' }}>Billing Hours</th>
+                          <th style={{ textAlign: 'right' }}>Scheduled</th>
+                          <th style={{ textAlign: 'right' }}>Shortfall</th>
+                          <th style={{ textAlign: 'center' }}>Coverage</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {coverageData.clientsWithBillingHours.map(cl => (
+                          <tr key={cl.id} style={{ background: cl.isUnderScheduled ? '#FEF2F2' : undefined }}>
+                            <td style={{ fontWeight: '500' }}>{cl.name}</td>
+                            <td style={{ textAlign: 'right' }}>{cl.billingHours}h</td>
+                            <td style={{ textAlign: 'right' }}>{cl.scheduledHours.toFixed(1)}h</td>
+                            <td style={{ textAlign: 'right', color: cl.shortfall > 0 ? '#DC2626' : '#059669', fontWeight: '600' }}>
+                              {cl.shortfall > 0 ? `-${cl.shortfall.toFixed(1)}h` : '✓'}
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span style={{ 
+                                padding: '0.25rem 0.5rem',
+                                borderRadius: '12px',
+                                fontSize: '0.75rem',
+                                fontWeight: '600',
+                                background: cl.coveragePercent >= 100 ? '#D1FAE5' : cl.coveragePercent >= 75 ? '#FEF3C7' : '#FEE2E2',
+                                color: cl.coveragePercent >= 100 ? '#059669' : cl.coveragePercent >= 75 ? '#D97706' : '#DC2626'
+                              }}>
+                                {cl.coveragePercent}%
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginTop: '1rem', fontSize: '0.85rem', color: '#666' }}>
+                Week of {coverageData.weekStart} to {coverageData.weekEnd}
+                <button 
+                  className="btn btn-sm btn-secondary" 
+                  onClick={loadCoverage}
+                  style={{ marginLeft: '1rem' }}
+                >
+                  🔄 Refresh
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+              Failed to load coverage data. <button className="btn btn-sm btn-primary" onClick={loadCoverage}>Retry</button>
+            </div>
+          )}
         </div>
       )}
 

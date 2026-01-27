@@ -319,7 +319,7 @@ app.post('/api/clients', verifyToken, async (req, res) => {
     const { 
       firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
       referredBy, serviceType, referralSourceId, careTypeId, 
-      isPrivatePay, privatePayRate, privatePayRateType 
+      isPrivatePay, privatePayRate, privatePayRateType, weeklyBillingHours 
     } = req.body;
     const clientId = uuidv4();
 
@@ -327,13 +327,13 @@ app.post('/api/clients', verifyToken, async (req, res) => {
       `INSERT INTO clients (
         id, first_name, last_name, date_of_birth, phone, email, address, city, state, zip, 
         referred_by, service_type, start_date, referral_source_id, care_type_id,
-        is_private_pay, private_pay_rate, private_pay_rate_type
+        is_private_pay, private_pay_rate, private_pay_rate_type, weekly_billing_hours
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16, $17)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [clientId, firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
        referredBy || referralSourceId, serviceType, referralSourceId, careTypeId,
-       isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly']
+       isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly', weeklyBillingHours || null]
     );
 
     // Create onboarding checklist
@@ -389,7 +389,8 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
       emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
       medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
       // Billing fields
-      referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes
+      referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
+      weeklyBillingHours
     } = req.body;
     
     const result = await db.query(
@@ -426,14 +427,16 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
         private_pay_rate = $30,
         private_pay_rate_type = COALESCE($31, private_pay_rate_type),
         billing_notes = $32,
+        weekly_billing_hours = $33,
         updated_at = NOW()
-       WHERE id = $33 RETURNING *`,
+       WHERE id = $34 RETURNING *`,
       [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
        serviceType, medicalConditions, allergies, medications, notes,
        insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
        emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
        medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
        referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
+       weeklyBillingHours,
        req.params.id]
     );
 
@@ -4301,6 +4304,117 @@ app.get('/api/scheduling/caregiver-hours/:caregiverId', verifyToken, async (req,
     });
   } catch (error) {
     console.error('Get caregiver hours error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/scheduling/coverage-overview - Get caregiver hours and under-scheduled clients
+app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    // Get current week boundaries
+    const now = new Date();
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+    
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    // Get all active caregivers with their scheduled hours
+    const caregiversResult = await db.query(`
+      SELECT 
+        u.id,
+        u.first_name,
+        u.last_name,
+        COALESCE(ca.max_hours_per_week, 40) as max_hours,
+        COALESCE(ca.status, 'available') as availability_status,
+        (
+          SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600), 0)
+          FROM schedules s
+          WHERE s.caregiver_id = u.id 
+            AND s.is_active = true
+            AND (
+              (s.date >= $1 AND s.date <= $2)
+              OR s.day_of_week IS NOT NULL
+            )
+        ) as scheduled_hours
+      FROM users u
+      LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      ORDER BY u.first_name, u.last_name
+    `, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
+
+    // Get all active clients with billing hours and their scheduled hours
+    const clientsResult = await db.query(`
+      SELECT 
+        c.id,
+        c.first_name,
+        c.last_name,
+        c.weekly_billing_hours,
+        (
+          SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600), 0)
+          FROM schedules s
+          WHERE s.client_id = c.id 
+            AND s.is_active = true
+            AND (
+              (s.date >= $1 AND s.date <= $2)
+              OR s.day_of_week IS NOT NULL
+            )
+        ) as scheduled_hours
+      FROM clients c
+      WHERE c.is_active = true
+      ORDER BY c.first_name, c.last_name
+    `, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
+
+    // Process caregivers
+    const caregivers = caregiversResult.rows.map(cg => ({
+      id: cg.id,
+      name: `${cg.first_name} ${cg.last_name}`,
+      maxHours: parseFloat(cg.max_hours) || 40,
+      scheduledHours: parseFloat(cg.scheduled_hours) || 0,
+      remainingHours: Math.max(0, (parseFloat(cg.max_hours) || 40) - (parseFloat(cg.scheduled_hours) || 0)),
+      utilizationPercent: Math.round(((parseFloat(cg.scheduled_hours) || 0) / (parseFloat(cg.max_hours) || 40)) * 100),
+      status: cg.availability_status
+    }));
+
+    // Process clients - only those with billing hours set
+    const clientsWithBillingHours = clientsResult.rows
+      .filter(cl => cl.weekly_billing_hours && parseFloat(cl.weekly_billing_hours) > 0)
+      .map(cl => {
+        const billingHours = parseFloat(cl.weekly_billing_hours) || 0;
+        const scheduledHours = parseFloat(cl.scheduled_hours) || 0;
+        const shortfall = Math.max(0, billingHours - scheduledHours);
+        return {
+          id: cl.id,
+          name: `${cl.first_name} ${cl.last_name}`,
+          billingHours,
+          scheduledHours,
+          shortfall,
+          coveragePercent: Math.round((scheduledHours / billingHours) * 100),
+          isUnderScheduled: shortfall > 0
+        };
+      });
+
+    // Separate under-scheduled clients
+    const underScheduledClients = clientsWithBillingHours.filter(cl => cl.isUnderScheduled);
+
+    res.json({
+      weekStart: weekStart.toISOString().split('T')[0],
+      weekEnd: weekEnd.toISOString().split('T')[0],
+      caregivers,
+      clientsWithBillingHours,
+      underScheduledClients,
+      summary: {
+        totalCaregivers: caregivers.length,
+        totalScheduledHours: caregivers.reduce((sum, cg) => sum + cg.scheduledHours, 0).toFixed(1),
+        totalAvailableHours: caregivers.reduce((sum, cg) => sum + cg.maxHours, 0).toFixed(1),
+        underScheduledClientCount: underScheduledClients.length,
+        totalShortfallHours: underScheduledClients.reduce((sum, cl) => sum + cl.shortfall, 0).toFixed(1)
+      }
+    });
+  } catch (error) {
+    console.error('Coverage overview error:', error);
     res.status(500).json({ error: error.message });
   }
 });

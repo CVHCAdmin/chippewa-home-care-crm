@@ -119,6 +119,7 @@ const ClientsManagement = ({ token }) => {
     isPrivatePay: false,
     privatePayRate: '',
     privatePayRateType: 'hourly',
+    weeklyBillingHours: '',
     emergencyContactName: '',
     emergencyContactPhone: '',
     emergencyContactRelationship: '',
@@ -168,6 +169,7 @@ const ClientsManagement = ({ token }) => {
         isPrivatePay: formData.isPrivatePay,
         privatePayRate: formData.isPrivatePay ? parseFloat(formData.privatePayRate) : null,
         privatePayRateType: formData.privatePayRateType,
+        weeklyBillingHours: formData.weeklyBillingHours ? parseFloat(formData.weeklyBillingHours) : null,
         emergencyContactName: formData.emergencyContactName || null,
         emergencyContactPhone: formData.emergencyContactPhone || null,
         emergencyContactRelationship: formData.emergencyContactRelationship || null,
@@ -338,6 +340,22 @@ const ClientsManagement = ({ token }) => {
                   </div>
                 </>
               )}
+            </div>
+
+            <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Weekly Billing Hours</label>
+              <input 
+                type="number" 
+                step="0.5" 
+                min="0" 
+                max="168"
+                value={formData.weeklyBillingHours} 
+                onChange={(e) => setFormData({ ...formData, weeklyBillingHours: e.target.value })} 
+                placeholder="e.g., 20 (hours approved per week)"
+              />
+              <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>
+                Hours approved for billing each week. Used to track scheduling coverage.
+              </small>
             </div>
 
             <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>🚨 Emergency Contact</h4>

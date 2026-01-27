@@ -37,6 +37,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
         privatePayRate: client.private_pay_rate || '',
         privatePayRateType: client.private_pay_rate_type || 'hourly',
         billingNotes: client.billing_notes || '',
+        weeklyBillingHours: client.weekly_billing_hours || '',
         // Emergency Contact
         emergencyContactName: client.emergency_contact_name || '',
         emergencyContactPhone: client.emergency_contact_phone || '',
@@ -93,6 +94,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
           privatePayRate: formData.isPrivatePay ? parseFloat(formData.privatePayRate) : null,
           privatePayRateType: formData.privatePayRateType,
           billingNotes: formData.billingNotes || null,
+          weeklyBillingHours: formData.weeklyBillingHours ? parseFloat(formData.weeklyBillingHours) : null,
           emergencyContactName: formData.emergencyContactName || null,
           emergencyContactPhone: formData.emergencyContactPhone || null,
           emergencyContactRelationship: formData.emergencyContactRelationship || null,
@@ -451,6 +453,23 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                     onChange={(e) => setFormData({ ...formData, insuranceGroup: e.target.value })}
                   />
                 </div>
+              </div>
+
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Weekly Billing Hours</h4>
+              <div className="form-group">
+                <label>Approved Hours Per Week</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  max="168"
+                  value={formData.weeklyBillingHours}
+                  onChange={(e) => setFormData({ ...formData, weeklyBillingHours: e.target.value })}
+                  placeholder="e.g., 20"
+                />
+                <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>
+                  Hours approved for billing each week. Used to track if client is fully scheduled.
+                </small>
               </div>
 
               <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Billing Notes</h4>
