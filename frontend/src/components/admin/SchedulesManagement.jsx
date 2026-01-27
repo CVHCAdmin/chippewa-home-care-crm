@@ -18,13 +18,16 @@ const SchedulesManagement = ({ token }) => {
   const [formData, setFormData] = useState({
     caregiverId: '',
     clientId: '',
-    scheduleType: 'one-time',
+    scheduleType: 'one-time', // 'one-time', 'multi-day', 'recurring'
     dayOfWeek: '',
     date: new Date().toISOString().split('T')[0], // Default to today
     startTime: '09:00',
     endTime: '13:00',
     notes: ''
   });
+
+  // Multi-day selection state
+  const [selectedDays, setSelectedDays] = useState([]); // [0-6] for Sun-Sat
 
   // Common shift presets
   const shiftPresets = [
@@ -83,6 +86,40 @@ const SchedulesManagement = ({ token }) => {
     setTimeout(() => setMessage({ text: '', type: '' }), 3000);
   };
 
+  // Toggle day selection for multi-day mode
+  const toggleDaySelection = (dayIndex) => {
+    setSelectedDays(prev => 
+      prev.includes(dayIndex) 
+        ? prev.filter(d => d !== dayIndex)
+        : [...prev, dayIndex].sort((a, b) => a - b)
+    );
+  };
+
+  // Quick select weekdays (Mon-Fri)
+  const selectWeekdays = () => {
+    setSelectedDays([1, 2, 3, 4, 5]);
+  };
+
+  // Clear all selected days
+  const clearDays = () => {
+    setSelectedDays([]);
+  };
+
+  // Get dates for selected days based on the selected start date's week
+  const getMultiDayDates = () => {
+    const baseDate = new Date(formData.date);
+    const startOfWeek = new Date(baseDate);
+    startOfWeek.setDate(baseDate.getDate() - baseDate.getDay());
+    
+    const today = new Date().toISOString().split('T')[0];
+    
+    return selectedDays.map(dayIndex => {
+      const date = new Date(startOfWeek);
+      date.setDate(startOfWeek.getDate() + dayIndex);
+      return date.toISOString().split('T')[0];
+    }).filter(date => date >= today); // Filter out past dates
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -102,6 +139,11 @@ const SchedulesManagement = ({ token }) => {
       return;
     }
 
+    if (formData.scheduleType === 'multi-day' && selectedDays.length === 0) {
+      showMessage('Please select at least one day', 'error');
+      return;
+    }
+
     // Time validation
     if (formData.startTime >= formData.endTime) {
       showMessage('End time must be after start time', 'error');
@@ -111,45 +153,111 @@ const SchedulesManagement = ({ token }) => {
     setSaving(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/schedules`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          caregiverId: formData.caregiverId,
-          clientId: formData.clientId,
-          scheduleType: formData.scheduleType,
-          dayOfWeek: formData.scheduleType === 'recurring' ? parseInt(formData.dayOfWeek) : null,
-          date: formData.scheduleType === 'one-time' ? formData.date : null,
-          startTime: formData.startTime,
-          endTime: formData.endTime,
-          notes: formData.notes
-        })
-      });
+      // Handle multi-day scheduling
+      if (formData.scheduleType === 'multi-day') {
+        const dates = getMultiDayDates();
+        
+        if (dates.length === 0) {
+          showMessage('All selected days are in the past. Please select a future week.', 'error');
+          setSaving(false);
+          return;
+        }
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create schedule');
+        let created = 0;
+        let failed = 0;
+
+        for (const date of dates) {
+          try {
+            const response = await fetch(`${API_BASE_URL}/api/schedules`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                caregiverId: formData.caregiverId,
+                clientId: formData.clientId,
+                scheduleType: 'one-time',
+                dayOfWeek: null,
+                date: date,
+                startTime: formData.startTime,
+                endTime: formData.endTime,
+                notes: formData.notes
+              })
+            });
+
+            if (response.ok) {
+              created++;
+            } else {
+              failed++;
+            }
+          } catch {
+            failed++;
+          }
+        }
+
+        if (created > 0) {
+          showMessage(`Created ${created} schedule${created > 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`, 'success');
+          
+          // Reset form
+          setFormData(prev => ({
+            ...prev,
+            clientId: '',
+            scheduleType: 'one-time',
+            dayOfWeek: '',
+            date: new Date().toISOString().split('T')[0],
+            startTime: '09:00',
+            endTime: '13:00',
+            notes: ''
+          }));
+          setSelectedDays([]);
+          setShowForm(false);
+          loadSchedules(selectedCaregiverId);
+        } else {
+          showMessage('Failed to create schedules', 'error');
+        }
+      } else {
+        // Handle single one-time or recurring schedule
+        const response = await fetch(`${API_BASE_URL}/api/schedules`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            caregiverId: formData.caregiverId,
+            clientId: formData.clientId,
+            scheduleType: formData.scheduleType,
+            dayOfWeek: formData.scheduleType === 'recurring' ? parseInt(formData.dayOfWeek) : null,
+            date: formData.scheduleType === 'one-time' ? formData.date : null,
+            startTime: formData.startTime,
+            endTime: formData.endTime,
+            notes: formData.notes
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to create schedule');
+        }
+
+        showMessage('Schedule created successfully!', 'success');
+        
+        // Reset form but keep caregiver selected
+        setFormData(prev => ({
+          ...prev,
+          clientId: '',
+          scheduleType: 'one-time',
+          dayOfWeek: '',
+          date: new Date().toISOString().split('T')[0],
+          startTime: '09:00',
+          endTime: '13:00',
+          notes: ''
+        }));
+        
+        setShowForm(false);
+        loadSchedules(selectedCaregiverId);
       }
-
-      showMessage('Schedule created successfully!', 'success');
-      
-      // Reset form but keep caregiver selected
-      setFormData(prev => ({
-        ...prev,
-        clientId: '',
-        scheduleType: 'one-time',
-        dayOfWeek: '',
-        date: new Date().toISOString().split('T')[0],
-        startTime: '09:00',
-        endTime: '13:00',
-        notes: ''
-      }));
-      
-      setShowForm(false);
-      loadSchedules(selectedCaregiverId);
     } catch (error) {
       showMessage('Error: ' + error.message, 'error');
     } finally {
@@ -368,7 +476,7 @@ const SchedulesManagement = ({ token }) => {
           </h3>
           
           <form onSubmit={handleSubmit}>
-            {/* Schedule Type Toggle */}
+            {/* Schedule Type Toggle - Now with 3 options */}
             <div style={{ marginBottom: '1.25rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
                 Schedule Type
@@ -381,42 +489,67 @@ const SchedulesManagement = ({ token }) => {
               }}>
                 <button
                   type="button"
-                  onClick={() => setFormData(prev => ({ ...prev, scheduleType: 'one-time', dayOfWeek: '' }))}
+                  onClick={() => {
+                    setFormData(prev => ({ ...prev, scheduleType: 'one-time', dayOfWeek: '' }));
+                    setSelectedDays([]);
+                  }}
                   style={{
                     flex: 1,
-                    padding: '0.75rem',
+                    padding: '0.75rem 0.5rem',
                     border: 'none',
                     background: formData.scheduleType === 'one-time' ? '#3B82F6' : '#fff',
                     color: formData.scheduleType === 'one-time' ? '#fff' : '#374151',
                     cursor: 'pointer',
                     fontWeight: '500',
-                    fontSize: '0.95rem'
+                    fontSize: '0.9rem'
                   }}
                 >
                   📅 One-Time
                 </button>
                 <button
                   type="button"
-                  onClick={() => setFormData(prev => ({ ...prev, scheduleType: 'recurring', date: '' }))}
+                  onClick={() => {
+                    setFormData(prev => ({ ...prev, scheduleType: 'multi-day', dayOfWeek: '' }));
+                  }}
                   style={{
                     flex: 1,
-                    padding: '0.75rem',
+                    padding: '0.75rem 0.5rem',
+                    border: 'none',
+                    borderLeft: '2px solid #e5e7eb',
+                    background: formData.scheduleType === 'multi-day' ? '#3B82F6' : '#fff',
+                    color: formData.scheduleType === 'multi-day' ? '#fff' : '#374151',
+                    cursor: 'pointer',
+                    fontWeight: '500',
+                    fontSize: '0.9rem'
+                  }}
+                >
+                  📆 Multi-Day
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormData(prev => ({ ...prev, scheduleType: 'recurring', date: '' }));
+                    setSelectedDays([]);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '0.75rem 0.5rem',
                     border: 'none',
                     borderLeft: '2px solid #e5e7eb',
                     background: formData.scheduleType === 'recurring' ? '#3B82F6' : '#fff',
                     color: formData.scheduleType === 'recurring' ? '#fff' : '#374151',
                     cursor: 'pointer',
                     fontWeight: '500',
-                    fontSize: '0.95rem'
+                    fontSize: '0.9rem'
                   }}
                 >
-                  🔄 Recurring Weekly
+                  🔄 Recurring
                 </button>
               </div>
             </div>
 
-            {/* Date or Day Selection */}
-            {formData.scheduleType === 'one-time' ? (
+            {/* Date or Day Selection based on type */}
+            {formData.scheduleType === 'one-time' && (
               <div style={{ marginBottom: '1.25rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
                   Date *
@@ -436,7 +569,131 @@ const SchedulesManagement = ({ token }) => {
                   }}
                 />
               </div>
-            ) : (
+            )}
+
+            {formData.scheduleType === 'multi-day' && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                  Week Starting *
+                </label>
+                <input
+                  type="date"
+                  value={formData.date}
+                  onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
+                  min={new Date().toISOString().split('T')[0]}
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '8px',
+                    border: '2px solid #e5e7eb',
+                    fontSize: '1rem',
+                    marginBottom: '1rem'
+                  }}
+                />
+                
+                {/* Multi-Day Selection */}
+                <div style={{ 
+                  background: '#EFF6FF', 
+                  padding: '1rem', 
+                  borderRadius: '8px',
+                  border: '1px solid #BFDBFE'
+                }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center', 
+                    marginBottom: '0.75rem' 
+                  }}>
+                    <label style={{ fontWeight: '600', margin: 0 }}>
+                      Select Days *
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        type="button"
+                        onClick={selectWeekdays}
+                        style={{
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: '4px',
+                          border: 'none',
+                          background: '#3B82F6',
+                          color: '#fff',
+                          cursor: 'pointer',
+                          fontSize: '0.75rem',
+                          fontWeight: '500'
+                        }}
+                      >
+                        Mon-Fri
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearDays}
+                        style={{
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: '4px',
+                          border: '1px solid #D1D5DB',
+                          background: '#fff',
+                          color: '#6B7280',
+                          cursor: 'pointer',
+                          fontSize: '0.75rem',
+                          fontWeight: '500'
+                        }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: 'repeat(7, 1fr)',
+                    gap: '0.5rem',
+                    marginBottom: '0.75rem'
+                  }}>
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => toggleDaySelection(idx)}
+                        style={{
+                          padding: '0.6rem 0.25rem',
+                          borderRadius: '8px',
+                          border: selectedDays.includes(idx) ? '2px solid #3B82F6' : '2px solid #E5E7EB',
+                          background: selectedDays.includes(idx) ? '#3B82F6' : '#fff',
+                          color: selectedDays.includes(idx) ? '#fff' : '#374151',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          fontSize: '0.85rem'
+                        }}
+                      >
+                        {day}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  {selectedDays.length > 0 && (
+                    <div style={{ 
+                      fontSize: '0.85rem', 
+                      color: '#1E40AF',
+                      padding: '0.5rem',
+                      background: '#DBEAFE',
+                      borderRadius: '4px'
+                    }}>
+                      📅 Will create <strong>{getMultiDayDates().length}</strong> schedule{getMultiDayDates().length !== 1 ? 's' : ''}: {' '}
+                      {getMultiDayDates().map(d => 
+                        new Date(d + 'T12:00').toLocaleDateString('en-US', { 
+                          weekday: 'short', 
+                          month: 'short', 
+                          day: 'numeric' 
+                        })
+                      ).join(', ')}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {formData.scheduleType === 'recurring' && (
               <div style={{ marginBottom: '1.25rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
                   Day of Week *
@@ -587,7 +844,7 @@ const SchedulesManagement = ({ token }) => {
                 {formatTime(formData.startTime)} - {formatTime(formData.endTime)}
               </span>
               <span style={{ color: '#6B7280', marginLeft: '1rem' }}>
-                ({calculateHours(formData.startTime, formData.endTime)} hours)
+                ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${getMultiDayDates().length} days = ${(calculateHours(formData.startTime, formData.endTime) * getMultiDayDates().length).toFixed(1)} total hours` : ''})
               </span>
             </div>
 
@@ -617,15 +874,21 @@ const SchedulesManagement = ({ token }) => {
               <button 
                 type="submit" 
                 className="btn btn-primary"
-                disabled={saving}
+                disabled={saving || (formData.scheduleType === 'multi-day' && selectedDays.length === 0)}
                 style={{ flex: 1 }}
               >
-                {saving ? 'Saving...' : '✓ Create Schedule'}
+                {saving ? 'Saving...' : formData.scheduleType === 'multi-day' 
+                  ? `✓ Create ${getMultiDayDates().length} Schedule${getMultiDayDates().length !== 1 ? 's' : ''}`
+                  : '✓ Create Schedule'
+                }
               </button>
               <button 
                 type="button" 
                 className="btn btn-secondary"
-                onClick={() => setShowForm(false)}
+                onClick={() => {
+                  setShowForm(false);
+                  setSelectedDays([]);
+                }}
               >
                 Cancel
               </button>
