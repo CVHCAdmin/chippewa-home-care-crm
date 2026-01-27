@@ -194,17 +194,23 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   };
 
   const handleClockIn = async () => {
-    if (!location) return alert('GPS not available. Enable location services.');
     if (!selectedClient) return alert('Please select a client.');
 
     try {
       const res = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ clientId: selectedClient, latitude: location.lat, longitude: location.lng })
+        body: JSON.stringify({ 
+          clientId: selectedClient, 
+          latitude: location?.lat || null, 
+          longitude: location?.lng || null 
+        })
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
       setActiveSession(await res.json());
+      if (!location) {
+        showMsg('Clocked in (location unavailable)', 'warning');
+      }
     } catch (error) {
       alert('Failed to clock in: ' + error.message);
     }
@@ -445,10 +451,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
               </select>
             </div>
-            <div className={`alert ${location ? 'alert-success' : 'alert-warning'}`} style={{ marginBottom: '1rem' }}>
-              {location ? `📍 GPS Active (±${location.accuracy?.toFixed(0)}m)` : '⚠️ ' + (locationError || 'Getting location...')}
+            <div className={`alert ${location ? 'alert-success' : 'alert-info'}`} style={{ marginBottom: '1rem' }}>
+              {location ? `📍 GPS Active (±${location.accuracy?.toFixed(0)}m)` : '📍 ' + (locationError ? 'Location unavailable - you can still clock in' : 'Getting location...')}
             </div>
-            <button className="btn btn-primary btn-block" onClick={handleClockIn} disabled={!location || !selectedClient}>▶️ Clock In</button>
+            <button className="btn btn-primary btn-block" onClick={handleClockIn} disabled={!selectedClient}>▶️ Clock In</button>
           </>
         )}
       </div>
@@ -686,8 +692,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       </div>
       <div className="card">
         <div className="card-title">GPS Status</div>
-        <div className={`alert ${location ? 'alert-success' : 'alert-error'}`}>
-          {location ? <>GPS Active (±{location.accuracy?.toFixed(0)}m)</> : <>{locationError || 'Enable location'}</>}
+        <div className={`alert ${location ? 'alert-success' : 'alert-info'}`}>
+          {location ? <>GPS Active (±{location.accuracy?.toFixed(0)}m)</> : <>{locationError || 'Location unavailable'} - Clock in still works</>}
         </div>
       </div>
       <button className="btn btn-danger btn-block" onClick={onLogout}>Log Out</button>
