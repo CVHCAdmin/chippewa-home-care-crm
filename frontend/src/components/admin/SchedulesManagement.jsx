@@ -105,21 +105,6 @@ const SchedulesManagement = ({ token }) => {
     setSelectedDays([]);
   };
 
-  // Get dates for selected days based on the selected start date's week
-  const getMultiDayDates = () => {
-    const baseDate = new Date(formData.date);
-    const startOfWeek = new Date(baseDate);
-    startOfWeek.setDate(baseDate.getDate() - baseDate.getDay());
-    
-    const today = new Date().toISOString().split('T')[0];
-    
-    return selectedDays.map(dayIndex => {
-      const date = new Date(startOfWeek);
-      date.setDate(startOfWeek.getDate() + dayIndex);
-      return date.toISOString().split('T')[0];
-    }).filter(date => date >= today); // Filter out past dates
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -153,12 +138,10 @@ const SchedulesManagement = ({ token }) => {
     setSaving(true);
 
     try {
-      // Handle multi-day scheduling
+      // Handle multi-day scheduling (creates recurring schedules for each selected day)
       if (formData.scheduleType === 'multi-day') {
-        const dates = getMultiDayDates();
-        
-        if (dates.length === 0) {
-          showMessage('All selected days are in the past. Please select a future week.', 'error');
+        if (selectedDays.length === 0) {
+          showMessage('Please select at least one day', 'error');
           setSaving(false);
           return;
         }
@@ -166,7 +149,7 @@ const SchedulesManagement = ({ token }) => {
         let created = 0;
         let failed = 0;
 
-        for (const date of dates) {
+        for (const dayOfWeek of selectedDays) {
           try {
             const response = await fetch(`${API_BASE_URL}/api/schedules`, {
               method: 'POST',
@@ -177,9 +160,9 @@ const SchedulesManagement = ({ token }) => {
               body: JSON.stringify({
                 caregiverId: formData.caregiverId,
                 clientId: formData.clientId,
-                scheduleType: 'one-time',
-                dayOfWeek: null,
-                date: date,
+                scheduleType: 'recurring',
+                dayOfWeek: dayOfWeek,
+                date: null,
                 startTime: formData.startTime,
                 endTime: formData.endTime,
                 notes: formData.notes
@@ -197,7 +180,7 @@ const SchedulesManagement = ({ token }) => {
         }
 
         if (created > 0) {
-          showMessage(`Created ${created} schedule${created > 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`, 'success');
+          showMessage(`Created ${created} recurring schedule${created > 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`, 'success');
           
           // Reset form
           setFormData(prev => ({
@@ -573,26 +556,7 @@ const SchedulesManagement = ({ token }) => {
 
             {formData.scheduleType === 'multi-day' && (
               <div style={{ marginBottom: '1.25rem' }}>
-                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
-                  Week Starting *
-                </label>
-                <input
-                  type="date"
-                  value={formData.date}
-                  onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
-                  min={new Date().toISOString().split('T')[0]}
-                  required
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem',
-                    borderRadius: '8px',
-                    border: '2px solid #e5e7eb',
-                    fontSize: '1rem',
-                    marginBottom: '1rem'
-                  }}
-                />
-                
-                {/* Multi-Day Selection */}
+                {/* Multi-Day Selection for Recurring */}
                 <div style={{ 
                   background: '#EFF6FF', 
                   padding: '1rem', 
@@ -606,7 +570,7 @@ const SchedulesManagement = ({ token }) => {
                     marginBottom: '0.75rem' 
                   }}>
                     <label style={{ fontWeight: '600', margin: 0 }}>
-                      Select Days *
+                      Select Days (Recurring Weekly) *
                     </label>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button
@@ -679,14 +643,8 @@ const SchedulesManagement = ({ token }) => {
                       background: '#DBEAFE',
                       borderRadius: '4px'
                     }}>
-                      📅 Will create <strong>{getMultiDayDates().length}</strong> schedule{getMultiDayDates().length !== 1 ? 's' : ''}: {' '}
-                      {getMultiDayDates().map(d => 
-                        new Date(d + 'T12:00').toLocaleDateString('en-US', { 
-                          weekday: 'short', 
-                          month: 'short', 
-                          day: 'numeric' 
-                        })
-                      ).join(', ')}
+                      🔄 Will create <strong>{selectedDays.length}</strong> recurring weekly schedule{selectedDays.length !== 1 ? 's' : ''}: {' '}
+                      {selectedDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}
                     </div>
                   )}
                 </div>
@@ -844,7 +802,7 @@ const SchedulesManagement = ({ token }) => {
                 {formatTime(formData.startTime)} - {formatTime(formData.endTime)}
               </span>
               <span style={{ color: '#6B7280', marginLeft: '1rem' }}>
-                ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${getMultiDayDates().length} days = ${(calculateHours(formData.startTime, formData.endTime) * getMultiDayDates().length).toFixed(1)} total hours` : ''})
+                ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${selectedDays.length} days/week = ${(calculateHours(formData.startTime, formData.endTime) * selectedDays.length).toFixed(1)} hours/week` : ''})
               </span>
             </div>
 
@@ -878,7 +836,7 @@ const SchedulesManagement = ({ token }) => {
                 style={{ flex: 1 }}
               >
                 {saving ? 'Saving...' : formData.scheduleType === 'multi-day' 
-                  ? `✓ Create ${getMultiDayDates().length} Schedule${getMultiDayDates().length !== 1 ? 's' : ''}`
+                  ? `✓ Create ${selectedDays.length} Recurring Schedule${selectedDays.length !== 1 ? 's' : ''}`
                   : '✓ Create Schedule'
                 }
               </button>
