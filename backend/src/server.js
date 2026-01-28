@@ -3807,7 +3807,7 @@ app.get('/api/scheduling/suggest-caregivers', verifyToken, async (req, res) => {
 
       return {
         ...cg,
-        weeklyHours: weeklyHours.toFixed(1),
+        weeklyHours: weeklyHours.toFixed(2),
         maxHours,
         visitCount,
         hasConflict,
@@ -4320,11 +4320,11 @@ app.get('/api/scheduling/caregiver-hours/:caregiverId', verifyToken, async (req,
     const maxHours = availResult.rows[0]?.max_hours_per_week || 40;
 
     res.json({
-      totalHours: totalHours.toFixed(1),
-      oneTimeHours: oneTimeHours.toFixed(1),
-      recurringHours: recurringHours.toFixed(1),
+      totalHours: totalHours.toFixed(2),
+      oneTimeHours: oneTimeHours.toFixed(2),
+      recurringHours: recurringHours.toFixed(2),
       maxHours,
-      remainingHours: Math.max(0, maxHours - totalHours).toFixed(1),
+      remainingHours: Math.max(0, maxHours - totalHours).toFixed(2),
       approachingOvertime: totalHours > 35
     });
   } catch (error) {
@@ -4438,11 +4438,11 @@ app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (r
       underScheduledClients,
       summary: {
         totalCaregivers: caregivers.length,
-        totalScheduledHours: caregivers.reduce((sum, cg) => sum + cg.scheduledHours, 0).toFixed(1),
-        totalAvailableHours: caregivers.reduce((sum, cg) => sum + cg.maxHours, 0).toFixed(1),
+        totalScheduledHours: caregivers.reduce((sum, cg) => sum + cg.scheduledHours, 0).toFixed(2),
+        totalAvailableHours: caregivers.reduce((sum, cg) => sum + cg.maxHours, 0).toFixed(2),
         underScheduledClientCount: underScheduledClients.length,
         totalShortfallUnits: underScheduledClients.reduce((sum, cl) => sum + cl.shortfallUnits, 0),
-        totalShortfallHours: underScheduledClients.reduce((sum, cl) => sum + cl.shortfallHours, 0).toFixed(1)
+        totalShortfallHours: underScheduledClients.reduce((sum, cl) => sum + cl.shortfallHours, 0).toFixed(2)
       }
     });
   } catch (error) {

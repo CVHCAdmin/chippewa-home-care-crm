@@ -476,7 +476,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                     fontSize: '0.9rem',
                     color: '#0369A1'
                   }}>
-                    = <strong>{(parseFloat(formData.weeklyAuthorizedUnits) * 0.25).toFixed(1)} hours</strong> per week
+                    = <strong>{(parseFloat(formData.weeklyAuthorizedUnits) * 0.25).toFixed(2)} hours</strong> per week
                   </div>
                 )}
                 <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>

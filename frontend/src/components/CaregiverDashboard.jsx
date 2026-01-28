@@ -356,7 +356,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>Hours This Week</div>
-            <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{myHoursThisWeek.toFixed(1)}h</div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{myHoursThisWeek.toFixed(2)}h</div>
           </div>
           <div style={{ fontSize: '3rem', opacity: 0.5 }}>⏱️</div>
         </div>
@@ -649,7 +649,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 <tr key={v.id || i}>
                   <td>{formatDate(v.start_time)}</td>
                   <td><span onClick={() => setViewingClientId(v.client_id)} style={{ cursor: 'pointer', color: '#007bff' }}>{v.client_name || getClientName(v.client_id)}</span></td>
-                  <td>{v.hours_worked ? `${parseFloat(v.hours_worked).toFixed(1)}h` : '-'}</td>
+                  <td>{v.hours_worked ? `${parseFloat(v.hours_worked).toFixed(2)}h` : '-'}</td>
                 </tr>
               ))}
             </tbody>

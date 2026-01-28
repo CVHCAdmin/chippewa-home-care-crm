@@ -1002,7 +1002,7 @@ const SmartScheduling = ({ token }) => {
                         <div style={{ flex: 1 }}>
                           <div style={{ fontWeight: '600' }}>{cg.name}</div>
                           <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                            {cg.scheduledHours.toFixed(1)}h / {cg.maxHours}h
+                            {cg.scheduledHours.toFixed(2)}h / {cg.maxHours}h
                           </div>
                         </div>
                         <div style={{ width: '100px' }}>
@@ -1069,7 +1069,7 @@ const SmartScheduling = ({ token }) => {
                             <div>
                               <div style={{ fontWeight: '600' }}>{cl.name}</div>
                               <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                                {cl.scheduledUnits} / {cl.authorizedUnits} units ({cl.scheduledHours.toFixed(1)}h / {cl.authorizedHours.toFixed(1)}h)
+                                {cl.scheduledUnits} / {cl.authorizedUnits} units ({cl.scheduledHours.toFixed(2)}h / {cl.authorizedHours.toFixed(2)}h)
                               </div>
                             </div>
                             <div style={{ 
@@ -1132,11 +1132,11 @@ const SmartScheduling = ({ token }) => {
                             <td style={{ fontWeight: '500' }}>{cl.name}</td>
                             <td style={{ textAlign: 'right' }}>
                               <div>{cl.authorizedUnits} units</div>
-                              <div style={{ fontSize: '0.75rem', color: '#666' }}>{cl.authorizedHours.toFixed(1)}h</div>
+                              <div style={{ fontSize: '0.75rem', color: '#666' }}>{cl.authorizedHours.toFixed(2)}h</div>
                             </td>
                             <td style={{ textAlign: 'right' }}>
                               <div>{cl.scheduledUnits} units</div>
-                              <div style={{ fontSize: '0.75rem', color: '#666' }}>{cl.scheduledHours.toFixed(1)}h</div>
+                              <div style={{ fontSize: '0.75rem', color: '#666' }}>{cl.scheduledHours.toFixed(2)}h</div>
                             </td>
                             <td style={{ textAlign: 'right', color: cl.shortfallUnits > 0 ? '#DC2626' : '#059669', fontWeight: '600' }}>
                               {cl.shortfallUnits > 0 ? `-${cl.shortfallUnits}` : '✓'}
