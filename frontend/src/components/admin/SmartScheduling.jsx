@@ -975,10 +975,12 @@ const SmartScheduling = ({ token }) => {
                   <div style={{ fontSize: '0.85rem', color: '#666' }}>Under-Scheduled Clients</div>
                 </div>
                 <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
-                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: parseFloat(coverageData.summary.totalShortfallHours) > 0 ? '#DC2626' : '#059669' }}>
-                    {coverageData.summary.totalShortfallHours}h
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: coverageData.summary.totalShortfallUnits > 0 ? '#DC2626' : '#059669' }}>
+                    {coverageData.summary.totalShortfallUnits} units
                   </div>
-                  <div style={{ fontSize: '0.85rem', color: '#666' }}>Hours Shortfall</div>
+                  <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                    Shortfall ({coverageData.summary.totalShortfallHours}h)
+                  </div>
                 </div>
               </div>
 
@@ -1053,7 +1055,7 @@ const SmartScheduling = ({ token }) => {
                   {coverageData.underScheduledClients.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '2rem', color: '#059669' }}>
                       <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✅</div>
-                      All clients with billing hours are fully scheduled!
+                      All clients with authorized units are fully scheduled!
                     </div>
                   ) : (
                     <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
@@ -1067,7 +1069,7 @@ const SmartScheduling = ({ token }) => {
                             <div>
                               <div style={{ fontWeight: '600' }}>{cl.name}</div>
                               <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                                Scheduled: {cl.scheduledHours.toFixed(1)}h / {cl.billingHours}h approved
+                                {cl.scheduledUnits} / {cl.authorizedUnits} units ({cl.scheduledHours.toFixed(1)}h / {cl.authorizedHours.toFixed(1)}h)
                               </div>
                             </div>
                             <div style={{ 
@@ -1078,7 +1080,7 @@ const SmartScheduling = ({ token }) => {
                               fontSize: '0.85rem',
                               fontWeight: '600'
                             }}>
-                              -{cl.shortfall.toFixed(1)}h
+                              -{cl.shortfallUnits} units
                             </div>
                           </div>
                           <div style={{ marginTop: '0.5rem' }}>
@@ -1105,12 +1107,12 @@ const SmartScheduling = ({ token }) => {
                 </div>
               </div>
 
-              {/* All Clients with Billing Hours */}
+              {/* All Clients with Authorized Units */}
               <div className="card" style={{ marginTop: '1rem' }}>
-                <h3 style={{ margin: '0 0 1rem 0' }}>📋 All Clients with Billing Hours</h3>
-                {coverageData.clientsWithBillingHours.length === 0 ? (
+                <h3 style={{ margin: '0 0 1rem 0' }}>📋 All Clients with Authorized Units</h3>
+                {coverageData.clientsWithUnits.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '1rem', color: '#666' }}>
-                    No clients have weekly billing hours set. Add billing hours to clients to track coverage.
+                    No clients have weekly authorized units set. Add units to clients to track coverage.
                   </div>
                 ) : (
                   <div style={{ overflowX: 'auto' }}>
@@ -1118,20 +1120,26 @@ const SmartScheduling = ({ token }) => {
                       <thead>
                         <tr>
                           <th>Client</th>
-                          <th style={{ textAlign: 'right' }}>Billing Hours</th>
+                          <th style={{ textAlign: 'right' }}>Authorized</th>
                           <th style={{ textAlign: 'right' }}>Scheduled</th>
                           <th style={{ textAlign: 'right' }}>Shortfall</th>
                           <th style={{ textAlign: 'center' }}>Coverage</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {coverageData.clientsWithBillingHours.map(cl => (
+                        {coverageData.clientsWithUnits.map(cl => (
                           <tr key={cl.id} style={{ background: cl.isUnderScheduled ? '#FEF2F2' : undefined }}>
                             <td style={{ fontWeight: '500' }}>{cl.name}</td>
-                            <td style={{ textAlign: 'right' }}>{cl.billingHours}h</td>
-                            <td style={{ textAlign: 'right' }}>{cl.scheduledHours.toFixed(1)}h</td>
-                            <td style={{ textAlign: 'right', color: cl.shortfall > 0 ? '#DC2626' : '#059669', fontWeight: '600' }}>
-                              {cl.shortfall > 0 ? `-${cl.shortfall.toFixed(1)}h` : '✓'}
+                            <td style={{ textAlign: 'right' }}>
+                              <div>{cl.authorizedUnits} units</div>
+                              <div style={{ fontSize: '0.75rem', color: '#666' }}>{cl.authorizedHours.toFixed(1)}h</div>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              <div>{cl.scheduledUnits} units</div>
+                              <div style={{ fontSize: '0.75rem', color: '#666' }}>{cl.scheduledHours.toFixed(1)}h</div>
+                            </td>
+                            <td style={{ textAlign: 'right', color: cl.shortfallUnits > 0 ? '#DC2626' : '#059669', fontWeight: '600' }}>
+                              {cl.shortfallUnits > 0 ? `-${cl.shortfallUnits}` : '✓'}
                             </td>
                             <td style={{ textAlign: 'center' }}>
                               <span style={{ 
