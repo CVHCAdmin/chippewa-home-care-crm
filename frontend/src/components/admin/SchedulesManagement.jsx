@@ -314,14 +314,14 @@ const SchedulesManagement = ({ token }) => {
     if (!start || !end) return 0;
     const startDate = new Date(`2000-01-01T${start}`);
     const endDate = new Date(`2000-01-01T${end}`);
-    return ((endDate - startDate) / (1000 * 60 * 60)).toFixed(1);
+    return ((endDate - startDate) / (1000 * 60 * 60)).toFixed(2);
   };
 
   // Calculate total hours for array of schedules
   const calculateTotalHours = (scheduleList) => {
     return scheduleList.reduce((total, schedule) => {
       return total + parseFloat(calculateHours(schedule.start_time, schedule.end_time));
-    }, 0).toFixed(1);
+    }, 0).toFixed(2);
   };
 
   // Group schedules by type then day/date
@@ -802,7 +802,7 @@ const SchedulesManagement = ({ token }) => {
                 {formatTime(formData.startTime)} - {formatTime(formData.endTime)}
               </span>
               <span style={{ color: '#6B7280', marginLeft: '1rem' }}>
-                ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${selectedDays.length} days/week = ${(calculateHours(formData.startTime, formData.endTime) * selectedDays.length).toFixed(1)} hours/week` : ''})
+                ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${selectedDays.length} days/week = ${(calculateHours(formData.startTime, formData.endTime) * selectedDays.length).toFixed(2)} hours/week` : ''})
               </span>
             </div>
 
