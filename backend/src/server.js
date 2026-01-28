@@ -319,7 +319,7 @@ app.post('/api/clients', verifyToken, async (req, res) => {
     const { 
       firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
       referredBy, serviceType, referralSourceId, careTypeId, 
-      isPrivatePay, privatePayRate, privatePayRateType, weeklyBillingHours 
+      isPrivatePay, privatePayRate, privatePayRateType, weeklyAuthorizedUnits 
     } = req.body;
     const clientId = uuidv4();
 
@@ -327,13 +327,13 @@ app.post('/api/clients', verifyToken, async (req, res) => {
       `INSERT INTO clients (
         id, first_name, last_name, date_of_birth, phone, email, address, city, state, zip, 
         referred_by, service_type, start_date, referral_source_id, care_type_id,
-        is_private_pay, private_pay_rate, private_pay_rate_type, weekly_billing_hours
+        is_private_pay, private_pay_rate, private_pay_rate_type, weekly_authorized_units
       )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [clientId, firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
        referredBy || referralSourceId, serviceType, referralSourceId, careTypeId,
-       isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly', weeklyBillingHours || null]
+       isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly', weeklyAuthorizedUnits || null]
     );
 
     // Create onboarding checklist
@@ -390,7 +390,7 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
       medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
       // Billing fields
       referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
-      weeklyBillingHours
+      weeklyAuthorizedUnits
     } = req.body;
     
     const result = await db.query(
@@ -427,7 +427,7 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
         private_pay_rate = $30,
         private_pay_rate_type = COALESCE($31, private_pay_rate_type),
         billing_notes = $32,
-        weekly_billing_hours = $33,
+        weekly_authorized_units = $33,
         updated_at = NOW()
        WHERE id = $34 RETURNING *`,
       [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
@@ -436,7 +436,7 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
        emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
        medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
        referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
-       weeklyBillingHours,
+       weeklyAuthorizedUnits,
        req.params.id]
     );
 
@@ -447,6 +447,31 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
     await auditLog(req.user.id, 'UPDATE', 'clients', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/clients/:id - Soft delete a client
+app.delete('/api/clients/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if client exists
+    const existing = await db.query('SELECT * FROM clients WHERE id = $1', [id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Soft delete by setting is_active to false
+    const result = await db.query(
+      `UPDATE clients SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [id]
+    );
+
+    await auditLog(req.user.id, 'DELETE', 'clients', id, existing.rows[0], result.rows[0]);
+    res.json({ message: 'Client deleted successfully', client: result.rows[0] });
+  } catch (error) {
+    console.error('Delete client error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -4345,13 +4370,13 @@ app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (r
       ORDER BY u.first_name, u.last_name
     `, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
 
-    // Get all active clients with billing hours and their scheduled hours
+    // Get all active clients with authorized units and their scheduled hours
     const clientsResult = await db.query(`
       SELECT 
         c.id,
         c.first_name,
         c.last_name,
-        c.weekly_billing_hours,
+        c.weekly_authorized_units,
         (
           SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600), 0)
           FROM schedules s
@@ -4378,39 +4403,46 @@ app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (r
       status: cg.availability_status
     }));
 
-    // Process clients - only those with billing hours set
-    const clientsWithBillingHours = clientsResult.rows
-      .filter(cl => cl.weekly_billing_hours && parseFloat(cl.weekly_billing_hours) > 0)
+    // Process clients - only those with authorized units set
+    const clientsWithUnits = clientsResult.rows
+      .filter(cl => cl.weekly_authorized_units && parseInt(cl.weekly_authorized_units) > 0)
       .map(cl => {
-        const billingHours = parseFloat(cl.weekly_billing_hours) || 0;
+        const authorizedUnits = parseInt(cl.weekly_authorized_units) || 0;
+        const authorizedHours = authorizedUnits * 0.25; // 1 unit = 15 min = 0.25 hours
         const scheduledHours = parseFloat(cl.scheduled_hours) || 0;
-        const shortfall = Math.max(0, billingHours - scheduledHours);
+        const scheduledUnits = Math.round(scheduledHours * 4); // Convert hours to units
+        const shortfallUnits = Math.max(0, authorizedUnits - scheduledUnits);
+        const shortfallHours = shortfallUnits * 0.25;
         return {
           id: cl.id,
           name: `${cl.first_name} ${cl.last_name}`,
-          billingHours,
+          authorizedUnits,
+          authorizedHours,
+          scheduledUnits,
           scheduledHours,
-          shortfall,
-          coveragePercent: Math.round((scheduledHours / billingHours) * 100),
-          isUnderScheduled: shortfall > 0
+          shortfallUnits,
+          shortfallHours,
+          coveragePercent: authorizedUnits > 0 ? Math.round((scheduledUnits / authorizedUnits) * 100) : 0,
+          isUnderScheduled: shortfallUnits > 0
         };
       });
 
     // Separate under-scheduled clients
-    const underScheduledClients = clientsWithBillingHours.filter(cl => cl.isUnderScheduled);
+    const underScheduledClients = clientsWithUnits.filter(cl => cl.isUnderScheduled);
 
     res.json({
       weekStart: weekStart.toISOString().split('T')[0],
       weekEnd: weekEnd.toISOString().split('T')[0],
       caregivers,
-      clientsWithBillingHours,
+      clientsWithUnits,
       underScheduledClients,
       summary: {
         totalCaregivers: caregivers.length,
         totalScheduledHours: caregivers.reduce((sum, cg) => sum + cg.scheduledHours, 0).toFixed(1),
         totalAvailableHours: caregivers.reduce((sum, cg) => sum + cg.maxHours, 0).toFixed(1),
         underScheduledClientCount: underScheduledClients.length,
-        totalShortfallHours: underScheduledClients.reduce((sum, cl) => sum + cl.shortfall, 0).toFixed(1)
+        totalShortfallUnits: underScheduledClients.reduce((sum, cl) => sum + cl.shortfallUnits, 0),
+        totalShortfallHours: underScheduledClients.reduce((sum, cl) => sum + cl.shortfallHours, 0).toFixed(1)
       }
     });
   } catch (error) {

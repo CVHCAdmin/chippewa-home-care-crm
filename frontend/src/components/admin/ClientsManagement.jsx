@@ -119,7 +119,7 @@ const ClientsManagement = ({ token }) => {
     isPrivatePay: false,
     privatePayRate: '',
     privatePayRateType: 'hourly',
-    weeklyBillingHours: '',
+    weeklyAuthorizedUnits: '',
     emergencyContactName: '',
     emergencyContactPhone: '',
     emergencyContactRelationship: '',
@@ -169,7 +169,7 @@ const ClientsManagement = ({ token }) => {
         isPrivatePay: formData.isPrivatePay,
         privatePayRate: formData.isPrivatePay ? parseFloat(formData.privatePayRate) : null,
         privatePayRateType: formData.privatePayRateType,
-        weeklyBillingHours: formData.weeklyBillingHours ? parseFloat(formData.weeklyBillingHours) : null,
+        weeklyAuthorizedUnits: formData.weeklyAuthorizedUnits ? parseInt(formData.weeklyAuthorizedUnits) : null,
         emergencyContactName: formData.emergencyContactName || null,
         emergencyContactPhone: formData.emergencyContactPhone || null,
         emergencyContactRelationship: formData.emergencyContactRelationship || null,
@@ -343,18 +343,30 @@ const ClientsManagement = ({ token }) => {
             </div>
 
             <div className="form-group" style={{ marginTop: '1rem' }}>
-              <label>Weekly Billing Hours</label>
+              <label>Weekly Authorized Units</label>
               <input 
                 type="number" 
-                step="0.5" 
+                step="1" 
                 min="0" 
-                max="168"
-                value={formData.weeklyBillingHours} 
-                onChange={(e) => setFormData({ ...formData, weeklyBillingHours: e.target.value })} 
-                placeholder="e.g., 20 (hours approved per week)"
+                max="672"
+                value={formData.weeklyAuthorizedUnits} 
+                onChange={(e) => setFormData({ ...formData, weeklyAuthorizedUnits: e.target.value })} 
+                placeholder="e.g., 80 units"
               />
+              {formData.weeklyAuthorizedUnits && (
+                <div style={{ 
+                  marginTop: '0.5rem', 
+                  padding: '0.5rem', 
+                  background: '#E0F2FE', 
+                  borderRadius: '4px',
+                  fontSize: '0.9rem',
+                  color: '#0369A1'
+                }}>
+                  = <strong>{(parseFloat(formData.weeklyAuthorizedUnits) * 0.25).toFixed(1)} hours</strong> per week
+                </div>
+              )}
               <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>
-                Hours approved for billing each week. Used to track scheduling coverage.
+                1 unit = 15 minutes. Used to track scheduling coverage.
               </small>
             </div>
 
