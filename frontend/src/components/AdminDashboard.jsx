@@ -33,6 +33,7 @@ import SMSManagement from './admin/SMSManagement';
 import FamilyPortalAdmin from './admin/FamilyPortalAdmin';
 import AlertsManagement from './admin/AlertsManagement';
 import SmartScheduling from './admin/SmartScheduling';
+import RouteOptimizer from './admin/RouteOptimizer';
 
 const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -162,6 +163,8 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         return <AlertsManagement token={token} />;
         case 'smart-scheduling':
         return <SmartScheduling token={token} />;
+        case 'route-optimizer':
+        return <RouteOptimizer token={token} />;
       default:
         return <DashboardOverview summary={summary} token={token} />;
     }
@@ -252,6 +255,15 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               onClick={() => handlePageClick('smart-scheduling')}
             >
               🧠 Smart Scheduling
+            </a>
+          </li>
+          <li>
+            <a
+              href="#route-optimizer"
+              className={currentPage === 'route-optimizer' ? 'active' : ''}
+              onClick={() => handlePageClick('route-optimizer')}
+            >
+              🗺️ Route Optimizer
             </a>
           </li>
           <li>
