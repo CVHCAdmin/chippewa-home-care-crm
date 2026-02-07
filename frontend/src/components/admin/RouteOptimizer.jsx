@@ -555,9 +555,14 @@ const RouteOptimizer = ({ token }) => {
         </div>
 
         {/* Caregiver status messages */}
-        {cg && !cgHasCoords && (
+        {cg && !cg.address && (
           <div style={s.msg('warning')}>
-            ⚠️ <strong>{cg.first_name} {cg.last_name}</strong> has no geocoded home address.
+            ⚠️ <strong>{cg.first_name} {cg.last_name}</strong> has no home address on file. Go to <strong>Caregivers → Edit</strong> to add their address first, then geocode it here.
+          </div>
+        )}
+        {cg && cg.address && !cgHasCoords && (
+          <div style={s.msg('warning')}>
+            ⚠️ <strong>{cg.first_name} {cg.last_name}</strong> has an address but it's not geocoded yet.
             <button style={s.btnSm('#d97706')} onClick={() => geocodeSingle('caregiver', cg.id, cg.address, cg.city, cg.state, cg.zip)}>Geocode Now</button>
           </div>
         )}
@@ -1020,6 +1025,7 @@ const RouteOptimizer = ({ token }) => {
   const renderGeofence = () => {
     const clientsWithoutCoords = clients.filter(c => c.is_active !== false && (!c.latitude || !c.longitude));
     const cgWithoutCoords = caregivers.filter(c => c.is_active !== false && (!c.latitude || !c.longitude));
+    const cgWithoutAddress = caregivers.filter(c => c.is_active !== false && !c.address);
 
     return (
       <div>
@@ -1029,6 +1035,15 @@ const RouteOptimizer = ({ token }) => {
           <div style={{ fontSize: '0.82rem', color: '#666', marginBottom: '0.75rem' }}>
             Convert addresses to GPS coordinates. Required for route optimization and geofencing.
           </div>
+
+          {cgWithoutAddress.length > 0 && (
+            <div style={s.msg('warning')}>
+              🏠 {cgWithoutAddress.length} caregiver(s) have <strong>no home address</strong> on file — add via Caregivers → Edit before geocoding:
+              <div style={{ fontSize: '0.78rem', marginTop: '4px' }}>
+                {cgWithoutAddress.map(c => c.first_name + ' ' + c.last_name).join(', ')}
+              </div>
+            </div>
+          )}
 
           {(clientsWithoutCoords.length > 0 || cgWithoutCoords.length > 0) && (
             <div style={s.msg('warning')}>

@@ -209,8 +209,18 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
         </div>
 
         <div className="card">
-          <h3>Status</h3>
-          <p><strong>Active:</strong> {caregiver.is_active ? 'Yes' : 'No'}</p>
+          <h3>📍 Home Address</h3>
+          {caregiver.address ? (
+            <>
+              <p>{caregiver.address}</p>
+              <p>{[caregiver.city, caregiver.state, caregiver.zip].filter(Boolean).join(', ')}</p>
+              <p style={{ fontSize: '0.85rem', color: caregiver.latitude ? '#16a34a' : '#d97706' }}>
+                {caregiver.latitude ? `✅ Geocoded (${Number(caregiver.latitude).toFixed(4)}, ${Number(caregiver.longitude).toFixed(4)})` : '⚠️ Not geocoded — use Route Optimizer → GPS & Geofence tab'}
+              </p>
+            </>
+          ) : (
+            <p style={{ color: '#d97706' }}>⚠️ No address on file. Edit via Caregivers → Edit to add home address for route optimization.</p>
+          )}
         </div>
       </div>
 
