@@ -29,6 +29,15 @@ const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, 
         <span style={{ color: '#666' }}>💰</span>{' '}
         <strong>{formatCurrency(caregiver.default_pay_rate)}</strong>/hr
       </div>
+      <div style={{ gridColumn: '1 / -1', fontSize: '0.82rem' }}>
+        {caregiver.address ? (
+          <span>📍 {[caregiver.address, caregiver.city, caregiver.state, caregiver.zip].filter(Boolean).join(', ')}
+            {caregiver.latitude ? ' ✅' : ' ⚠️ Not geocoded'}
+          </span>
+        ) : (
+          <span style={{ color: '#d97706' }}>⚠️ No home address — needed for route optimization</span>
+        )}
+      </div>
     </div>
     
     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -59,7 +68,11 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
     firstName: '',
     lastName: '',
     phone: '',
-    payRate: ''
+    payRate: '',
+    address: '',
+    city: '',
+    state: '',
+    zip: ''
   });
 
   const [rateFormData, setRateFormData] = useState({
@@ -119,7 +132,11 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
       firstName: caregiver.first_name || '',
       lastName: caregiver.last_name || '',
       phone: caregiver.phone || '',
-      payRate: caregiver.default_pay_rate || ''
+      payRate: caregiver.default_pay_rate || '',
+      address: caregiver.address || '',
+      city: caregiver.city || '',
+      state: caregiver.state || '',
+      zip: caregiver.zip || ''
     });
     setShowEditModal(true);
   };
@@ -137,7 +154,11 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
           firstName: editData.firstName,
           lastName: editData.lastName,
           phone: editData.phone,
-          payRate: parseFloat(editData.payRate) || null
+          payRate: parseFloat(editData.payRate) || null,
+          address: editData.address || null,
+          city: editData.city || null,
+          state: editData.state || null,
+          zip: editData.zip || null
         })
       });
 
@@ -258,6 +279,7 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Phone</th>
+                <th>Address</th>
                 <th>Default Rate</th>
                 <th>Role</th>
                 <th>Actions</th>
@@ -269,6 +291,13 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
                   <td><strong>{caregiver.first_name} {caregiver.last_name}</strong></td>
                   <td>{caregiver.email}</td>
                   <td><a href={`tel:${caregiver.phone}`}>{caregiver.phone || 'N/A'}</a></td>
+                  <td style={{ fontSize: '0.85rem' }}>
+                    {caregiver.address ? (
+                      <span>{[caregiver.city, caregiver.state].filter(Boolean).join(', ')} {caregiver.latitude ? '📍' : '⚠️'}</span>
+                    ) : (
+                      <span style={{ color: '#d97706' }}>⚠️ Missing</span>
+                    )}
+                  </td>
                   <td><strong>{formatCurrency(caregiver.default_pay_rate)}</strong>/hr</td>
                   <td>
                     <span className={`badge ${caregiver.role === 'admin' ? 'badge-danger' : 'badge-info'}`}>
@@ -330,6 +359,32 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
                 <label>Default Hourly Pay Rate</label>
                 <input type="number" step="0.01" min="0" value={editData.payRate} onChange={(e) => setEditData({ ...editData, payRate: e.target.value })} placeholder="15.00" />
                 <small className="text-muted">Used when no care-type-specific rate is set</small>
+              </div>
+
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1rem', marginTop: '0.5rem' }}>
+                <label style={{ fontWeight: '700', fontSize: '0.9rem', marginBottom: '0.5rem', display: 'block' }}>
+                  📍 Home Address <small style={{ fontWeight: '400', color: '#666' }}>(needed for route optimization)</small>
+                </label>
+              </div>
+
+              <div className="form-group">
+                <label>Street Address</label>
+                <input type="text" value={editData.address} onChange={(e) => setEditData({ ...editData, address: e.target.value })} placeholder="123 Main St" />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr 1fr', gap: '0.75rem' }}>
+                <div className="form-group">
+                  <label>City</label>
+                  <input type="text" value={editData.city} onChange={(e) => setEditData({ ...editData, city: e.target.value })} placeholder="Eau Claire" />
+                </div>
+                <div className="form-group">
+                  <label>State</label>
+                  <input type="text" value={editData.state} onChange={(e) => setEditData({ ...editData, state: e.target.value })} placeholder="WI" maxLength="2" />
+                </div>
+                <div className="form-group">
+                  <label>Zip</label>
+                  <input type="text" value={editData.zip} onChange={(e) => setEditData({ ...editData, zip: e.target.value })} placeholder="54701" maxLength="10" />
+                </div>
               </div>
 
               <div className="modal-actions">

@@ -244,7 +244,8 @@ app.get('/api/users/caregivers', verifyToken, requireAdmin, async (req, res) => 
 app.get('/api/caregivers', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate
+      `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate,
+              address, city, state, zip, latitude, longitude
        FROM users WHERE role = 'caregiver' AND is_active = true ORDER BY first_name`
     );
     res.json(result.rows);
@@ -253,10 +254,10 @@ app.get('/api/caregivers', verifyToken, async (req, res) => {
   }
 });
 
-// PUT /api/caregivers/:id - Update caregiver info including pay rate
+// PUT /api/caregivers/:id - Update caregiver info including pay rate and address
 app.put('/api/caregivers/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { firstName, lastName, phone, payRate } = req.body;
+    const { firstName, lastName, phone, payRate, address, city, state, zip, latitude, longitude } = req.body;
     
     const result = await db.query(
       `UPDATE users SET 
@@ -264,10 +265,16 @@ app.put('/api/caregivers/:id', verifyToken, requireAdmin, async (req, res) => {
         last_name = COALESCE($2, last_name),
         phone = COALESCE($3, phone),
         default_pay_rate = COALESCE($4, default_pay_rate),
+        address = COALESCE($5, address),
+        city = COALESCE($6, city),
+        state = COALESCE($7, state),
+        zip = COALESCE($8, zip),
+        latitude = COALESCE($9, latitude),
+        longitude = COALESCE($10, longitude),
         updated_at = NOW()
-       WHERE id = $5 AND role = 'caregiver'
-       RETURNING id, email, first_name, last_name, phone, default_pay_rate`,
-      [firstName, lastName, phone, payRate, req.params.id]
+       WHERE id = $11 AND role = 'caregiver'
+       RETURNING id, email, first_name, last_name, phone, default_pay_rate, address, city, state, zip, latitude, longitude`,
+      [firstName, lastName, phone, payRate, address, city, state, zip, latitude, longitude, req.params.id]
     );
     
     if (result.rows.length === 0) {
