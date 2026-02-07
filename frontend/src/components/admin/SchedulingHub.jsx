@@ -1,6 +1,6 @@
 // src/components/admin/SchedulingHub.jsx
 // Unified scheduling hub - consolidates all scheduling features into one page
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import AutoFillButton from './AutoFillButton';
 
@@ -33,22 +33,29 @@ const SchedulingHub = ({ token }) => {
   const [weekData, setWeekData] = useState(null);
   const [reassignModal, setReassignModal] = useState(null);
 
-  // ── Create Schedule state ──
+  // ── Create Schedule state (caregiver-first, like SchedulesManagement) ──
+  const [selectedCaregiverId, setSelectedCaregiverId] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [caregiverSchedules, setCaregiverSchedules] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [formData, setFormData] = useState({
+    caregiverId: '',
+    clientId: '',
+    scheduleType: 'one-time', // 'one-time', 'multi-day', 'recurring'
+    dayOfWeek: '',
+    date: new Date().toISOString().split('T')[0],
+    startTime: '09:00',
+    endTime: '13:00',
+    notes: ''
+  });
+  const [selectedDays, setSelectedDays] = useState([]);
+
+  // Still keep suggestion state for week view reassign etc.
   const [selectedClient, setSelectedClient] = useState('');
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [startTime, setStartTime] = useState('09:00');
-  const [endTime, setEndTime] = useState('13:00');
-  const [notes, setNotes] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [selectedCaregiver, setSelectedCaregiver] = useState(null);
   const [conflicts, setConflicts] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [multiDayMode, setMultiDayMode] = useState(false);
-  const [selectedDays, setSelectedDays] = useState([]);
-  const [showRecurring, setShowRecurring] = useState(false);
-  const [recurringTemplate, setRecurringTemplate] = useState([]);
-  const [recurringWeeks, setRecurringWeeks] = useState(4);
 
   // ── Coverage state ──
   const [coverageData, setCoverageData] = useState(null);
@@ -239,104 +246,122 @@ const SchedulingHub = ({ token }) => {
   };
 
   const navigateWeek = (dir) => {
-    const d = new Date(weekOf);
+    const d = new Date(weekOf + 'T12:00:00');
     d.setDate(d.getDate() + dir * 7);
-    setWeekOf(d.toISOString().split('T')[0]);
+    setWeekOf(getWeekStart(d).toISOString().split('T')[0]);
   };
 
   const shiftPresets = [
-    { label: 'Morning', start: '08:00', end: '12:00' },
-    { label: 'Afternoon', start: '12:00', end: '16:00' },
-    { label: 'Evening', start: '16:00', end: '20:00' },
-    { label: 'Full Day', start: '08:00', end: '16:00' },
+    { label: 'Morning (8am-12pm)', start: '08:00', end: '12:00' },
+    { label: 'Afternoon (12pm-4pm)', start: '12:00', end: '16:00' },
+    { label: 'Evening (4pm-8pm)', start: '16:00', end: '20:00' },
+    { label: 'Full Day (8am-4pm)', start: '08:00', end: '16:00' },
+    { label: 'Half Day AM (8am-12pm)', start: '08:00', end: '12:00' },
+    { label: 'Half Day PM (1pm-5pm)', start: '13:00', end: '17:00' },
   ];
 
   // ═══════════════════════════════════════════════
-  // CREATE SCHEDULE LOGIC
+  // CREATE SCHEDULE LOGIC (caregiver-first flow)
   // ═══════════════════════════════════════════════
 
-  const fetchSuggestions = useCallback(async () => {
-    if (!selectedClient) { setSuggestions([]); return; }
-    setSuggestionsLoading(true);
+  const loadCaregiverSchedules = async (cgId) => {
+    if (!cgId) { setCaregiverSchedules([]); return; }
     try {
-      const params = new URLSearchParams({ clientId: selectedClient, date: selectedDate, startTime, endTime });
-      const data = await api(`/api/scheduling/suggest-caregivers?${params}`);
-      setSuggestions(data.suggestions || []);
-    } catch (e) { console.error(e); }
-    finally { setSuggestionsLoading(false); }
-  }, [selectedClient, selectedDate, startTime, endTime]);
-
-  useEffect(() => {
-    if (activeTab !== 'create') return;
-    const timer = setTimeout(fetchSuggestions, 300);
-    return () => clearTimeout(timer);
-  }, [fetchSuggestions, activeTab]);
-
-  const checkConflicts = async (caregiverId) => {
-    if (!caregiverId) { setConflicts([]); return; }
-    try {
-      const data = await api('/api/scheduling/check-conflicts', {
-        method: 'POST',
-        body: JSON.stringify({ caregiverId, date: selectedDate, startTime, endTime })
-      });
-      setConflicts(data.conflicts || []);
-    } catch (e) { console.error(e); }
+      const data = await api(`/api/schedules/${cgId}`);
+      setCaregiverSchedules(Array.isArray(data) ? data : []);
+    } catch (e) { console.error(e); setCaregiverSchedules([]); }
   };
 
-  const handleCaregiverSelect = (cg) => { setSelectedCaregiver(cg); checkConflicts(cg.id); };
+  const handleCaregiverSelectCreate = (cgId) => {
+    setSelectedCaregiverId(cgId);
+    setFormData(prev => ({ ...prev, caregiverId: cgId }));
+    loadCaregiverSchedules(cgId);
+    setShowForm(false);
+  };
 
   const toggleDaySelection = (idx) => {
     setSelectedDays(prev => prev.includes(idx) ? prev.filter(d => d !== idx) : [...prev, idx].sort((a, b) => a - b));
   };
+  const selectWeekdays = () => setSelectedDays([1, 2, 3, 4, 5]);
+  const clearDays = () => setSelectedDays([]);
 
-  const getMultiDayDates = () => {
-    const base = new Date(selectedDate);
-    const sow = new Date(base);
-    sow.setDate(base.getDate() - base.getDay());
-    return selectedDays.map(di => {
-      const d = new Date(sow);
-      d.setDate(sow.getDate() + di);
-      return d.toISOString().split('T')[0];
-    }).filter(d => d >= new Date().toISOString().split('T')[0]);
+  const applyPreset = (preset) => setFormData(prev => ({ ...prev, startTime: preset.start, endTime: preset.end }));
+
+  const calculateHours = (start, end) => {
+    if (!start || !end) return 0;
+    return ((new Date(`2000-01-01T${end}`) - new Date(`2000-01-01T${start}`)) / 3600000).toFixed(2);
   };
 
-  const toggleRecurringDay = (dow) => {
-    const exists = recurringTemplate.find(t => t.dayOfWeek === dow);
-    if (exists) setRecurringTemplate(recurringTemplate.filter(t => t.dayOfWeek !== dow));
-    else setRecurringTemplate([...recurringTemplate, { dayOfWeek: dow, startTime, endTime }]);
-  };
+  const handleCreateSubmit = async (e) => {
+    e.preventDefault();
+    if (!formData.caregiverId || !formData.clientId) { showMsg('Select both caregiver and client', 'error'); return; }
+    if (formData.scheduleType === 'recurring' && formData.dayOfWeek === '') { showMsg('Select a day of week', 'error'); return; }
+    if (formData.scheduleType === 'one-time' && !formData.date) { showMsg('Select a date', 'error'); return; }
+    if (formData.scheduleType === 'multi-day' && selectedDays.length === 0) { showMsg('Select at least one day', 'error'); return; }
+    if (formData.startTime >= formData.endTime) { showMsg('End time must be after start time', 'error'); return; }
 
-  const handleCreateSchedule = async () => {
-    if (!selectedClient || !selectedCaregiver) { showMsg('Select client and caregiver', 'error'); return; }
-    if (conflicts.length > 0 && !window.confirm('This conflicts with existing shifts. Create anyway?')) return;
     setSaving(true);
     try {
-      if (multiDayMode) {
-        const dates = getMultiDayDates();
-        let created = 0;
-        for (const date of dates) {
+      if (formData.scheduleType === 'multi-day') {
+        let created = 0, failed = 0;
+        for (const dayOfWeek of selectedDays) {
           try {
-            await api('/api/schedules', { method: 'POST', body: JSON.stringify({ caregiverId: selectedCaregiver.id, clientId: selectedClient, scheduleType: 'one-time', date, startTime, endTime, notes }) });
+            await api('/api/schedules', { method: 'POST', body: JSON.stringify({
+              caregiverId: formData.caregiverId, clientId: formData.clientId,
+              scheduleType: 'recurring', dayOfWeek, date: null,
+              startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes
+            })});
             created++;
-          } catch {}
+          } catch { failed++; }
         }
-        showMsg(`Created ${created} schedule${created !== 1 ? 's' : ''}!`);
-      } else if (showRecurring) {
-        const data = await api('/api/scheduling/bulk-create', {
-          method: 'POST',
-          body: JSON.stringify({ caregiverId: selectedCaregiver.id, clientId: selectedClient, template: recurringTemplate, weeks: recurringWeeks, startDate: selectedDate, notes })
-        });
-        showMsg(`Created ${data.created} schedules!${data.skippedConflicts > 0 ? ` (${data.skippedConflicts} skipped)` : ''}`);
-        setRecurringTemplate([]); setShowRecurring(false);
+        showMsg(`Created ${created} recurring schedule${created !== 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`);
       } else {
-        await api('/api/schedules', { method: 'POST', body: JSON.stringify({ caregiverId: selectedCaregiver.id, clientId: selectedClient, scheduleType: 'one-time', date: selectedDate, startTime, endTime, notes }) });
+        await api('/api/schedules', { method: 'POST', body: JSON.stringify({
+          caregiverId: formData.caregiverId, clientId: formData.clientId,
+          scheduleType: formData.scheduleType,
+          dayOfWeek: formData.scheduleType === 'recurring' ? parseInt(formData.dayOfWeek) : null,
+          date: formData.scheduleType === 'one-time' ? formData.date : null,
+          startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes
+        })});
         showMsg('Schedule created!');
       }
-      setSelectedCaregiver(null); setNotes(''); setSelectedDays([]); setMultiDayMode(false);
-      fetchSuggestions();
+      setFormData(prev => ({ ...prev, clientId: '', scheduleType: 'one-time', dayOfWeek: '', date: new Date().toISOString().split('T')[0], startTime: '09:00', endTime: '13:00', notes: '' }));
+      setSelectedDays([]);
+      setShowForm(false);
+      loadCaregiverSchedules(selectedCaregiverId);
     } catch (e) { showMsg('Error: ' + e.message, 'error'); }
     finally { setSaving(false); }
   };
+
+  const handleDeleteSchedule = async (scheduleId) => {
+    if (!window.confirm('Delete this schedule?')) return;
+    try {
+      await api(`/api/schedules/${scheduleId}`, { method: 'DELETE' });
+      showMsg('Schedule deleted');
+      loadCaregiverSchedules(selectedCaregiverId);
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+  };
+
+  const groupSchedules = () => {
+    const recurringByDay = {}, oneTimeByDate = {};
+    caregiverSchedules.forEach(s => {
+      if (s.day_of_week !== null && s.day_of_week !== undefined) {
+        if (!recurringByDay[s.day_of_week]) recurringByDay[s.day_of_week] = [];
+        recurringByDay[s.day_of_week].push(s);
+      } else if (s.date) {
+        const dk = s.date.split('T')[0];
+        if (!oneTimeByDate[dk]) oneTimeByDate[dk] = [];
+        oneTimeByDate[dk].push(s);
+      }
+    });
+    Object.values(recurringByDay).forEach(arr => arr.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || '')));
+    Object.values(oneTimeByDate).forEach(arr => arr.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || '')));
+    return { recurringByDay, oneTimeByDate };
+  };
+
+  const getDayName = (dow) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dow] || 'Unknown';
+
+  const calculateTotalHours = (list) => list.reduce((t, s) => t + parseFloat(calculateHours(s.start_time, s.end_time)), 0).toFixed(2);
 
   const handleReassign = async (scheduleId, newCaregiverId) => {
     try {
@@ -758,148 +783,255 @@ const SchedulingHub = ({ token }) => {
       )}
 
       {/* ══════════════════════════════════════════ */}
-      {/* CREATE SCHEDULE TAB */}
+      {/* CREATE SCHEDULE TAB (caregiver-first) */}
       {/* ══════════════════════════════════════════ */}
-      {activeTab === 'create' && (
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '1rem' }}>
-          {/* Left: Form */}
-          <div className="card">
-            <h3 style={{ margin: '0 0 1rem' }}>Schedule Details</h3>
-
-            <div className="form-group">
-              <label>Client *</label>
-              <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}>
-                <option value="">Select client...</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label>{multiDayMode ? 'Week Starting' : 'Date'} *</label>
-              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} min={new Date().toISOString().split('T')[0]} />
-            </div>
-
-            <div className="form-group">
-              <label>Quick Presets</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                {shiftPresets.map(p => (
-                  <button key={p.label} type="button" className="btn btn-sm btn-secondary" onClick={() => { setStartTime(p.start); setEndTime(p.end); }}
-                    style={{ background: startTime === p.start && endTime === p.end ? '#3B82F6' : undefined, color: startTime === p.start && endTime === p.end ? '#fff' : undefined }}>
-                    {p.label}
-                  </button>
-                ))}
+      {activeTab === 'create' && (() => {
+        const { recurringByDay, oneTimeByDate } = groupSchedules();
+        const hasRecurring = Object.keys(recurringByDay).length > 0;
+        const hasOneTime = Object.keys(oneTimeByDate).length > 0;
+        return (
+        <div>
+          {/* Caregiver Selection */}
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#374151' }}>Select Caregiver</label>
+                <select value={selectedCaregiverId} onChange={(e) => handleCaregiverSelectCreate(e.target.value)}
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '1rem', background: '#fff' }}>
+                  <option value="">Choose a caregiver...</option>
+                  {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
+                </select>
               </div>
+              {selectedCaregiverId && (
+                <button className="btn btn-primary" onClick={() => { setFormData(prev => ({ ...prev, caregiverId: selectedCaregiverId })); setShowForm(!showForm); }}
+                  style={{ alignSelf: 'flex-start' }}>
+                  {showForm ? '✕ Cancel' : '+ Add Schedule'}
+                </button>
+              )}
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-              <div className="form-group"><label>Start</label><input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div>
-              <div className="form-group"><label>End</label><input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div>
-            </div>
-
-            <div className="form-group"><label>Notes</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows="2" placeholder="Optional notes..." /></div>
-
-            {/* Multi-Day */}
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}>
-              <input type="checkbox" checked={multiDayMode} onChange={(e) => { setMultiDayMode(e.target.checked); if (e.target.checked) { setShowRecurring(false); setSelectedDays([]); } }} style={{ width: 'auto' }} />
-              Multiple days (same week)
-            </label>
-            {multiDayMode && (
-              <div style={{ background: '#EFF6FF', padding: '0.75rem', borderRadius: '8px', marginBottom: '0.75rem', border: '1px solid #BFDBFE' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                  <strong style={{ fontSize: '0.85rem' }}>Select days:</strong>
-                  <button type="button" className="btn btn-sm" onClick={() => setSelectedDays([1,2,3,4,5])} style={{ background: '#3B82F6', color: '#fff', fontSize: '0.72rem' }}>Mon-Fri</button>
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                  {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, i) => (
-                    <button key={d} type="button" className="btn btn-sm" onClick={() => toggleDaySelection(i)}
-                      style={{ background: selectedDays.includes(i) ? '#3B82F6' : '#E5E7EB', color: selectedDays.includes(i) ? '#fff' : '#374151', minWidth: '40px' }}>{d}</button>
-                  ))}
-                </div>
-                {selectedDays.length > 0 && (
-                  <div style={{ fontSize: '0.82rem', color: '#1E40AF', marginTop: '0.5rem' }}>📅 {getMultiDayDates().length} schedule(s)</div>
-                )}
-              </div>
-            )}
-
-            {/* Recurring */}
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}>
-              <input type="checkbox" checked={showRecurring} onChange={(e) => { setShowRecurring(e.target.checked); if (e.target.checked) { setMultiDayMode(false); setSelectedDays([]); } }} style={{ width: 'auto' }} />
-              Recurring (multiple weeks)
-            </label>
-            {showRecurring && (
-              <div style={{ background: '#F3F4F6', padding: '0.75rem', borderRadius: '8px', marginBottom: '0.75rem' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.75rem' }}>
-                  {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, i) => (
-                    <button key={d} type="button" className="btn btn-sm" onClick={() => toggleRecurringDay(i)}
-                      style={{ background: recurringTemplate.some(t => t.dayOfWeek === i) ? '#3B82F6' : '#E5E7EB', color: recurringTemplate.some(t => t.dayOfWeek === i) ? '#fff' : '#374151' }}>{d}</button>
-                  ))}
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label>Weeks: {recurringWeeks}</label>
-                  <input type="range" min="1" max="12" value={recurringWeeks} onChange={(e) => setRecurringWeeks(parseInt(e.target.value))} style={{ width: '100%' }} />
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* Right: Suggestions */}
-          <div className="card">
-            <h3 style={{ margin: '0 0 1rem' }}>{suggestionsLoading ? '⏳ Finding matches...' : '✨ Recommended Caregivers'}</h3>
-            {!selectedClient ? (
-              <p style={{ color: '#6B7280', textAlign: 'center', padding: '2rem' }}>Select a client to see recommendations</p>
-            ) : suggestionsLoading ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}><div className="spinner" style={{ margin: '0 auto' }}></div></div>
-            ) : suggestions.length === 0 ? (
-              <p style={{ color: '#6B7280', textAlign: 'center', padding: '2rem' }}>No available caregivers found</p>
-            ) : (
-              <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
-                {suggestions.map(sg => (
-                  <div key={sg.id} onClick={() => handleCaregiverSelect(sg)}
-                    style={{ padding: '0.75rem', borderRadius: '8px', marginBottom: '0.5rem', cursor: 'pointer', transition: 'all 0.15s',
-                      border: selectedCaregiver?.id === sg.id ? '2px solid #3B82F6' : '1px solid #e5e7eb',
-                      background: selectedCaregiver?.id === sg.id ? '#EFF6FF' : '#fff' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <strong>{sg.first_name} {sg.last_name}</strong>
-                        <div style={{ fontSize: '0.82rem', color: '#666' }}>
-                          {sg.distance ? `${parseFloat(sg.distance).toFixed(1)} mi · ` : ''}{parseFloat(sg.weeklyHours || 0).toFixed(1)}h / {sg.maxHours || 40}h
+          {/* Add Schedule Form */}
+          {showForm && selectedCaregiverId && (
+            <div className="card" style={{ marginBottom: '1.5rem', border: '2px solid #3B82F6', background: '#F8FAFC' }}>
+              <h3 style={{ margin: '0 0 1.25rem 0', color: '#1E40AF' }}>New Schedule</h3>
+              <form onSubmit={handleCreateSubmit}>
+                {/* Schedule Type Toggle */}
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Schedule Type</label>
+                  <div style={{ display: 'flex', borderRadius: '8px', overflow: 'hidden', border: '2px solid #e5e7eb' }}>
+                    {[
+                      { type: 'one-time', icon: '📅', label: 'One-Time' },
+                      { type: 'multi-day', icon: '📆', label: 'Multi-Day' },
+                      { type: 'recurring', icon: '🔄', label: 'Recurring' }
+                    ].map((opt, i) => (
+                      <button key={opt.type} type="button" onClick={() => { setFormData(prev => ({ ...prev, scheduleType: opt.type, dayOfWeek: '' })); setSelectedDays([]); }}
+                        style={{ flex: 1, padding: '0.75rem 0.5rem', border: 'none', borderLeft: i > 0 ? '2px solid #e5e7eb' : 'none',
+                          background: formData.scheduleType === opt.type ? '#3B82F6' : '#fff',
+                          color: formData.scheduleType === opt.type ? '#fff' : '#374151',
+                          cursor: 'pointer', fontWeight: '500', fontSize: '0.9rem' }}>
+                        {opt.icon} {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* One-Time: Date Picker */}
+                {formData.scheduleType === 'one-time' && (
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Date *</label>
+                    <input type="date" value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
+                      min={new Date().toISOString().split('T')[0]} required
+                      style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '1rem' }} />
+                  </div>
+                )}
+
+                {/* Multi-Day: Day Grid */}
+                {formData.scheduleType === 'multi-day' && (
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ background: '#EFF6FF', padding: '1rem', borderRadius: '8px', border: '1px solid #BFDBFE' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                        <label style={{ fontWeight: '600', margin: 0 }}>Select Days (Recurring Weekly) *</label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button type="button" onClick={selectWeekdays} style={{ padding: '0.35rem 0.75rem', borderRadius: '4px', border: 'none', background: '#3B82F6', color: '#fff', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '500' }}>Mon-Fri</button>
+                          <button type="button" onClick={clearDays} style={{ padding: '0.35rem 0.75rem', borderRadius: '4px', border: '1px solid #D1D5DB', background: '#fff', color: '#6B7280', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '500' }}>Clear</button>
                         </div>
                       </div>
-                      <div style={{ ...s.badge(sg.score >= 80 ? '#D1FAE5' : sg.score >= 50 ? '#FEF3C7' : '#FEE2E2', sg.score >= 80 ? '#059669' : sg.score >= 50 ? '#D97706' : '#DC2626') }}>
-                        {sg.score}%
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                          <button key={day} type="button" onClick={() => toggleDaySelection(idx)}
+                            style={{ padding: '0.6rem 0.25rem', borderRadius: '8px',
+                              border: selectedDays.includes(idx) ? '2px solid #3B82F6' : '2px solid #E5E7EB',
+                              background: selectedDays.includes(idx) ? '#3B82F6' : '#fff',
+                              color: selectedDays.includes(idx) ? '#fff' : '#374151',
+                              cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
+                            {day}
+                          </button>
+                        ))}
                       </div>
+                      {selectedDays.length > 0 && (
+                        <div style={{ fontSize: '0.85rem', color: '#1E40AF', padding: '0.5rem', background: '#DBEAFE', borderRadius: '4px' }}>
+                          🔄 Will create <strong>{selectedDays.length}</strong> recurring weekly schedule{selectedDays.length !== 1 ? 's' : ''}: {selectedDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}
+                        </div>
+                      )}
                     </div>
-                    {sg.hasConflict && <div style={{ fontSize: '0.78rem', color: '#DC2626', marginTop: '0.3rem' }}>⚠️ Has conflict</div>}
-                    {sg.certificationMatch && !sg.certificationMatch.hasAll && (
-                      <div style={{ fontSize: '0.78rem', color: '#D97706', marginTop: '0.2rem' }}>Missing: {sg.certificationMatch.missing.join(', ')}</div>
-                    )}
                   </div>
-                ))}
-              </div>
-            )}
+                )}
 
-            {/* Conflicts Warning */}
-            {conflicts.length > 0 && (
-              <div style={{ margin: '1rem 0', padding: '0.75rem', background: '#FEF2F2', borderRadius: '8px', border: '1px solid #FECACA' }}>
-                <strong style={{ color: '#DC2626' }}>⚠️ Scheduling Conflicts</strong>
-                {conflicts.map((c, i) => (
-                  <div key={i} style={{ fontSize: '0.82rem', marginTop: '0.3rem' }}>
-                    {getClientName(c.client_id)} · {formatTime(c.start_time)}-{formatTime(c.end_time)}
+                {/* Recurring: Single Day Picker */}
+                {formData.scheduleType === 'recurring' && (
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Day of Week *</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '0.5rem' }}>
+                      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                        <button key={day} type="button" onClick={() => setFormData(prev => ({ ...prev, dayOfWeek: idx.toString() }))}
+                          style={{ padding: '0.75rem 0.5rem', borderRadius: '8px',
+                            border: formData.dayOfWeek === idx.toString() ? '2px solid #3B82F6' : '2px solid #e5e7eb',
+                            background: formData.dayOfWeek === idx.toString() ? '#EFF6FF' : '#fff',
+                            color: formData.dayOfWeek === idx.toString() ? '#1D4ED8' : '#374151',
+                            cursor: 'pointer', fontWeight: '500', fontSize: '0.9rem' }}>
+                          {day}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
+                )}
 
-            {/* Create Button */}
-            {selectedCaregiver && (
-              <button className="btn btn-primary" onClick={handleCreateSchedule}
-                disabled={saving || (multiDayMode && selectedDays.length === 0)} style={{ width: '100%', marginTop: '1rem' }}>
-                {saving ? 'Creating...' : multiDayMode ? `Create ${getMultiDayDates().length} schedule(s)` : showRecurring ? `Create ${recurringWeeks} weeks` : `Schedule ${selectedCaregiver.first_name}`}
-              </button>
-            )}
-          </div>
+                {/* Client Selection */}
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Client *</label>
+                  <select value={formData.clientId} onChange={(e) => setFormData(prev => ({ ...prev, clientId: e.target.value }))} required
+                    style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '1rem' }}>
+                    <option value="">Select client...</option>
+                    {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}{c.service_type ? ` (${c.service_type.replace(/_/g, ' ')})` : ''}</option>)}
+                  </select>
+                </div>
+
+                {/* Quick Shift Presets */}
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Quick Shift Presets</label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    {shiftPresets.map((preset, idx) => (
+                      <button key={idx} type="button" onClick={() => applyPreset(preset)}
+                        style={{ padding: '0.5rem 0.75rem', borderRadius: '20px', border: '1px solid #e5e7eb',
+                          background: formData.startTime === preset.start && formData.endTime === preset.end ? '#DBEAFE' : '#fff',
+                          color: '#374151', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Time Inputs */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Start Time *</label>
+                    <input type="time" value={formData.startTime} onChange={(e) => setFormData(prev => ({ ...prev, startTime: e.target.value }))} required
+                      style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '1rem' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>End Time *</label>
+                    <input type="time" value={formData.endTime} onChange={(e) => setFormData(prev => ({ ...prev, endTime: e.target.value }))} required
+                      style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '1rem' }} />
+                  </div>
+                </div>
+
+                {/* Duration Display */}
+                <div style={{ marginBottom: '1.25rem', padding: '0.75rem', background: '#F3F4F6', borderRadius: '8px', textAlign: 'center' }}>
+                  <span style={{ fontWeight: '600' }}>{formatTime(formData.startTime)} - {formatTime(formData.endTime)}</span>
+                  <span style={{ color: '#6B7280', marginLeft: '1rem' }}>
+                    ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${selectedDays.length} days/week = ${(calculateHours(formData.startTime, formData.endTime) * selectedDays.length).toFixed(2)} hours/week` : ''})
+                  </span>
+                </div>
+
+                {/* Notes */}
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Notes (optional)</label>
+                  <textarea value={formData.notes} onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Special instructions, client preferences, etc." rows="2"
+                    style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '1rem', resize: 'vertical' }} />
+                </div>
+
+                {/* Submit */}
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <button type="submit" className="btn btn-primary" disabled={saving || (formData.scheduleType === 'multi-day' && selectedDays.length === 0)} style={{ flex: 1 }}>
+                    {saving ? 'Saving...' : formData.scheduleType === 'multi-day'
+                      ? `✓ Create ${selectedDays.length} Recurring Schedule${selectedDays.length !== 1 ? 's' : ''}`
+                      : '✓ Create Schedule'}
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={() => { setShowForm(false); setSelectedDays([]); }}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Existing Schedules Display */}
+          {selectedCaregiverId && (
+            <div>
+              {/* Recurring Schedules */}
+              {hasRecurring && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', color: '#374151', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    🔄 Recurring Weekly Schedules
+                    <span style={{ fontSize: '0.8rem', color: '#6B7280', fontWeight: '400' }}>({calculateTotalHours(caregiverSchedules.filter(s => s.day_of_week !== null && s.day_of_week !== undefined))} hrs/week)</span>
+                  </h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                    {[0,1,2,3,4,5,6].filter(d => recurringByDay[d]).map(dayNum => (
+                      <div key={dayNum} className="card" style={{ padding: '0.75rem' }}>
+                        <div style={{ fontWeight: '700', marginBottom: '0.5rem', color: '#1E40AF', fontSize: '0.9rem' }}>{getDayName(dayNum)}</div>
+                        {recurringByDay[dayNum].map(s => (
+                          <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem', marginBottom: '0.35rem', background: '#F3F4F6', borderRadius: '6px', fontSize: '0.85rem' }}>
+                            <div>
+                              <div style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</div>
+                              <div style={{ color: '#6B7280', fontSize: '0.78rem' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)} ({calculateHours(s.start_time, s.end_time)}h)</div>
+                              {s.notes && <div style={{ fontSize: '0.75rem', color: '#9CA3AF', fontStyle: 'italic', marginTop: '2px' }}>{s.notes}</div>}
+                            </div>
+                            <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.25rem' }} title="Delete">🗑</button>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* One-Time Schedules */}
+              {hasOneTime && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', color: '#374151', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    📅 One-Time Schedules
+                  </h3>
+                  {Object.keys(oneTimeByDate).sort().map(dateKey => (
+                    <div key={dateKey} style={{ marginBottom: '0.75rem' }}>
+                      <div style={{ fontWeight: '600', fontSize: '0.85rem', color: '#1E40AF', marginBottom: '0.35rem' }}>
+                        {new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                      </div>
+                      {oneTimeByDate[dateKey].map(s => (
+                        <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', marginBottom: '0.35rem', background: '#F3F4F6', borderRadius: '6px', fontSize: '0.85rem' }}>
+                          <div>
+                            <span style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</span>
+                            <span style={{ color: '#6B7280', marginLeft: '0.75rem' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)} ({calculateHours(s.start_time, s.end_time)}h)</span>
+                            {s.notes && <div style={{ fontSize: '0.75rem', color: '#9CA3AF', fontStyle: 'italic', marginTop: '2px' }}>{s.notes}</div>}
+                          </div>
+                          <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.25rem' }} title="Delete">🗑</button>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Empty State */}
+              {!hasRecurring && !hasOneTime && !showForm && (
+                <div className="card" style={{ textAlign: 'center', padding: '2rem', color: '#6B7280' }}>
+                  No schedules yet for this caregiver. Click "+ Add Schedule" to create one.
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      )}
+        );
+      })()}
 
       {/* ══════════════════════════════════════════ */}
       {/* COVERAGE TAB */}
@@ -910,9 +1042,9 @@ const SchedulingHub = ({ token }) => {
           <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem', padding: '1rem' }}>
             <h3 style={{ margin: 0 }}>📈 Coverage Overview</h3>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: 'auto' }}>
-              <button className="btn btn-sm btn-secondary" onClick={() => { const d = new Date(coverageWeekOf); d.setDate(d.getDate() - 7); setCoverageWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>◀ Prev</button>
+              <button className="btn btn-sm btn-secondary" onClick={() => { const d = new Date(coverageWeekOf + 'T12:00:00'); d.setDate(d.getDate() - 7); setCoverageWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>◀ Prev</button>
               <input type="date" value={coverageWeekOf} onChange={(e) => setCoverageWeekOf(getWeekStart(new Date(e.target.value + 'T12:00:00')).toISOString().split('T')[0])} style={{ padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.85rem' }} />
-              <button className="btn btn-sm btn-secondary" onClick={() => { const d = new Date(coverageWeekOf); d.setDate(d.getDate() + 7); setCoverageWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>Next ▶</button>
+              <button className="btn btn-sm btn-secondary" onClick={() => { const d = new Date(coverageWeekOf + 'T12:00:00'); d.setDate(d.getDate() + 7); setCoverageWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>Next ▶</button>
               <button className="btn btn-sm btn-primary" onClick={() => setCoverageWeekOf(getWeekStart(new Date()).toISOString().split('T')[0])}>Today</button>
             </div>
             {coverageData && (
