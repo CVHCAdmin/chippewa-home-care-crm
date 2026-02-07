@@ -409,8 +409,59 @@ router.post('/optimize', verifyToken, requireAdmin, async (req, res) => {
         stopOrder: idx + 1,
         milesFromPrevious: item.milesFromPrevious,
         driveMinutesFromPrevious: item.driveMinutesFromPrevious,
-        calculatedArrival: stop.requestedStartTime || arrivalTime,
-        calculatedDeparture: stop.requestedEndTime || departureTime,
+        calculatedArrival: arrivalTime,
+        calculatedDeparture: departureTime,
+        scheduledStartTime: stop.requestedStartTime || null,
+        scheduledEndTime: stop.requestedEndTime || null,
+      };
+    });
+
+    // Calculate pre-optimization metrics (original schedule order)
+    let preOptMiles = 0;
+    let preOptDriveMinutes = 0;
+    let preOptPrevIdx = 0;
+    for (let i = 0; i < stopList.length; i++) {
+      const matrixIdx = i + 1; // stopList is in original order, matrix index = stopList index + 1
+      const key = `${preOptPrevIdx}-${matrixIdx}`;
+      const seg = distMatrix[key] || { distanceMiles: 0, durationMinutes: 0 };
+      preOptMiles += seg.distanceMiles;
+      preOptDriveMinutes += seg.durationMinutes;
+      preOptPrevIdx = matrixIdx;
+    }
+    // Return home from last original stop
+    const preOptReturnKey = `${preOptPrevIdx}-0`;
+    const preOptReturn = distMatrix[preOptReturnKey] || { distanceMiles: 0, durationMinutes: 0 };
+    preOptMiles += preOptReturn.distanceMiles;
+    preOptDriveMinutes += preOptReturn.durationMinutes;
+
+    // Build pre-optimization stop details (original order with driving segments)
+    let preOptRunningTime = req.body.startTime || '08:00';
+    let preOptPrevIdx2 = 0;
+    const preOptStops = stopList.map((stop, idx) => {
+      const matrixIdx = idx + 1;
+      const key = `${preOptPrevIdx2}-${matrixIdx}`;
+      const seg = distMatrix[key] || { distanceMiles: 0, durationMinutes: 0 };
+      
+      const arrivalMinutes = timeToMinutes(preOptRunningTime) + seg.durationMinutes + (idx > 0 ? bufferMinutes : 0);
+      const arrivalTime = minutesToTime(arrivalMinutes);
+      const departureMinutes = arrivalMinutes + stop.serviceMinutes;
+      const departureTime = minutesToTime(departureMinutes);
+      preOptRunningTime = departureTime;
+      preOptPrevIdx2 = matrixIdx;
+      
+      return {
+        clientId: stop.clientId,
+        clientName: stop.clientName,
+        address: stop.address,
+        stopOrder: idx + 1,
+        milesFromPrevious: seg.distanceMiles,
+        driveMinutesFromPrevious: seg.durationMinutes,
+        serviceUnits: stop.serviceUnits,
+        serviceMinutes: stop.serviceMinutes,
+        calculatedArrival: arrivalTime,
+        calculatedDeparture: departureTime,
+        scheduledStartTime: stop.requestedStartTime || null,
+        scheduledEndTime: stop.requestedEndTime || null,
       };
     });
 
@@ -430,6 +481,20 @@ router.post('/optimize', verifyToken, requireAdmin, async (req, res) => {
       },
       date,
       stops: finalStops,
+      preOptimization: {
+        stops: preOptStops,
+        totalMiles: Math.round(preOptMiles * 100) / 100,
+        totalDriveMinutes: preOptDriveMinutes,
+        totalServiceMinutes,
+        returnMiles: Math.round(preOptReturn.distanceMiles * 100) / 100,
+        returnDriveMinutes: preOptReturn.durationMinutes,
+        estimatedStartTime: preOptStops[0]?.calculatedArrival || '08:00',
+        estimatedEndTime: minutesToTime(
+          timeToMinutes(preOptStops[preOptStops.length - 1]?.calculatedDeparture || '08:00') +
+          preOptReturn.durationMinutes
+        ),
+        mileageReimbursement: Math.round(preOptMiles * mileageRate * 100) / 100,
+      },
       googleMapsUrl: gmapsParts.join('/'),
       summary: {
         totalStops: finalStops.length,
@@ -447,6 +512,8 @@ router.post('/optimize', verifyToken, requireAdmin, async (req, res) => {
         ),
         mileageReimbursement: Math.round(totalMiles * mileageRate * 100) / 100,
         mileageRate,
+        milesSaved: Math.round((preOptMiles - totalMiles) * 100) / 100,
+        drivingMinutesSaved: preOptDriveMinutes - totalDriveMinutes,
         routingSource: usingGoogle ? 'google_routes_api' : 'haversine_estimate',
         googleApiUsed: usingGoogle
       }
