@@ -576,7 +576,7 @@ router.get('/hours-summary', verifyToken, async (req, res) => {
             AND (s.date >= $1 AND s.date <= $2)
         ), 0) as scheduled_hours,
         COALESCE((
-          SELECT SUM(COALESCE(s.service_units, 0))
+          SELECT SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 900)
           FROM schedules s WHERE s.caregiver_id = u.id AND s.is_active = true
             AND (s.date >= $1 AND s.date <= $2)
         ), 0) as scheduled_units,
@@ -696,7 +696,7 @@ router.get('/daily/:date', verifyToken, async (req, res) => {
         latitude: parseFloat(row.cl_lat), longitude: parseFloat(row.cl_lng),
         address: [row.cl_address, row.cl_city, row.cl_state, row.cl_zip].filter(Boolean).join(', '),
         startTime: row.start_time, endTime: row.end_time,
-        serviceUnits: row.service_units || Math.round(serviceMinutes / 15),
+        serviceUnits: Math.round(serviceMinutes / 15),
         serviceMinutes, weeklyAuthorizedUnits: row.weekly_authorized_units
       });
     }
@@ -961,7 +961,7 @@ router.get('/load-schedule/:caregiverId/:date', verifyToken, async (req, res) =>
     const dayOfWeek = new Date(date + 'T12:00:00').getDay();
 
     const result = await db.query(`
-      SELECT s.id, s.client_id, s.start_time, s.end_time, s.service_units,
+      SELECT s.id, s.client_id, s.start_time, s.end_time,
              c.first_name, c.last_name, c.latitude, c.longitude,
              c.address, c.city, c.state, c.zip, c.weekly_authorized_units
       FROM schedules s
@@ -979,7 +979,7 @@ router.get('/load-schedule/:caregiverId/:date', verifyToken, async (req, res) =>
         address: [r.address, r.city, r.state, r.zip].filter(Boolean).join(', '),
         latitude: r.latitude ? parseFloat(r.latitude) : null,
         longitude: r.longitude ? parseFloat(r.longitude) : null,
-        serviceUnits: r.service_units || Math.round(serviceMinutes / 15),
+        serviceUnits: Math.round(serviceMinutes / 15),
         weeklyAuthorizedUnits: r.weekly_authorized_units || 0,
         startTime: r.start_time?.slice(0, 5) || '',
         endTime: r.end_time?.slice(0, 5) || '',
