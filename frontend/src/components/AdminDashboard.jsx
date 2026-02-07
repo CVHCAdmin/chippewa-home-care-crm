@@ -6,33 +6,27 @@ import ReferralSources from './admin/ReferralSources';
 import ClientsManagement from './admin/ClientsManagement';
 import CaregiverManagement from './admin/CaregiverManagement';
 import BillingDashboard from './admin/BillingDashboard';
-import SchedulesManagement from './admin/SchedulesManagement';
 import ClientOnboarding from './admin/ClientOnboarding';
 import PerformanceRatings from './admin/PerformanceRatings';
-import AbsenceManagement from './admin/AbsenceManagement';
 import ExpenseManagement from './admin/ExpenseManagement';
-import ScheduleCalendar from './admin/ScheduleCalendar';
 import CaregiverProfile from './admin/CaregiverProfile';
 import ApplicationsDashboard from './admin/ApplicationsDashboard';
 import CarePlans from './admin/CarePlans';
 import IncidentReporting from './admin/IncidentReporting';
-import CaregiverAvailability from './admin/CaregiverAvailability';
 import NotificationCenter from './admin/NotificationCenter';
 import ComplianceTracking from './admin/ComplianceTracking';
 import ReportsAnalytics from './admin/ReportsAnalytics';
 import PayrollProcessing from './admin/PayrollProcessing';
 import AuditLogs from './admin/AuditLogs';
 import ClaimsManagement from './admin/ClaimsManagement';
-import OpenShifts from './admin/OpenShifts';
 import MedicationsManagement from './admin/MedicationsManagement';
-import ShiftSwaps from './admin/ShiftSwaps';
 import DocumentsManagement from './admin/DocumentsManagement';
 import ADLTracking from './admin/ADLTracking';
 import BackgroundChecks from './admin/BackgroundChecks';
 import SMSManagement from './admin/SMSManagement';
 import FamilyPortalAdmin from './admin/FamilyPortalAdmin';
 import AlertsManagement from './admin/AlertsManagement';
-import SmartScheduling from './admin/SmartScheduling';
+import SchedulingHub from './admin/SchedulingHub';
 import RouteOptimizer from './admin/RouteOptimizer';
 
 const AdminDashboard = ({ user, token, onLogout }) => {
@@ -100,24 +94,20 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         return <CaregiverManagement token={token} onViewProfile={handleViewCaregiverProfile} />;
       case 'billing':
         return <BillingDashboard token={token} />;
-      case 'schedules':
-        return <SchedulesManagement token={token} />;
+      case 'scheduling':
+        return <SchedulingHub token={token} />;
+      case 'route-optimizer':
+        return <RouteOptimizer token={token} />;
       case 'onboarding':
         return <ClientOnboarding token={token} />;
       case 'performance':
         return <PerformanceRatings token={token} />;
-      case 'absences':
-        return <AbsenceManagement token={token} />;
-      case 'calendar':
-        return <ScheduleCalendar token={token} />;
       case 'applications':
         return <ApplicationsDashboard token={token} />;
       case 'care-plans':
         return <CarePlans token={token} />;
       case 'incidents':
         return <IncidentReporting token={token} />;
-      case 'availability':
-        return <CaregiverAvailability token={token} />;
       case 'notifications':
         return <NotificationCenter token={token} />;
       case 'compliance':
@@ -143,12 +133,8 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         ) : null;
       case 'claims':
         return <ClaimsManagement token={token} />;
-      case 'open-shifts':
-        return <OpenShifts token={token} />;
       case 'medications':
         return <MedicationsManagement token={token} />;
-      case 'shift-swaps':
-        return <ShiftSwaps token={token} />;
       case 'documents':
         return <DocumentsManagement token={token} />;
       case 'adl':
@@ -161,10 +147,6 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         return <FamilyPortalAdmin token={token} />;
       case 'alerts':
         return <AlertsManagement token={token} />;
-        case 'smart-scheduling':
-        return <SmartScheduling token={token} />;
-        case 'route-optimizer':
-        return <RouteOptimizer token={token} />;
       default:
         return <DashboardOverview summary={summary} token={token} />;
     }
@@ -250,11 +232,11 @@ const AdminDashboard = ({ user, token, onLogout }) => {
           </li>
           <li>
             <a
-              href="#smart-scheduling"
-              className={currentPage === 'smart-scheduling' ? 'active' : ''}
-              onClick={() => handlePageClick('smart-scheduling')}
+              href="#scheduling"
+              className={currentPage === 'scheduling' ? 'active' : ''}
+              onClick={() => handlePageClick('scheduling')}
             >
-              🧠 Smart Scheduling
+              📅 Scheduling
             </a>
           </li>
           <li>
@@ -264,60 +246,6 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               onClick={() => handlePageClick('route-optimizer')}
             >
               🗺️ Route Optimizer
-            </a>
-          </li>
-          <li>
-            <a
-              href="#calendar"
-              className={currentPage === 'calendar' ? 'active' : ''}
-              onClick={() => handlePageClick('calendar')}
-            >
-              Schedule Calendar
-            </a>
-          </li>
-          <li>
-            <a
-              href="#schedules"
-              className={currentPage === 'schedules' ? 'active' : ''}
-              onClick={() => handlePageClick('schedules')}
-            >
-              Schedules
-            </a>
-          </li>
-          <li>
-            <a
-              href="#open-shifts"
-              className={currentPage === 'open-shifts' ? 'active' : ''}
-              onClick={() => handlePageClick('open-shifts')}
-            >
-              Open Shifts
-            </a>
-          </li>
-          <li>
-            <a
-              href="#shift-swaps"
-              className={currentPage === 'shift-swaps' ? 'active' : ''}
-              onClick={() => handlePageClick('shift-swaps')}
-            >
-              Shift Swaps
-            </a>
-          </li>
-          <li>
-            <a
-              href="#availability"
-              className={currentPage === 'availability' ? 'active' : ''}
-              onClick={() => handlePageClick('availability')}
-            >
-              Availability
-            </a>
-          </li>
-          <li>
-            <a
-              href="#absences"
-              className={currentPage === 'absences' ? 'active' : ''}
-              onClick={() => handlePageClick('absences')}
-            >
-              Absences
             </a>
           </li>
 
