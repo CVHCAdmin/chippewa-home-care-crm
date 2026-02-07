@@ -19,6 +19,7 @@ const shiftSwapsRoutes = require('./shiftSwapsRoutes');
 const reportsRoutes = require('./reportsRoutes');
 const alertsRoutes = require('./alertsRoutes');
 const applicationsRoutes = require('./applicationsRoutes'); // NEW: Job applications
+const routeOptimizerRoutes = require('./routeOptimizerRoutes'); // Route optimizer
 
 // Register routes with their prefixes
 router.use('/billing', billingRoutes);
@@ -35,6 +36,7 @@ router.use('/shift-swaps', shiftSwapsRoutes);
 router.use('/reports', reportsRoutes);
 router.use('/alerts', alertsRoutes);
 router.use('/applications', applicationsRoutes); // NEW: Job applications
+router.use('/route-optimizer', routeOptimizerRoutes); // Route optimizer
 
 // Also expose billing/payroll endpoints at root level for backwards compatibility
 router.use('/', billingRoutes);  // For /api/authorizations, /api/invoice-payments, etc.
