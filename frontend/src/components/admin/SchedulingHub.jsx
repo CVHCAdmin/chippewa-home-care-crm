@@ -862,7 +862,7 @@ const SchedulingHub = ({ token }) => {
                       <div>
                         <strong>{sg.first_name} {sg.last_name}</strong>
                         <div style={{ fontSize: '0.82rem', color: '#666' }}>
-                          {sg.distance ? `${sg.distance.toFixed(1)} mi · ` : ''}{sg.weeklyHours?.toFixed(1) || 0}h / {sg.maxHours || 40}h
+                          {sg.distance ? `${parseFloat(sg.distance).toFixed(1)} mi · ` : ''}{parseFloat(sg.weeklyHours || 0).toFixed(1)}h / {sg.maxHours || 40}h
                         </div>
                       </div>
                       <div style={{ ...s.badge(sg.score >= 80 ? '#D1FAE5' : sg.score >= 50 ? '#FEF3C7' : '#FEE2E2', sg.score >= 80 ? '#059669' : sg.score >= 50 ? '#D97706' : '#DC2626') }}>
@@ -943,7 +943,7 @@ const SchedulingHub = ({ token }) => {
                       <div key={cg.id} style={{ padding: '0.6rem', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontWeight: '600', fontSize: '0.88rem' }}>{cg.name}</div>
-                          <div style={{ fontSize: '0.78rem', color: '#666' }}>{cg.scheduledHours.toFixed(1)}h / {cg.maxHours}h</div>
+                          <div style={{ fontSize: '0.78rem', color: '#666' }}>{parseFloat(cg.scheduledHours || 0).toFixed(1)}h / {cg.maxHours}h</div>
                         </div>
                         <div style={{ width: '90px' }}>
                           <div style={{ height: '7px', background: '#E5E7EB', borderRadius: '4px', overflow: 'hidden' }}>
