@@ -28,6 +28,7 @@ import FamilyPortalAdmin from './admin/FamilyPortalAdmin';
 import AlertsManagement from './admin/AlertsManagement';
 import SchedulingHub from './admin/SchedulingHub';
 import RouteOptimizer from './admin/RouteOptimizer';
+import CompanyOptimizer from './admin/CompanyOptimizer';
 
 const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -98,6 +99,8 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         return <SchedulingHub token={token} />;
       case 'route-optimizer':
         return <RouteOptimizer token={token} />;
+      case 'company-optimizer':
+        return <CompanyOptimizer token={token} />;
       case 'onboarding':
         return <ClientOnboarding token={token} />;
       case 'performance':
@@ -246,6 +249,15 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               onClick={() => handlePageClick('route-optimizer')}
             >
               🗺️ Route Optimizer
+            </a>
+          </li>
+          <li>
+            <a
+              href="#company-optimizer"
+              className={currentPage === 'company-optimizer' ? 'active' : ''}
+              onClick={() => handlePageClick('company-optimizer')}
+            >
+              🧠 Smart Matching
             </a>
           </li>
 

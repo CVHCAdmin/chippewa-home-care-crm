@@ -397,7 +397,9 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
       medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
       // Billing fields
       referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
-      weeklyAuthorizedUnits
+      weeklyAuthorizedUnits,
+      // Schedule optimization preferences
+      serviceDaysPerWeek, serviceAllowedDays
     } = req.body;
     
     const result = await db.query(
@@ -435,8 +437,10 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
         private_pay_rate_type = COALESCE($31, private_pay_rate_type),
         billing_notes = $32,
         weekly_authorized_units = $33,
+        service_days_per_week = COALESCE($34, service_days_per_week),
+        service_allowed_days = COALESCE($35, service_allowed_days),
         updated_at = NOW()
-       WHERE id = $34 RETURNING *`,
+       WHERE id = $36 RETURNING *`,
       [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip, 
        serviceType, medicalConditions, allergies, medications, notes,
        insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
@@ -444,6 +448,7 @@ app.put('/api/clients/:id', verifyToken, async (req, res) => {
        medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
        referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
        weeklyAuthorizedUnits,
+       serviceDaysPerWeek || null, serviceAllowedDays ? JSON.stringify(serviceAllowedDays) : null,
        req.params.id]
     );
 
@@ -3377,6 +3382,7 @@ app.use('/api/shift-swaps', verifyToken, require('./routes/shiftSwapsRoutes'));
 app.use('/api/alerts', verifyToken, require('./routes/alertsRoutes'));
 app.use('/api', billingRoutes);
 app.use('/api/route-optimizer', verifyToken, require('./routes/routeOptimizerRoutes'));
+app.use('/api/matching', verifyToken, require('./routes/matchingRoutes'));
 
 // ============ CARE TYPES ============
 app.get('/api/care-types', verifyToken, async (req, res) => {
