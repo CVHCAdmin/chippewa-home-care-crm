@@ -3369,6 +3369,7 @@ app.use('/api/family-portal', require('./routes/familyPortalRoutes')); // No ver
 app.use('/api/shift-swaps', verifyToken, require('./routes/shiftSwapsRoutes'));
 app.use('/api/alerts', verifyToken, require('./routes/alertsRoutes'));
 app.use('/api', billingRoutes);
+app.use('/api/route-optimizer', verifyToken, require('./routes/routeOptimizerRoutes'));
 
 // ============ CARE TYPES ============
 app.get('/api/care-types', verifyToken, async (req, res) => {
