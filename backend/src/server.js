@@ -4350,8 +4350,9 @@ app.get('/api/scheduling/caregiver-hours/:caregiverId', verifyToken, async (req,
 // GET /api/scheduling/coverage-overview - Get caregiver hours and under-scheduled clients
 app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (req, res) => {
   try {
-    // Get current week boundaries
-    const now = new Date();
+    // Use weekOf param if provided, otherwise default to current week
+    const { weekOf } = req.query;
+    const now = weekOf ? new Date(weekOf + 'T12:00:00') : new Date();
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - now.getDay());
     weekStart.setHours(0, 0, 0, 0);
