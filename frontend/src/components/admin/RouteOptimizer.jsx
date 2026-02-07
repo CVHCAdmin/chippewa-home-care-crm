@@ -221,8 +221,10 @@ const RouteOptimizer = ({ token }) => {
         })
       });
 
-      // Store pre-optimization order for comparison
-      if (!preOptimizeMiles) setPreOptimizeMiles(data.summary.totalMiles * 1.3); // rough estimate
+      // Store pre-optimization miles from real calculation
+      if (data.preOptimization) {
+        setPreOptimizeMiles(data.preOptimization.totalMiles);
+      }
 
       setOptimizedRoute(data);
       // Update stops to match optimized order
@@ -230,10 +232,13 @@ const RouteOptimizer = ({ token }) => {
         clientId: s.clientId, clientName: s.clientName, address: s.address,
         latitude: s.latitude, longitude: s.longitude,
         serviceUnits: s.serviceUnits, weeklyAuthorizedUnits: s.weeklyAuthorizedUnits,
-        startTime: s.requestedStartTime || '', endTime: s.requestedEndTime || '',
+        startTime: s.scheduledStartTime || '', endTime: s.scheduledEndTime || '',
         hasCoords: true
       })));
-      showMsg(`Route optimized! ${data.summary.totalMiles} mi · ${data.summary.totalStops} stops · ${data.summary.routingSource === 'google_routes_api' ? 'Google road miles' : 'Estimated'}`);
+      const savedMsg = data.summary.milesSaved > 0
+        ? `Saves ${data.summary.milesSaved} mi vs current schedule!`
+        : 'Schedule order is already optimal.';
+      showMsg(`Route optimized! ${data.summary.totalMiles} mi · ${data.summary.totalStops} stops · ${savedMsg}`);
     } catch (e) {
       showMsg('Optimization failed: ' + e.message, 'error');
     } finally {
@@ -708,6 +713,25 @@ const RouteOptimizer = ({ token }) => {
         {/* ── Right: Optimized results ── */}
         {optimizedRoute && (
           <div>
+            {/* Savings banner */}
+            {optimizedRoute.summary.milesSaved > 0 && (
+              <div style={{ padding: '0.65rem 0.85rem', background: 'linear-gradient(135deg, #f0fdf4, #ecfdf5)', borderRadius: '10px', border: '1px solid #bbf7d0', marginBottom: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: '800', color: '#16a34a' }}>
+                  ✅ Optimization saves {optimizedRoute.summary.milesSaved} mi &amp; {optimizedRoute.summary.drivingMinutesSaved} min driving
+                </span>
+                <span style={{ fontSize: '0.78rem', color: '#15803d' }}>
+                  💰 ${(optimizedRoute.summary.milesSaved * mileageRate).toFixed(2)} less in mileage
+                </span>
+              </div>
+            )}
+            {optimizedRoute.summary.milesSaved <= 0 && (
+              <div style={{ padding: '0.65rem 0.85rem', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', marginBottom: '0.85rem', textAlign: 'center' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#64748b' }}>
+                  📍 Schedule order is already optimal — no changes needed
+                </span>
+              </div>
+            )}
+
             {/* Stats */}
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.85rem' }}>
               {[
@@ -724,12 +748,45 @@ const RouteOptimizer = ({ token }) => {
               ))}
             </div>
 
-            {/* Route detail */}
+            {/* Current Schedule vs Optimized comparison */}
+            {optimizedRoute.preOptimization && optimizedRoute.summary.milesSaved > 0 && (
+              <div style={s.card}>
+                <div style={s.cardTitle}>📅 Current Schedule Order</div>
+                <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.5rem' }}>
+                  {optimizedRoute.preOptimization.totalMiles} mi · {optimizedRoute.preOptimization.totalDriveMinutes}m driving · ${optimizedRoute.preOptimization.mileageReimbursement} mileage
+                </div>
+                {/* Mini stop list */}
+                {optimizedRoute.preOptimization.stops.map((stop, idx) => (
+                  <div key={stop.clientId} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.5rem', borderBottom: '1px solid #f0f0f0', fontSize: '0.8rem' }}>
+                    <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: '#94a3b8', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: '800', flexShrink: 0 }}>{idx + 1}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: '600' }}>{stop.clientName}</span>
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#999', flexShrink: 0 }}>
+                      {stop.scheduledStartTime && stop.scheduledEndTime
+                        ? <span>{stop.scheduledStartTime} – {stop.scheduledEndTime} <span style={{ color: '#d97706', fontWeight: '600' }}>scheduled</span></span>
+                        : <span>{stop.calculatedArrival} – {stop.calculatedDeparture}</span>
+                      }
+                    </div>
+                    {idx < optimizedRoute.preOptimization.stops.length - 1 && (
+                      <div style={{ fontSize: '0.68rem', color: '#ccc', flexShrink: 0 }}>
+                        → {optimizedRoute.preOptimization.stops[idx + 1]?.milesFromPrevious} mi
+                      </div>
+                    )}
+                  </div>
+                ))}
+                <div style={{ padding: '0.35rem 0.5rem', fontSize: '0.72rem', color: '#999' }}>
+                  🏠 Return: {optimizedRoute.preOptimization.returnMiles} mi · ~{optimizedRoute.preOptimization.returnDriveMinutes}m
+                </div>
+              </div>
+            )}
+
+            {/* Optimized Route detail */}
             <div style={s.card} ref={printRef}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                <div style={s.cardTitle}>📋 Optimized Route</div>
-                <span style={s.badge(optimizedRoute.summary.googleApiUsed ? '#16a34a' : '#d97706')}>
-                  {optimizedRoute.summary.googleApiUsed ? '🗺️ Google Road Miles' : '📐 Estimated'}
+                <div style={s.cardTitle}>🧠 Optimized Route</div>
+                <span style={s.badge(optimizedRoute.summary.routingSource === 'google_routes_api' ? '#16a34a' : '#d97706')}>
+                  {optimizedRoute.summary.routingSource === 'google_routes_api' ? '🗺️ Google Road Miles' : '📐 Estimated'}
                 </span>
               </div>
               <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.75rem' }}>
@@ -763,6 +820,9 @@ const RouteOptimizer = ({ token }) => {
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       <div style={{ fontWeight: '700', fontSize: '0.8rem', color: '#2563eb' }}>{stop.calculatedArrival} – {stop.calculatedDeparture}</div>
                       <div style={{ fontSize: '0.68rem', color: '#aaa' }}>{stop.serviceUnits}u · {stop.serviceMinutes}min</div>
+                      {stop.scheduledStartTime && stop.scheduledStartTime !== stop.calculatedArrival && (
+                        <div style={{ fontSize: '0.65rem', color: '#d97706' }}>was {stop.scheduledStartTime} – {stop.scheduledEndTime}</div>
+                      )}
                     </div>
                   </div>
                 </React.Fragment>
