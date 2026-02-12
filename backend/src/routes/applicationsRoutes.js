@@ -170,9 +170,12 @@ router.post('/:id/notes', auth, async (req, res) => {
 
 // Convert approved applicant to caregiver
 router.post('/:id/hire', auth, async (req, res) => {
-  const { hourlyRate } = req.body;
+  const { hourlyRate, email, password } = req.body;
   
   try {
+    const bcrypt = require('bcryptjs');
+    const { v4: uuidv4 } = require('uuid');
+
     // Get application
     const app = await db.query('SELECT * FROM job_applications WHERE id = $1', [req.params.id]);
     if (app.rows.length === 0) {
@@ -181,31 +184,55 @@ router.post('/:id/hire', auth, async (req, res) => {
 
     const a = app.rows[0];
 
-    // Create caregiver profile
+    // Check if already hired
+    if (a.status === 'hired') {
+      return res.status(400).json({ error: 'This applicant has already been hired' });
+    }
+
+    // Use applicant's email or provided email
+    const caregiverEmail = email || a.email;
+    if (!caregiverEmail) {
+      return res.status(400).json({ error: 'Email is required to create caregiver account' });
+    }
+
+    // Check email not already in use
+    const existing = await db.query('SELECT id FROM users WHERE email = $1', [caregiverEmail]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'A user with this email already exists' });
+    }
+
+    // Generate temp password if not provided
+    const tempPassword = password || `CVHC${a.last_name.charAt(0).toUpperCase()}${Math.random().toString(36).slice(-6)}`;
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    const userId = uuidv4();
+
+    // Create caregiver in users table
     const caregiver = await db.query(`
-      INSERT INTO caregiver_profiles (
-        first_name, last_name, email, phone, address, city, state, zip,
-        date_of_birth, hourly_rate, status, hire_date, application_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', CURRENT_DATE, $11)
-      RETURNING id
-    `, [
-      a.first_name, a.last_name, a.email, a.phone, a.address, a.city, a.state, a.zip,
-      a.date_of_birth, hourlyRate || 15.00, req.params.id
-    ]);
+      INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role, default_pay_rate)
+      VALUES ($1, $2, $3, $4, $5, $6, 'caregiver', $7)
+      RETURNING id, email, first_name, last_name, role, default_pay_rate
+    `, [userId, caregiverEmail, hashedPassword, a.first_name, a.last_name, a.phone, hourlyRate || 15.00]);
 
     // Update application status
     await db.query(`
-      UPDATE job_applications SET status = 'hired', updated_at = NOW() WHERE id = $1
-    `, [req.params.id]);
+      UPDATE job_applications SET status = 'hired', hired_caregiver_id = $1, updated_at = NOW() WHERE id = $2
+    `, [userId, req.params.id]);
 
     // Log it
     await db.query(`
       INSERT INTO application_status_history (application_id, status, notes, changed_by)
-      VALUES ($1, 'hired', 'Converted to caregiver profile', $2)
-    `, [req.params.id, req.user.id]);
+      VALUES ($1, 'hired', $2, $3)
+    `, [req.params.id, `Converted to caregiver. Temp password: ${tempPassword}`, req.user.id]);
 
-    res.json({ success: true, caregiverId: caregiver.rows[0].id });
+    res.json({ 
+      success: true, 
+      caregiverId: userId, 
+      tempPassword,
+      caregiver: caregiver.rows[0],
+      message: `${a.first_name} ${a.last_name} is now a caregiver. Temp password: ${tempPassword}`
+    });
   } catch (error) {
+    console.error('Hire error:', error);
     res.status(500).json({ error: error.message });
   }
 });
