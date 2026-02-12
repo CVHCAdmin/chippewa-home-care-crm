@@ -3229,6 +3229,39 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
   }
 });
 
+// PUT /api/schedules-all/:scheduleId - Update a schedule in-place
+app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const { clientId, dayOfWeek, date, startTime, endTime, notes } = req.body;
+
+    if (startTime && endTime && startTime >= endTime) {
+      return res.status(400).json({ error: 'End time must be after start time' });
+    }
+
+    const result = await db.query(
+      `UPDATE schedules SET
+        client_id = COALESCE($1, client_id),
+        day_of_week = $2,
+        date = $3,
+        start_time = COALESCE($4, start_time),
+        end_time = COALESCE($5, end_time),
+        notes = $6,
+        updated_at = NOW()
+       WHERE id = $7 AND is_active = true
+       RETURNING *`,
+      [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime, notes || null, scheduleId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Schedule not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 // ---- CAREGIVER PROFILES ----
 
