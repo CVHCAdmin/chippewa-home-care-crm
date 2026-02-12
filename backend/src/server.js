@@ -3215,7 +3215,8 @@ app.put('/api/notifications/preferences', verifyToken, async (req, res) => {
 app.get('/api/schedules-all', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT s.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
+      `SELECT s.*, s.frequency, s.effective_date, s.anchor_date,
+              u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
               c.first_name as client_first_name, c.last_name as client_last_name
        FROM schedules s
        JOIN users u ON s.caregiver_id = u.id
@@ -3233,7 +3234,7 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
 app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
   try {
     const { scheduleId } = req.params;
-    const { clientId, dayOfWeek, date, startTime, endTime, notes } = req.body;
+    const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate } = req.body;
 
     if (startTime && endTime && startTime >= endTime) {
       return res.status(400).json({ error: 'End time must be after start time' });
@@ -3247,10 +3248,13 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
         start_time = COALESCE($4, start_time),
         end_time = COALESCE($5, end_time),
         notes = $6,
+        frequency = COALESCE($7, frequency),
+        effective_date = COALESCE($8, effective_date),
+        anchor_date = COALESCE($9, anchor_date),
         updated_at = NOW()
-       WHERE id = $7 AND is_active = true
+       WHERE id = $10 AND is_active = true
        RETURNING *`,
-      [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime, notes || null, scheduleId]
+      [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime, notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId]
     );
 
     if (result.rows.length === 0) {
@@ -3262,6 +3266,163 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════
+// PROSPECTS & PROSPECT APPOINTMENTS
+// ═══════════════════════════════════════════════
+
+// GET /api/prospects
+app.get('/api/prospects', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT * FROM prospects WHERE status != 'inactive' ORDER BY created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /api/prospects
+app.post('/api/prospects', verifyToken, async (req, res) => {
+  try {
+    const { firstName, lastName, phone, email, address, city, state, notes, source } = req.body;
+    if (!firstName || !lastName) return res.status(400).json({ error: 'First and last name required' });
+    const result = await db.query(
+      `INSERT INTO prospects (first_name, last_name, phone, email, address, city, state, notes, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [firstName, lastName, phone || null, email || null, address || null, city || null, state || 'WI', notes || null, source || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// PUT /api/prospects/:id
+app.put('/api/prospects/:id', verifyToken, async (req, res) => {
+  try {
+    const { firstName, lastName, phone, email, address, city, state, notes, source, status } = req.body;
+    const result = await db.query(
+      `UPDATE prospects SET first_name = COALESCE($1, first_name), last_name = COALESCE($2, last_name),
+        phone = $3, email = $4, address = $5, city = $6, state = COALESCE($7, state),
+        notes = $8, source = $9, status = COALESCE($10, status), updated_at = NOW()
+       WHERE id = $11 RETURNING *`,
+      [firstName, lastName, phone, email, address, city, state, notes, source, status, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Prospect not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// DELETE /api/prospects/:id
+app.delete('/api/prospects/:id', verifyToken, async (req, res) => {
+  try {
+    await db.query(`UPDATE prospects SET status = 'inactive' WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /api/prospects/:id/convert - Convert prospect to client
+app.post('/api/prospects/:id/convert', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const prospect = await db.query(`SELECT * FROM prospects WHERE id = $1`, [req.params.id]);
+    if (prospect.rows.length === 0) return res.status(404).json({ error: 'Prospect not found' });
+    const p = prospect.rows[0];
+
+    // Create client from prospect data
+    const clientResult = await db.query(
+      `INSERT INTO clients (first_name, last_name, phone, email, address, city, state, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active') RETURNING *`,
+      [p.first_name, p.last_name, p.phone, p.email, p.address, p.city, p.state]
+    );
+    const newClient = clientResult.rows[0];
+
+    // Update prospect status
+    await db.query(
+      `UPDATE prospects SET status = 'converted', converted_client_id = $1, updated_at = NOW() WHERE id = $2`,
+      [newClient.id, req.params.id]
+    );
+
+    res.json({ client: newClient, message: 'Prospect converted to client' });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/prospect-appointments
+app.get('/api/prospect-appointments', verifyToken, async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    let query = `SELECT pa.*, p.first_name as prospect_first_name, p.last_name as prospect_last_name,
+                        u.first_name as caregiver_first_name, u.last_name as caregiver_last_name
+                 FROM prospect_appointments pa
+                 JOIN prospects p ON pa.prospect_id = p.id
+                 LEFT JOIN users u ON pa.caregiver_id = u.id
+                 WHERE pa.status != 'cancelled'`;
+    const params = [];
+    if (month && year) {
+      query += ` AND EXTRACT(MONTH FROM pa.appointment_date) = $1 AND EXTRACT(YEAR FROM pa.appointment_date) = $2`;
+      params.push(month, year);
+    }
+    query += ` ORDER BY pa.appointment_date, pa.start_time`;
+    const result = await db.query(query, params);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /api/prospect-appointments
+app.post('/api/prospect-appointments', verifyToken, async (req, res) => {
+  try {
+    const { prospectId, caregiverId, appointmentDate, startTime, endTime, appointmentType, location, notes } = req.body;
+    if (!prospectId || !appointmentDate || !startTime || !endTime) {
+      return res.status(400).json({ error: 'Prospect, date, and times required' });
+    }
+    const result = await db.query(
+      `INSERT INTO prospect_appointments (prospect_id, caregiver_id, appointment_date, start_time, end_time, appointment_type, location, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [prospectId, caregiverId || null, appointmentDate, startTime, endTime, appointmentType || 'assessment', location || null, notes || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// PUT /api/prospect-appointments/:id
+app.put('/api/prospect-appointments/:id', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, appointmentDate, startTime, endTime, appointmentType, location, notes, status } = req.body;
+    const result = await db.query(
+      `UPDATE prospect_appointments SET
+        caregiver_id = $1, appointment_date = COALESCE($2, appointment_date),
+        start_time = COALESCE($3, start_time), end_time = COALESCE($4, end_time),
+        appointment_type = COALESCE($5, appointment_type), location = $6,
+        notes = $7, status = COALESCE($8, status)
+       WHERE id = $9 RETURNING *`,
+      [caregiverId || null, appointmentDate, startTime, endTime, appointmentType, location || null, notes || null, status, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// DELETE /api/prospect-appointments/:id
+app.delete('/api/prospect-appointments/:id', verifyToken, async (req, res) => {
+  try {
+    await db.query(`UPDATE prospect_appointments SET status = 'cancelled' WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+
+// POST /api/schedules-enhanced - Create schedule with frequency/effective_date support
+app.post('/api/schedules-enhanced', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate } = req.body;
+    if (!caregiverId || !clientId || !startTime || !endTime) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const id = uuidv4();
+    const result = await db.query(
+      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      [id, caregiverId, clientId, scheduleType || 'recurring', dayOfWeek !== undefined && dayOfWeek !== null ? dayOfWeek : null, date || null, startTime, endTime, notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
 
 // ---- CAREGIVER PROFILES ----
 
@@ -4175,13 +4336,38 @@ app.get('/api/scheduling/week-view', verifyToken, async (req, res) => {
       weekData[cg.id] = { caregiver: cg, days: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] } };
     });
 
+    // Helper: check if a recurring schedule applies to a given date
+    const isScheduleActiveForDate = (schedule, targetDate) => {
+      // Forward-only: if effective_date exists, only show from that date forward
+      if (schedule.effective_date) {
+        const effDate = new Date(schedule.effective_date);
+        effDate.setHours(0,0,0,0);
+        const target = new Date(targetDate);
+        target.setHours(0,0,0,0);
+        if (target < effDate) return false;
+      }
+      // Bi-weekly: check if this is an "on" week
+      if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
+        const anchor = new Date(schedule.anchor_date);
+        const target = new Date(targetDate);
+        const diffWeeks = Math.round((target - anchor) / (7 * 24 * 60 * 60 * 1000));
+        if (diffWeeks % 2 !== 0) return false;
+      }
+      return true;
+    };
+
     schedules.rows.forEach(s => {
       if (!weekData[s.caregiver_id]) return;
       if (s.date) {
         const dow = new Date(s.date).getDay();
         weekData[s.caregiver_id].days[dow].push({ ...s, isRecurring: false });
       } else if (s.day_of_week !== null) {
-        weekData[s.caregiver_id].days[s.day_of_week].push({ ...s, isRecurring: true });
+        // Calculate the actual date for this day_of_week in the current week
+        const dayDate = new Date(weekStart);
+        dayDate.setDate(dayDate.getDate() + s.day_of_week);
+        if (isScheduleActiveForDate(s, dayDate)) {
+          weekData[s.caregiver_id].days[s.day_of_week].push({ ...s, isRecurring: true });
+        }
       }
     });
 
