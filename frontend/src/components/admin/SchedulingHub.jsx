@@ -58,8 +58,17 @@ const SchedulingHub = ({ token }) => {
   const [conflicts, setConflicts] = useState([]);
 
   // ── Edit Schedule Modal ──
-  const [editModal, setEditModal] = useState(null); // { id, clientId, dayOfWeek, date, startTime, endTime, notes, scheduleType }
+  const [editModal, setEditModal] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
+
+  // ── Prospects state ──
+  const [prospects, setProspects] = useState([]);
+  const [prospectAppts, setProspectAppts] = useState([]);
+  const [showProspectForm, setShowProspectForm] = useState(false);
+  const [prospectForm, setProspectForm] = useState({ firstName: '', lastName: '', phone: '', email: '', notes: '', source: '' });
+  const [showProspectApptForm, setShowProspectApptForm] = useState(false);
+  const [prospectApptForm, setProspectApptForm] = useState({ prospectId: '', caregiverId: '', appointmentDate: '', startTime: '10:00', endTime: '11:00', appointmentType: 'assessment', location: '', notes: '' });
+  const [prospectSaving, setProspectSaving] = useState(false);
 
   // ── Coverage state ──
   const [coverageData, setCoverageData] = useState(null);
@@ -137,7 +146,7 @@ const SchedulingHub = ({ token }) => {
 
   useEffect(() => {
     if (activeTab === 'calendar') loadCalendarData();
-  }, [activeTab]);
+  }, [activeTab, calCurrentDate]);
 
   useEffect(() => {
     if (activeTab === 'open-shifts') loadOpenShifts();
@@ -158,14 +167,16 @@ const SchedulingHub = ({ token }) => {
 
   const loadCoreData = async () => {
     try {
-      const [cg, cl, ct] = await Promise.all([
+      const [cg, cl, ct, pr] = await Promise.all([
         api('/api/caregivers'),
         api('/api/clients'),
-        api('/api/care-types').catch(() => [])
+        api('/api/care-types').catch(() => []),
+        api('/api/prospects').catch(() => [])
       ]);
       setCaregivers(Array.isArray(cg) ? cg : []);
       setClients(Array.isArray(cl) ? cl : []);
       setCareTypes(Array.isArray(ct) ? ct : []);
+      setProspects(Array.isArray(pr) ? pr : []);
     } catch (e) { console.error('Failed to load data:', e); }
     finally { setLoading(false); }
   };
@@ -188,9 +199,75 @@ const SchedulingHub = ({ token }) => {
 
   const loadCalendarData = async () => {
     try {
-      const data = await api('/api/schedules-all');
-      setCalSchedules(Array.isArray(data) ? data : []);
+      const [schedData, prospData, apptData] = await Promise.all([
+        api('/api/schedules-all'),
+        api('/api/prospects').catch(() => []),
+        api(`/api/prospect-appointments?month=${calCurrentDate.getMonth() + 1}&year=${calCurrentDate.getFullYear()}`).catch(() => [])
+      ]);
+      setCalSchedules(Array.isArray(schedData) ? schedData : []);
+      setProspects(Array.isArray(prospData) ? prospData : []);
+      setProspectAppts(Array.isArray(apptData) ? apptData : []);
     } catch (e) { console.error(e); }
+  };
+
+  const loadProspects = async () => {
+    try {
+      const data = await api('/api/prospects');
+      setProspects(Array.isArray(data) ? data : []);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadProspectAppts = async () => {
+    try {
+      const data = await api(`/api/prospect-appointments?month=${calCurrentDate.getMonth() + 1}&year=${calCurrentDate.getFullYear()}`);
+      setProspectAppts(Array.isArray(data) ? data : []);
+    } catch (e) { console.error(e); }
+  };
+
+  const createProspect = async () => {
+    if (!prospectForm.firstName || !prospectForm.lastName) { showMsg('Name required', 'error'); return; }
+    setProspectSaving(true);
+    try {
+      await api('/api/prospects', { method: 'POST', body: JSON.stringify(prospectForm) });
+      showMsg('Prospect added!');
+      setProspectForm({ firstName: '', lastName: '', phone: '', email: '', notes: '', source: '' });
+      setShowProspectForm(false);
+      loadProspects();
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+    finally { setProspectSaving(false); }
+  };
+
+  const createProspectAppt = async () => {
+    if (!prospectApptForm.prospectId || !prospectApptForm.appointmentDate) { showMsg('Select prospect and date', 'error'); return; }
+    if (prospectApptForm.startTime >= prospectApptForm.endTime) { showMsg('End time must be after start', 'error'); return; }
+    setProspectSaving(true);
+    try {
+      await api('/api/prospect-appointments', { method: 'POST', body: JSON.stringify(prospectApptForm) });
+      showMsg('Appointment scheduled!');
+      setProspectApptForm({ prospectId: '', caregiverId: '', appointmentDate: '', startTime: '10:00', endTime: '11:00', appointmentType: 'assessment', location: '', notes: '' });
+      setShowProspectApptForm(false);
+      loadProspectAppts();
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+    finally { setProspectSaving(false); }
+  };
+
+  const convertProspect = async (prospectId) => {
+    if (!window.confirm('Convert this prospect to a full client?')) return;
+    try {
+      const result = await api(`/api/prospects/${prospectId}/convert`, { method: 'POST' });
+      showMsg(`Converted to client: ${result.client.first_name} ${result.client.last_name}`);
+      loadProspects();
+      loadCoreData();
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+  };
+
+  const deleteProspectAppt = async (id) => {
+    if (!window.confirm('Cancel this appointment?')) return;
+    try {
+      await api(`/api/prospect-appointments/${id}`, { method: 'DELETE' });
+      showMsg('Appointment cancelled');
+      loadProspectAppts();
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
   };
 
   const loadOpenShifts = async () => {
@@ -301,30 +378,49 @@ const SchedulingHub = ({ token }) => {
     if (!formData.caregiverId || !formData.clientId) { showMsg('Select both caregiver and client', 'error'); return; }
     if (formData.scheduleType === 'recurring' && formData.dayOfWeek === '') { showMsg('Select a day of week', 'error'); return; }
     if (formData.scheduleType === 'one-time' && !formData.date) { showMsg('Select a date', 'error'); return; }
-    if (formData.scheduleType === 'multi-day' && selectedDays.length === 0) { showMsg('Select at least one day', 'error'); return; }
+    if ((formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') && selectedDays.length === 0) { showMsg('Select at least one day', 'error'); return; }
     if (formData.startTime >= formData.endTime) { showMsg('End time must be after start time', 'error'); return; }
+
+    const today = new Date().toISOString().split('T')[0];
+    // Anchor date = start of current week (for bi-weekly alignment)
+    const now = new Date();
+    const anchorDate = new Date(now); 
+    anchorDate.setDate(now.getDate() - now.getDay());
+    const anchorStr = anchorDate.toISOString().split('T')[0];
 
     setSaving(true);
     try {
-      if (formData.scheduleType === 'multi-day') {
+      if (formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') {
+        const freq = formData.scheduleType === 'bi-weekly' ? 'biweekly' : 'weekly';
         let created = 0, failed = 0;
         for (const dayOfWeek of selectedDays) {
           try {
-            await api('/api/schedules', { method: 'POST', body: JSON.stringify({
+            await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
               caregiverId: formData.caregiverId, clientId: formData.clientId,
               scheduleType: 'recurring', dayOfWeek, date: null,
-              startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes
+              startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes,
+              frequency: freq, effectiveDate: today, anchorDate: anchorStr
             })});
             created++;
           } catch { failed++; }
         }
-        showMsg(`Created ${created} recurring schedule${created !== 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`);
+        const label = freq === 'biweekly' ? 'bi-weekly' : 'recurring';
+        showMsg(`Created ${created} ${label} schedule${created !== 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`);
+      } else if (formData.scheduleType === 'recurring') {
+        await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
+          caregiverId: formData.caregiverId, clientId: formData.clientId,
+          scheduleType: 'recurring',
+          dayOfWeek: parseInt(formData.dayOfWeek), date: null,
+          startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes,
+          frequency: 'weekly', effectiveDate: today, anchorDate: null
+        })});
+        showMsg('Schedule created!');
       } else {
+        // One-time - use original endpoint (no frequency/effective_date needed)
         await api('/api/schedules', { method: 'POST', body: JSON.stringify({
           caregiverId: formData.caregiverId, clientId: formData.clientId,
-          scheduleType: formData.scheduleType,
-          dayOfWeek: formData.scheduleType === 'recurring' ? parseInt(formData.dayOfWeek) : null,
-          date: formData.scheduleType === 'one-time' ? formData.date : null,
+          scheduleType: 'one-time',
+          dayOfWeek: null, date: formData.date,
           startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes
         })});
         showMsg('Schedule created!');
@@ -356,7 +452,8 @@ const SchedulingHub = ({ token }) => {
       startTime: schedule.start_time || '09:00',
       endTime: schedule.end_time || '13:00',
       notes: schedule.notes || '',
-      scheduleType: isRecurring ? 'recurring' : 'one-time'
+      scheduleType: isRecurring ? 'recurring' : 'one-time',
+      frequency: schedule.frequency || 'weekly'
     });
   };
 
@@ -373,7 +470,8 @@ const SchedulingHub = ({ token }) => {
           date: editModal.scheduleType === 'one-time' ? editModal.date : null,
           startTime: editModal.startTime,
           endTime: editModal.endTime,
-          notes: editModal.notes
+          notes: editModal.notes,
+          frequency: editModal.frequency || 'weekly'
         })
       });
       showMsg('Schedule updated!');
@@ -425,11 +523,32 @@ const SchedulingHub = ({ token }) => {
     const dateStr = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     let filtered = calSchedules.filter(s => {
       if (s.date) return s.date.split('T')[0] === dateStr;
-      if (s.day_of_week !== null && s.day_of_week !== undefined) return s.day_of_week === dow;
+      if (s.day_of_week !== null && s.day_of_week !== undefined) {
+        if (s.day_of_week !== dow) return false;
+        // Forward-only: skip if before effective_date
+        if (s.effective_date) {
+          const eff = new Date(s.effective_date + 'T00:00:00');
+          if (target < eff) return false;
+        }
+        // Bi-weekly: check if this is an "on" week
+        if (s.frequency === 'biweekly' && s.anchor_date) {
+          const anchor = new Date(s.anchor_date + 'T00:00:00');
+          const diffMs = target.getTime() - anchor.getTime();
+          const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+          if (diffWeeks % 2 !== 0) return false;
+        }
+        return true;
+      }
       return false;
     });
     if (calFilterCaregiver) filtered = filtered.filter(s => s.caregiver_id === calFilterCaregiver);
     return filtered.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  };
+
+  // Get prospect appointments for a calendar day
+  const getProspectApptsForDay = (day) => {
+    const dateStr = `${calCurrentDate.getFullYear()}-${String(calCurrentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    return prospectAppts.filter(a => a.appointment_date && a.appointment_date.split('T')[0] === dateStr);
   };
 
   // ═══════════════════════════════════════════════
@@ -727,12 +846,141 @@ const SchedulingHub = ({ token }) => {
               <button className="btn btn-secondary btn-sm" onClick={() => setCalCurrentDate(new Date(calCurrentDate.getFullYear(), calCurrentDate.getMonth() + 1))}>›</button>
               <h3 style={{ margin: '0 0.5rem', fontSize: '1.1rem' }}>{calCurrentDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</h3>
             </div>
-            <select value={calFilterCaregiver} onChange={(e) => setCalFilterCaregiver(e.target.value)}
-              style={{ padding: '0.4rem', borderRadius: '6px', border: '1px solid #ddd', fontSize: '0.88rem' }}>
-              <option value="">All Caregivers</option>
-              {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
-            </select>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button className="btn btn-sm" onClick={() => setShowProspectApptForm(!showProspectApptForm)}
+                style={{ background: '#F97316', color: '#fff', border: 'none', fontSize: '0.82rem' }}>
+                {showProspectApptForm ? '✕ Cancel' : '+ Prospect Appt'}
+              </button>
+              <button className="btn btn-sm" onClick={() => setShowProspectForm(!showProspectForm)}
+                style={{ background: showProspectForm ? '#6B7280' : '#8B5CF6', color: '#fff', border: 'none', fontSize: '0.82rem' }}>
+                {showProspectForm ? '✕ Cancel' : '+ New Prospect'}
+              </button>
+              <select value={calFilterCaregiver} onChange={(e) => setCalFilterCaregiver(e.target.value)}
+                style={{ padding: '0.4rem', borderRadius: '6px', border: '1px solid #ddd', fontSize: '0.88rem' }}>
+                <option value="">All Caregivers</option>
+                {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
+              </select>
+            </div>
           </div>
+
+          {/* New Prospect Quick Form */}
+          {showProspectForm && (
+            <div className="card" style={{ marginBottom: '1rem', border: '2px solid #8B5CF6', background: '#FAF5FF' }}>
+              <h4 style={{ margin: '0 0 0.75rem', color: '#6D28D9' }}>👤 Add Prospect</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>First Name *</label>
+                  <input value={prospectForm.firstName} onChange={(e) => setProspectForm(p => ({ ...p, firstName: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Last Name *</label>
+                  <input value={prospectForm.lastName} onChange={(e) => setProspectForm(p => ({ ...p, lastName: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Phone</label>
+                  <input value={prospectForm.phone} onChange={(e) => setProspectForm(p => ({ ...p, phone: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Source</label>
+                  <input value={prospectForm.source} onChange={(e) => setProspectForm(p => ({ ...p, source: e.target.value }))} placeholder="Referral, website, etc."
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+                </div>
+              </div>
+              <div style={{ marginTop: '0.75rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Notes</label>
+                <textarea value={prospectForm.notes} onChange={(e) => setProspectForm(p => ({ ...p, notes: e.target.value }))} rows="2" placeholder="Any initial notes..."
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd', resize: 'vertical' }} />
+              </div>
+              <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-primary btn-sm" onClick={createProspect} disabled={prospectSaving}>{prospectSaving ? 'Saving...' : '✓ Save Prospect'}</button>
+                <button className="btn btn-secondary btn-sm" onClick={() => setShowProspectForm(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Prospect Appointment Form */}
+          {showProspectApptForm && (
+            <div className="card" style={{ marginBottom: '1rem', border: '2px solid #F97316', background: '#FFF7ED' }}>
+              <h4 style={{ margin: '0 0 0.75rem', color: '#C2410C' }}>📋 Schedule Prospect Appointment</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Prospect *</label>
+                  <select value={prospectApptForm.prospectId} onChange={(e) => setProspectApptForm(p => ({ ...p, prospectId: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }}>
+                    <option value="">Select prospect...</option>
+                    {prospects.filter(p => p.status === 'prospect').map(p => (
+                      <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Date *</label>
+                  <input type="date" value={prospectApptForm.appointmentDate} onChange={(e) => setProspectApptForm(p => ({ ...p, appointmentDate: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Start Time</label>
+                  <input type="time" value={prospectApptForm.startTime} onChange={(e) => setProspectApptForm(p => ({ ...p, startTime: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>End Time</label>
+                  <input type="time" value={prospectApptForm.endTime} onChange={(e) => setProspectApptForm(p => ({ ...p, endTime: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Type</label>
+                  <select value={prospectApptForm.appointmentType} onChange={(e) => setProspectApptForm(p => ({ ...p, appointmentType: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }}>
+                    <option value="assessment">Assessment</option>
+                    <option value="consultation">Consultation</option>
+                    <option value="intake">Intake</option>
+                    <option value="meet_greet">Meet & Greet</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Caregiver (optional)</label>
+                  <select value={prospectApptForm.caregiverId} onChange={(e) => setProspectApptForm(p => ({ ...p, caregiverId: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }}>
+                    <option value="">None assigned</option>
+                    {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ marginTop: '0.75rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.85rem' }}>Location / Notes</label>
+                <input value={prospectApptForm.location} onChange={(e) => setProspectApptForm(p => ({ ...p, location: e.target.value }))} placeholder="Address or meeting location"
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #ddd' }} />
+              </div>
+              <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-primary btn-sm" onClick={createProspectAppt} disabled={prospectSaving}
+                  style={{ background: '#F97316', borderColor: '#F97316' }}>{prospectSaving ? 'Saving...' : '✓ Schedule Appointment'}</button>
+                <button className="btn btn-secondary btn-sm" onClick={() => setShowProspectApptForm(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Prospect List (collapsible) */}
+          {prospects.filter(p => p.status === 'prospect').length > 0 && (
+            <div className="card" style={{ marginBottom: '1rem', padding: '0.75rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <h4 style={{ margin: 0, fontSize: '0.9rem', color: '#6D28D9' }}>👤 Active Prospects ({prospects.filter(p => p.status === 'prospect').length})</h4>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {prospects.filter(p => p.status === 'prospect').map(p => (
+                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', background: '#FAF5FF', border: '1px solid #DDD6FE', borderRadius: '20px', fontSize: '0.82rem' }}>
+                    <span style={{ fontWeight: '600' }}>{p.first_name} {p.last_name}</span>
+                    {p.phone && <span style={{ color: '#6B7280' }}>{p.phone}</span>}
+                    <button onClick={() => convertProspect(p.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.78rem', color: '#059669' }} title="Convert to Client">✅</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Month Grid */}
           <div className="card">
@@ -748,19 +996,27 @@ const SchedulingHub = ({ token }) => {
                 const today = new Date();
                 const isToday = day === today.getDate() && calCurrentDate.getMonth() === today.getMonth() && calCurrentDate.getFullYear() === today.getFullYear();
                 const dayScheds = getCalSchedulesForDay(day);
+                const dayProspectAppts = getProspectApptsForDay(day);
                 return (
                   <div key={day} onClick={() => { setCalDaySchedules(dayScheds); setCalSelectedDay(day); }}
                     style={{ background: isToday ? '#EFF6FF' : '#fff', minHeight: isMobile ? '50px' : '80px', padding: '0.25rem', cursor: 'pointer', position: 'relative' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: isToday ? '700' : '400', color: isToday ? '#2563EB' : '#374151', marginBottom: '0.2rem' }}>{day}</div>
-                    {dayScheds.slice(0, isMobile ? 1 : 3).map((sc, idx) => (
+                    {dayScheds.slice(0, isMobile ? 1 : 2).map((sc, idx) => (
                       <div key={idx} style={{ fontSize: '0.62rem', padding: '0.1rem 0.2rem', marginBottom: '1px', borderRadius: '2px',
                         background: cgColor(sc.caregiver_id) + '20', borderLeft: `2px solid ${cgColor(sc.caregiver_id)}`,
                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {isMobile ? formatTime(sc.start_time) : `${getCaregiverName(sc.caregiver_id).split(' ')[0]} ${formatTime(sc.start_time)}`}
                       </div>
                     ))}
-                    {dayScheds.length > (isMobile ? 1 : 3) && (
-                      <div style={{ fontSize: '0.6rem', color: '#6B7280', textAlign: 'center' }}>+{dayScheds.length - (isMobile ? 1 : 3)} more</div>
+                    {dayProspectAppts.map((pa, idx) => (
+                      <div key={`pa${idx}`} style={{ fontSize: '0.62rem', padding: '0.1rem 0.2rem', marginBottom: '1px', borderRadius: '2px',
+                        background: '#FFF7ED', borderLeft: '2px solid #F97316',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#9A3412' }}>
+                        {isMobile ? '🟠' : `🟠 ${pa.prospect_first_name}`}
+                      </div>
+                    ))}
+                    {(dayScheds.length + dayProspectAppts.length) > (isMobile ? 1 : 3) && (
+                      <div style={{ fontSize: '0.6rem', color: '#6B7280', textAlign: 'center' }}>+{(dayScheds.length + dayProspectAppts.length) - (isMobile ? 1 : 3)} more</div>
                     )}
                   </div>
                 );
@@ -770,7 +1026,7 @@ const SchedulingHub = ({ token }) => {
 
           {/* Caregiver Legend */}
           <div className="card" style={{ marginTop: '0.75rem' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
               {caregivers.map(cg => (
                 <div key={cg.id} onClick={() => setCalFilterCaregiver(calFilterCaregiver === cg.id ? '' : cg.id)}
                   style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', padding: '0.2rem 0.5rem', borderRadius: '6px', background: calFilterCaregiver === cg.id ? '#E5E7EB' : 'transparent' }}>
@@ -778,6 +1034,10 @@ const SchedulingHub = ({ token }) => {
                   <span style={{ fontSize: '0.82rem' }}>{cg.first_name} {cg.last_name}</span>
                 </div>
               ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0.5rem' }}>
+                <div style={{ width: '10px', height: '10px', borderRadius: '3px', background: '#F97316' }} />
+                <span style={{ fontSize: '0.82rem', color: '#9A3412' }}>Prospect</span>
+              </div>
             </div>
           </div>
 
@@ -791,29 +1051,53 @@ const SchedulingHub = ({ token }) => {
                     <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
                       {new Date(calCurrentDate.getFullYear(), calCurrentDate.getMonth(), calSelectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                     </h3>
-                    <p style={{ margin: 0, fontSize: '0.82rem', color: '#6B7280' }}>{calDaySchedules.length} appointment{calDaySchedules.length !== 1 ? 's' : ''}</p>
+                    <p style={{ margin: 0, fontSize: '0.82rem', color: '#6B7280' }}>
+                      {calDaySchedules.length} appointment{calDaySchedules.length !== 1 ? 's' : ''}
+                      {getProspectApptsForDay(calSelectedDay).length > 0 && ` + ${getProspectApptsForDay(calSelectedDay).length} prospect`}
+                    </p>
                   </div>
                   <button onClick={() => setCalSelectedDay(null)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9CA3AF' }}>×</button>
                 </div>
                 <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }}>
-                  {calDaySchedules.length === 0 ? (
+                  {calDaySchedules.length === 0 && getProspectApptsForDay(calSelectedDay).length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '2rem', color: '#6B7280' }}>📅 No appointments</div>
-                  ) : calDaySchedules.map((sc, idx) => (
-                    <div key={idx} style={{ display: 'flex', gap: '0.75rem', padding: '0.75rem', background: '#f9fafb', borderRadius: '8px', borderLeft: `4px solid ${cgColor(sc.caregiver_id)}`, marginBottom: '0.5rem' }}>
-                      <div style={{ minWidth: '70px', textAlign: 'center' }}>
-                        <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>{formatTime(sc.start_time)}</div>
-                        <div style={{ fontSize: '0.78rem', color: '#6B7280' }}>{formatTime(sc.end_time)}</div>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: '600' }}>{getClientName(sc.client_id)}</div>
-                        <div style={{ fontSize: '0.82rem', color: '#6B7280' }}>
-                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: cgColor(sc.caregiver_id), marginRight: '0.4rem' }} />
-                          {getCaregiverName(sc.caregiver_id)}
+                  ) : (
+                    <>
+                      {calDaySchedules.map((sc, idx) => (
+                        <div key={idx} style={{ display: 'flex', gap: '0.75rem', padding: '0.75rem', background: '#f9fafb', borderRadius: '8px', borderLeft: `4px solid ${cgColor(sc.caregiver_id)}`, marginBottom: '0.5rem' }}>
+                          <div style={{ minWidth: '70px', textAlign: 'center' }}>
+                            <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>{formatTime(sc.start_time)}</div>
+                            <div style={{ fontSize: '0.78rem', color: '#6B7280' }}>{formatTime(sc.end_time)}</div>
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: '600' }}>{getClientName(sc.client_id)}</div>
+                            <div style={{ fontSize: '0.82rem', color: '#6B7280' }}>
+                              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: cgColor(sc.caregiver_id), marginRight: '0.4rem' }} />
+                              {getCaregiverName(sc.caregiver_id)}
+                            </div>
+                            {sc.day_of_week !== null && <span style={s.badge(sc.frequency === 'biweekly' ? '#FFEDD5' : '#DBEAFE', sc.frequency === 'biweekly' ? '#C2410C' : '#1D4ED8')}>{sc.frequency === 'biweekly' ? 'Bi-Weekly' : 'Recurring'}</span>}
+                          </div>
                         </div>
-                        {sc.day_of_week !== null && <span style={s.badge('#DBEAFE', '#1D4ED8')}>Recurring</span>}
-                      </div>
-                    </div>
-                  ))}
+                      ))}
+                      {/* Prospect Appointments in Day Modal */}
+                      {getProspectApptsForDay(calSelectedDay).map((pa, idx) => (
+                        <div key={`pa${idx}`} style={{ display: 'flex', gap: '0.75rem', padding: '0.75rem', background: '#FFF7ED', borderRadius: '8px', borderLeft: '4px solid #F97316', marginBottom: '0.5rem' }}>
+                          <div style={{ minWidth: '70px', textAlign: 'center' }}>
+                            <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>{formatTime(pa.start_time)}</div>
+                            <div style={{ fontSize: '0.78rem', color: '#6B7280' }}>{formatTime(pa.end_time)}</div>
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: '600', color: '#9A3412' }}>🟠 {pa.prospect_first_name} {pa.prospect_last_name}</div>
+                            <div style={{ fontSize: '0.82rem', color: '#B45309' }}>{(pa.appointment_type || '').replace(/_/g, ' ')}</div>
+                            {pa.caregiver_first_name && <div style={{ fontSize: '0.78rem', color: '#6B7280' }}>w/ {pa.caregiver_first_name} {pa.caregiver_last_name}</div>}
+                            {pa.location && <div style={{ fontSize: '0.78rem', color: '#6B7280' }}>📍 {pa.location}</div>}
+                            <span style={s.badge('#FFEDD5', '#C2410C')}>Prospect</span>
+                          </div>
+                          <button onClick={() => deleteProspectAppt(pa.id)} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '0.9rem', alignSelf: 'flex-start' }} title="Cancel">🗑</button>
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </div>
                 <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid #e5e7eb', textAlign: 'right' }}>
                   <button className="btn btn-secondary btn-sm" onClick={() => setCalSelectedDay(null)}>Close</button>
@@ -865,7 +1149,8 @@ const SchedulingHub = ({ token }) => {
                     {[
                       { type: 'one-time', icon: '📅', label: 'One-Time' },
                       { type: 'multi-day', icon: '📆', label: 'Multi-Day' },
-                      { type: 'recurring', icon: '🔄', label: 'Recurring' }
+                      { type: 'recurring', icon: '🔄', label: 'Recurring' },
+                      { type: 'bi-weekly', icon: '📊', label: 'Bi-Weekly' }
                     ].map((opt, i) => (
                       <button key={opt.type} type="button" onClick={() => { setFormData(prev => ({ ...prev, scheduleType: opt.type, dayOfWeek: '' })); setSelectedDays([]); }}
                         style={{ flex: 1, padding: '0.75rem 0.5rem', border: 'none', borderLeft: i > 0 ? '2px solid #e5e7eb' : 'none',
@@ -939,6 +1224,39 @@ const SchedulingHub = ({ token }) => {
                   </div>
                 )}
 
+                {/* Bi-Weekly: Day Grid (same as multi-day but every other week) */}
+                {formData.scheduleType === 'bi-weekly' && (
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ background: '#FFF7ED', padding: '1rem', borderRadius: '8px', border: '1px solid #FED7AA' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                        <label style={{ fontWeight: '600', margin: 0 }}>Select Days (Every Other Week) *</label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button type="button" onClick={selectWeekdays} style={{ padding: '0.35rem 0.75rem', borderRadius: '4px', border: 'none', background: '#F97316', color: '#fff', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '500' }}>Mon-Fri</button>
+                          <button type="button" onClick={clearDays} style={{ padding: '0.35rem 0.75rem', borderRadius: '4px', border: '1px solid #D1D5DB', background: '#fff', color: '#6B7280', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '500' }}>Clear</button>
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                          <button key={day} type="button" onClick={() => toggleDaySelection(idx)}
+                            style={{ padding: '0.6rem 0.25rem', borderRadius: '8px',
+                              border: selectedDays.includes(idx) ? '2px solid #F97316' : '2px solid #E5E7EB',
+                              background: selectedDays.includes(idx) ? '#F97316' : '#fff',
+                              color: selectedDays.includes(idx) ? '#fff' : '#374151',
+                              cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
+                            {day}
+                          </button>
+                        ))}
+                      </div>
+                      {selectedDays.length > 0 && (
+                        <div style={{ fontSize: '0.85rem', color: '#9A3412', padding: '0.5rem', background: '#FFEDD5', borderRadius: '4px' }}>
+                          📊 Every other week: <strong>{selectedDays.length}</strong> day{selectedDays.length !== 1 ? 's' : ''} — {selectedDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}
+                          <div style={{ fontSize: '0.78rem', marginTop: '0.25rem', color: '#B45309' }}>Starts this week, skips next week, repeats</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Client Selection */}
                 <div style={{ marginBottom: '1.25rem' }}>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Client *</label>
@@ -982,7 +1300,7 @@ const SchedulingHub = ({ token }) => {
                 <div style={{ marginBottom: '1.25rem', padding: '0.75rem', background: '#F3F4F6', borderRadius: '8px', textAlign: 'center' }}>
                   <span style={{ fontWeight: '600' }}>{formatTime(formData.startTime)} - {formatTime(formData.endTime)}</span>
                   <span style={{ color: '#6B7280', marginLeft: '1rem' }}>
-                    ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${selectedDays.length} days/week = ${(calculateHours(formData.startTime, formData.endTime) * selectedDays.length).toFixed(2)} hours/week` : ''})
+                    ({calculateHours(formData.startTime, formData.endTime)} hours{formData.scheduleType === 'multi-day' && selectedDays.length > 0 ? ` × ${selectedDays.length} days/week = ${(calculateHours(formData.startTime, formData.endTime) * selectedDays.length).toFixed(2)} hours/week` : ''}{formData.scheduleType === 'bi-weekly' && selectedDays.length > 0 ? ` × ${selectedDays.length} days/2 weeks = ${(calculateHours(formData.startTime, formData.endTime) * selectedDays.length).toFixed(2)} hrs every other week` : ''})
                   </span>
                 </div>
 
@@ -996,9 +1314,11 @@ const SchedulingHub = ({ token }) => {
 
                 {/* Submit */}
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
-                  <button type="submit" className="btn btn-primary" disabled={saving || (formData.scheduleType === 'multi-day' && selectedDays.length === 0)} style={{ flex: 1 }}>
+                  <button type="submit" className="btn btn-primary" disabled={saving || ((formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') && selectedDays.length === 0)} style={{ flex: 1 }}>
                     {saving ? 'Saving...' : formData.scheduleType === 'multi-day'
-                      ? `✓ Create ${selectedDays.length} Recurring Schedule${selectedDays.length !== 1 ? 's' : ''}`
+                      ? `✓ Create ${selectedDays.length} Weekly Schedule${selectedDays.length !== 1 ? 's' : ''}`
+                      : formData.scheduleType === 'bi-weekly'
+                      ? `✓ Create ${selectedDays.length} Bi-Weekly Schedule${selectedDays.length !== 1 ? 's' : ''}`
                       : '✓ Create Schedule'}
                   </button>
                   <button type="button" className="btn btn-secondary" onClick={() => { setShowForm(false); setSelectedDays([]); }}>Cancel</button>
@@ -1028,7 +1348,9 @@ const SchedulingHub = ({ token }) => {
                             onClick={() => openEditModal(s)}>
                             <div>
                               <div style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</div>
-                              <div style={{ color: '#6B7280', fontSize: '0.78rem' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)} ({calculateHours(s.start_time, s.end_time)}h)</div>
+                              <div style={{ color: '#6B7280', fontSize: '0.78rem' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)} ({calculateHours(s.start_time, s.end_time)}h)
+                                {s.frequency === 'biweekly' && <span style={{ marginLeft: '0.4rem', padding: '0.1rem 0.35rem', background: '#FFEDD5', color: '#C2410C', borderRadius: '4px', fontSize: '0.68rem', fontWeight: '600' }}>Bi-Weekly</span>}
+                              </div>
                               {s.notes && <div style={{ fontSize: '0.75rem', color: '#9CA3AF', fontStyle: 'italic', marginTop: '2px' }}>{s.notes}</div>}
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -1497,9 +1819,19 @@ const SchedulingHub = ({ token }) => {
             <button onClick={() => setEditModal(null)} style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: '#6B7280' }}>✕</button>
           </div>
 
-          {/* Schedule Type Display */}
-          <div style={{ marginBottom: '1.25rem', padding: '0.5rem 0.75rem', background: '#EFF6FF', borderRadius: '6px', fontSize: '0.85rem', color: '#1E40AF' }}>
-            {editModal.scheduleType === 'recurring' ? '🔄 Recurring Weekly' : '📅 One-Time'} Schedule
+          {/* Schedule Type Display + Frequency Toggle */}
+          <div style={{ marginBottom: '1.25rem', padding: '0.5rem 0.75rem', background: '#EFF6FF', borderRadius: '6px', fontSize: '0.85rem', color: '#1E40AF', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{editModal.scheduleType === 'recurring' ? '🔄 Recurring' : '📅 One-Time'} Schedule</span>
+            {editModal.scheduleType === 'recurring' && (
+              <div style={{ display: 'flex', gap: '0.3rem' }}>
+                <button type="button" onClick={() => setEditModal(prev => ({ ...prev, frequency: 'weekly' }))}
+                  style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer',
+                    background: editModal.frequency === 'weekly' ? '#3B82F6' : '#E5E7EB', color: editModal.frequency === 'weekly' ? '#fff' : '#374151' }}>Weekly</button>
+                <button type="button" onClick={() => setEditModal(prev => ({ ...prev, frequency: 'biweekly' }))}
+                  style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer',
+                    background: editModal.frequency === 'biweekly' ? '#F97316' : '#E5E7EB', color: editModal.frequency === 'biweekly' ? '#fff' : '#374151' }}>Bi-Weekly</button>
+              </div>
+            )}
           </div>
 
           {/* Client */}
