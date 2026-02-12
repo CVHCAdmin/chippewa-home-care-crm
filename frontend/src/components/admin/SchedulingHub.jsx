@@ -57,6 +57,10 @@ const SchedulingHub = ({ token }) => {
   const [selectedCaregiver, setSelectedCaregiver] = useState(null);
   const [conflicts, setConflicts] = useState([]);
 
+  // ── Edit Schedule Modal ──
+  const [editModal, setEditModal] = useState(null); // { id, clientId, dayOfWeek, date, startTime, endTime, notes, scheduleType }
+  const [editSaving, setEditSaving] = useState(false);
+
   // ── Coverage state ──
   const [coverageData, setCoverageData] = useState(null);
   const [coverageLoading, setCoverageLoading] = useState(false);
@@ -342,6 +346,43 @@ const SchedulingHub = ({ token }) => {
     } catch (e) { showMsg('Error: ' + e.message, 'error'); }
   };
 
+  const openEditModal = (schedule) => {
+    const isRecurring = schedule.day_of_week !== null && schedule.day_of_week !== undefined;
+    setEditModal({
+      id: schedule.id,
+      clientId: schedule.client_id,
+      dayOfWeek: isRecurring ? schedule.day_of_week.toString() : '',
+      date: schedule.date ? schedule.date.split('T')[0] : '',
+      startTime: schedule.start_time || '09:00',
+      endTime: schedule.end_time || '13:00',
+      notes: schedule.notes || '',
+      scheduleType: isRecurring ? 'recurring' : 'one-time'
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editModal) return;
+    if (editModal.startTime >= editModal.endTime) { showMsg('End time must be after start time', 'error'); return; }
+    setEditSaving(true);
+    try {
+      await api(`/api/schedules-all/${editModal.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          clientId: editModal.clientId,
+          dayOfWeek: editModal.scheduleType === 'recurring' ? parseInt(editModal.dayOfWeek) : null,
+          date: editModal.scheduleType === 'one-time' ? editModal.date : null,
+          startTime: editModal.startTime,
+          endTime: editModal.endTime,
+          notes: editModal.notes
+        })
+      });
+      showMsg('Schedule updated!');
+      setEditModal(null);
+      loadCaregiverSchedules(selectedCaregiverId);
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+    finally { setEditSaving(false); }
+  };
+
   const groupSchedules = () => {
     const recurringByDay = {}, oneTimeByDate = {};
     caregiverSchedules.forEach(s => {
@@ -550,6 +591,7 @@ const SchedulingHub = ({ token }) => {
   const pendingSwaps = swaps.filter(sw => sw.status === 'accepted').length;
 
   return (
+    <>
     <div>
       {/* Header */}
       <div className="page-header" style={{ marginBottom: '1rem' }}>
@@ -980,13 +1022,19 @@ const SchedulingHub = ({ token }) => {
                       <div key={dayNum} className="card" style={{ padding: '0.75rem' }}>
                         <div style={{ fontWeight: '700', marginBottom: '0.5rem', color: '#1E40AF', fontSize: '0.9rem' }}>{getDayName(dayNum)}</div>
                         {recurringByDay[dayNum].map(s => (
-                          <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem', marginBottom: '0.35rem', background: '#F3F4F6', borderRadius: '6px', fontSize: '0.85rem' }}>
+                          <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem', marginBottom: '0.35rem', background: '#F3F4F6', borderRadius: '6px', fontSize: '0.85rem', cursor: 'pointer', transition: 'background 0.15s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = '#E0E7FF'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = '#F3F4F6'}
+                            onClick={() => openEditModal(s)}>
                             <div>
                               <div style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</div>
                               <div style={{ color: '#6B7280', fontSize: '0.78rem' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)} ({calculateHours(s.start_time, s.end_time)}h)</div>
                               {s.notes && <div style={{ fontSize: '0.75rem', color: '#9CA3AF', fontStyle: 'italic', marginTop: '2px' }}>{s.notes}</div>}
                             </div>
-                            <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.25rem' }} title="Delete">🗑</button>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span style={{ fontSize: '0.78rem', color: '#6B7280' }} title="Edit">✏️</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(s.id); }} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.25rem' }} title="Delete">🗑</button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1007,13 +1055,19 @@ const SchedulingHub = ({ token }) => {
                         {new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
                       </div>
                       {oneTimeByDate[dateKey].map(s => (
-                        <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', marginBottom: '0.35rem', background: '#F3F4F6', borderRadius: '6px', fontSize: '0.85rem' }}>
+                        <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', marginBottom: '0.35rem', background: '#F3F4F6', borderRadius: '6px', fontSize: '0.85rem', cursor: 'pointer', transition: 'background 0.15s' }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#E0E7FF'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = '#F3F4F6'}
+                          onClick={() => openEditModal(s)}>
                           <div>
                             <span style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</span>
                             <span style={{ color: '#6B7280', marginLeft: '0.75rem' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)} ({calculateHours(s.start_time, s.end_time)}h)</span>
                             {s.notes && <div style={{ fontSize: '0.75rem', color: '#9CA3AF', fontStyle: 'italic', marginTop: '2px' }}>{s.notes}</div>}
                           </div>
-                          <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.25rem' }} title="Delete">🗑</button>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ fontSize: '0.78rem', color: '#6B7280' }} title="Edit">✏️</span>
+                            <button onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(s.id); }} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.25rem' }} title="Delete">🗑</button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1429,6 +1483,113 @@ const SchedulingHub = ({ token }) => {
         </div>
       )}
     </div>
+
+    {/* ══════════════════════════════════════════ */}
+    {/* EDIT SCHEDULE MODAL */}
+    {/* ══════════════════════════════════════════ */}
+    {editModal && (
+      <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+        onClick={() => setEditModal(null)}>
+        <div style={{ background: '#fff', borderRadius: '12px', padding: '1.5rem', maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+          onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <h3 style={{ margin: 0, color: '#1E40AF' }}>✏️ Edit Schedule</h3>
+            <button onClick={() => setEditModal(null)} style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: '#6B7280' }}>✕</button>
+          </div>
+
+          {/* Schedule Type Display */}
+          <div style={{ marginBottom: '1.25rem', padding: '0.5rem 0.75rem', background: '#EFF6FF', borderRadius: '6px', fontSize: '0.85rem', color: '#1E40AF' }}>
+            {editModal.scheduleType === 'recurring' ? '🔄 Recurring Weekly' : '📅 One-Time'} Schedule
+          </div>
+
+          {/* Client */}
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Client</label>
+            <select value={editModal.clientId} onChange={(e) => setEditModal(prev => ({ ...prev, clientId: e.target.value }))}
+              style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '0.95rem' }}>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
+            </select>
+          </div>
+
+          {/* Day of Week (recurring) or Date (one-time) */}
+          {editModal.scheduleType === 'recurring' ? (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Day of Week</label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.4rem' }}>
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                  <button key={day} type="button" onClick={() => setEditModal(prev => ({ ...prev, dayOfWeek: idx.toString() }))}
+                    style={{ padding: '0.5rem 0.2rem', borderRadius: '6px',
+                      border: editModal.dayOfWeek === idx.toString() ? '2px solid #3B82F6' : '2px solid #E5E7EB',
+                      background: editModal.dayOfWeek === idx.toString() ? '#3B82F6' : '#fff',
+                      color: editModal.dayOfWeek === idx.toString() ? '#fff' : '#374151',
+                      cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
+                    {day}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Date</label>
+              <input type="date" value={editModal.date} onChange={(e) => setEditModal(prev => ({ ...prev, date: e.target.value }))}
+                style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '0.95rem' }} />
+            </div>
+          )}
+
+          {/* Quick Presets */}
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Quick Presets</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+              {shiftPresets.map((p, i) => (
+                <button key={i} type="button" onClick={() => setEditModal(prev => ({ ...prev, startTime: p.start, endTime: p.end }))}
+                  style={{ padding: '0.35rem 0.6rem', borderRadius: '16px', border: '1px solid #e5e7eb',
+                    background: editModal.startTime === p.start && editModal.endTime === p.end ? '#DBEAFE' : '#fff',
+                    color: '#374151', cursor: 'pointer', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Times */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Start Time</label>
+              <input type="time" value={editModal.startTime} onChange={(e) => setEditModal(prev => ({ ...prev, startTime: e.target.value }))}
+                style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '0.95rem' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>End Time</label>
+              <input type="time" value={editModal.endTime} onChange={(e) => setEditModal(prev => ({ ...prev, endTime: e.target.value }))}
+                style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '0.95rem' }} />
+            </div>
+          </div>
+
+          {/* Duration */}
+          <div style={{ marginBottom: '1rem', padding: '0.5rem', background: '#F3F4F6', borderRadius: '6px', textAlign: 'center', fontSize: '0.9rem' }}>
+            <span style={{ fontWeight: '600' }}>{formatTime(editModal.startTime)} - {formatTime(editModal.endTime)}</span>
+            <span style={{ color: '#6B7280', marginLeft: '0.75rem' }}>({calculateHours(editModal.startTime, editModal.endTime)} hours)</span>
+          </div>
+
+          {/* Notes */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Notes</label>
+            <textarea value={editModal.notes} onChange={(e) => setEditModal(prev => ({ ...prev, notes: e.target.value }))}
+              placeholder="Optional notes..." rows="2"
+              style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #e5e7eb', fontSize: '0.95rem', resize: 'vertical' }} />
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <button onClick={handleSaveEdit} disabled={editSaving} className="btn btn-primary" style={{ flex: 1 }}>
+              {editSaving ? 'Saving...' : '✓ Save Changes'}
+            </button>
+            <button onClick={() => setEditModal(null)} className="btn btn-secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   );
 };
 
