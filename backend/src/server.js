@@ -972,6 +972,12 @@ app.get('/api/time-entries/caregiver-history/:caregiverId', verifyToken, async (
   }
 });
 
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET /api/time-entries - Get all time entries
 app.get('/api/time-entries', verifyToken, async (req, res) => {
   try {
