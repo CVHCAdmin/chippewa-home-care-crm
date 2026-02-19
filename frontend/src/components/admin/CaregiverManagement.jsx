@@ -56,6 +56,7 @@ const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, 
 );
 
 const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [caregivers, setCaregivers] = useState([]);
   const [careTypes, setCareTypes] = useState([]);
   const [loading, setLoading] = useState(true);
