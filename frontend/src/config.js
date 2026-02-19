@@ -34,6 +34,12 @@ export const apiCall = async (endpoint, options = {}, token) => {
     throw new Error('SESSION_EXPIRED');
   }
 
+  if (response.status === 429) {
+    // Rate limited - return null silently instead of crashing
+    console.warn(`[Rate limited] ${endpoint} - will retry on next poll`);
+    return null;
+  }
+
   if (!response.ok) {
     const text = await response.text();
     let msg = text;
