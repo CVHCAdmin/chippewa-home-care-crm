@@ -3,7 +3,11 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
-const webpush = require('web-push');
+let webpush;
+try { webpush = require('web-push'); } catch (e) {
+  console.warn('[Push] web-push not installed — push notifications disabled.');
+  webpush = null;
+}
 const auth = require('../middleware/auth');
 const requireAdmin = require('../middleware/authorizeAdmin');
 
@@ -12,7 +16,7 @@ const requireAdmin = require('../middleware/authorizeAdmin');
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'PLACEHOLDER_REPLACE_WITH_REAL_KEY';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'PLACEHOLDER_REPLACE_WITH_REAL_KEY';
 
-if (VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
+if (webpush && VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
   webpush.setVapidDetails(
     'mailto:admin@chippewahomecare.com',
     VAPID_PUBLIC_KEY,
@@ -30,6 +34,7 @@ const sendPushToUser = async (userId, payload) => {
 
     for (const row of subs.rows) {
       try {
+        if (!webpush) throw new Error('web-push not available');
         await webpush.sendNotification(
           row.subscription,
           JSON.stringify(payload)
