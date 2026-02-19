@@ -1,5 +1,7 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/ADLTracking.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 
 const ADLTracking = ({ token }) => {
@@ -34,7 +36,12 @@ const ADLTracking = ({ token }) => {
   ];
 
   useEffect(() => {
-    loadClients();
+    const fn = (e) => { if (isDirty) { e.preventDefault(); e.returnValue = "You have unsaved changes. Leave anyway?"; return e.returnValue; } };
+    window.addEventListener("beforeunload", fn);
+    return () => window.removeEventListener("beforeunload", fn);
+  }, [isDirty]);
+
+  $1Clients();
   }, []);
 
   useEffect(() => {
@@ -99,10 +106,10 @@ const ADLTracking = ({ token }) => {
         loadRequirements();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -121,15 +128,15 @@ const ADLTracking = ({ token }) => {
         loadLogs();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
   const deleteRequirement = async (reqId) => {
-    if (!confirm('Remove this ADL requirement?')) return;
+    const _cok = await confirm('Remove this ADL requirement?', {danger: true}); if (!_cok) return;
     try {
       const res = await fetch(`${API_BASE_URL}/api/adl/requirements/${reqId}`, {
         method: 'DELETE',
@@ -139,7 +146,7 @@ const ADLTracking = ({ token }) => {
         loadRequirements();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -430,7 +437,7 @@ const RequirementForm = ({ categories, existingCategories, onSubmit, onCancel })
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.adlCategory) {
-      alert('Please select an ADL category');
+      toast('Please select an ADL category');
       return;
     }
     onSubmit(formData);
@@ -515,7 +522,7 @@ const LogADLForm = ({ categories, requirements, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.adlCategory) {
-      alert('Please select an ADL category');
+      toast('Please select an ADL category');
       return;
     }
     onSubmit({

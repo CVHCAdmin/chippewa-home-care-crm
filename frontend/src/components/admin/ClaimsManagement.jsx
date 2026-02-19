@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/ClaimsManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -90,7 +91,7 @@ const ClaimsManagement = ({ token }) => {
         loadSummary();
       }
     } catch (error) {
-      alert('Failed to create claim: ' + error.message);
+      toast('Failed to create claim: ' + error.message, 'error');
     }
   };
 
@@ -111,13 +112,13 @@ const ClaimsManagement = ({ token }) => {
         loadSummary();
       }
     } catch (error) {
-      alert('Failed to update status: ' + error.message);
+      toast('Failed to update status: ' + error.message, 'error');
     }
   };
 
   const export837P = async () => {
     if (selectedClaims.length === 0) {
-      alert('Select at least one claim to export');
+      toast('Select at least one claim to export');
       return;
     }
     try {
@@ -140,7 +141,7 @@ const ClaimsManagement = ({ token }) => {
         setSelectedClaims([]);
       }
     } catch (error) {
-      alert('Failed to export: ' + error.message);
+      toast('Failed to export: ' + error.message, 'error');
     }
   };
 
@@ -361,7 +362,7 @@ const CreateClaimForm = ({ invoices, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.invoiceId) {
-      alert('Please select an invoice');
+      toast('Please select an invoice');
       return;
     }
     onSubmit(formData);

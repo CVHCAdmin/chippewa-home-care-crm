@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/AbsenceManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -63,14 +65,14 @@ const AbsenceManagement = ({ token }) => {
       });
       setShowForm(false);
       loadData();
-      alert('Absence recorded successfully!');
+      toast('Absence recorded successfully!');
     } catch (error) {
-      alert('Failed to record absence: ' + error.message);
+      toast('Failed to record absence: ' + error.message, 'error');
     }
   };
 
   const handleDelete = async (absenceId) => {
-    if (!window.confirm('Are you sure you want to delete this absence?')) return;
+    const _cok = await confirm('Are you sure you want to delete this absence?', {danger: true}); if (!_cok) return;
     
     try {
       const response = await fetch(`${API_BASE_URL}/api/absences/${absenceId}`, {
@@ -82,9 +84,9 @@ const AbsenceManagement = ({ token }) => {
 
       if (!response.ok) throw new Error('Failed to delete');
       loadData();
-      alert('Absence deleted!');
+      toast('Absence deleted!');
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 

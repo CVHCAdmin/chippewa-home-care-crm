@@ -1,5 +1,7 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/MedicationsManagement.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 
 const MedicationsManagement = ({ token }) => {
@@ -14,7 +16,12 @@ const MedicationsManagement = ({ token }) => {
   const [editingMed, setEditingMed] = useState(null);
 
   useEffect(() => {
-    loadClients();
+    const fn = (e) => { if (isDirty) { e.preventDefault(); e.returnValue = "You have unsaved changes. Leave anyway?"; return e.returnValue; } };
+    window.addEventListener("beforeunload", fn);
+    return () => window.removeEventListener("beforeunload", fn);
+  }, [isDirty]);
+
+  $1Clients();
   }, []);
 
   useEffect(() => {
@@ -94,15 +101,15 @@ const MedicationsManagement = ({ token }) => {
         loadMedications();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed to save: ' + error.message);
+      toast('Failed to save: ' + error.message, 'error');
     }
   };
 
   const discontinueMedication = async (medId) => {
-    if (!confirm('Discontinue this medication?')) return;
+    const _cok = await confirm('Discontinue this medication?', {danger: true}); if (!_cok) return;
     try {
       const res = await fetch(`${API_BASE_URL}/api/medications/${medId}/discontinue`, {
         method: 'PUT',
@@ -112,7 +119,7 @@ const MedicationsManagement = ({ token }) => {
         loadMedications();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -131,7 +138,7 @@ const MedicationsManagement = ({ token }) => {
         loadLogs();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -413,7 +420,7 @@ const MedicationForm = ({ medication, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.medicationName) {
-      alert('Medication name is required');
+      toast('Medication name is required');
       return;
     }
     onSubmit(formData);
@@ -566,7 +573,7 @@ const LogForm = ({ medications, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.medicationId) {
-      alert('Select a medication');
+      toast('Select a medication');
       return;
     }
     onSubmit({

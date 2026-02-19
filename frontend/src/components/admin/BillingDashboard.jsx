@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/BillingDashboard.jsx
 // Complete billing system: Invoicing, A/R Aging, Authorizations, Claims, Payments
 import React, { useState, useEffect } from 'react';
@@ -194,7 +196,7 @@ const BillingDashboard = ({ token }) => {
       setSelectedInvoice(invoice);
       setShowInvoiceModal(true);
     } catch (error) {
-      alert('Failed to generate invoice: ' + error.message);
+      toast('Failed to generate invoice: ' + error.message, 'error');
     }
   };
 
@@ -207,7 +209,7 @@ const BillingDashboard = ({ token }) => {
     );
     
     if (validLineItems.length === 0) {
-      alert('Please add at least one line item with hours and rate');
+      toast('Please add at least one line item with hours and rate');
       return;
     }
 
@@ -215,7 +217,7 @@ const BillingDashboard = ({ token }) => {
     if (detailedMode) {
       const missingDates = validLineItems.some(item => !item.serviceDate);
       if (missingDates) {
-        alert('Please enter a date for each line item in detailed mode');
+        toast('Please enter a date for each line item in detailed mode');
         return;
       }
     }
@@ -244,7 +246,7 @@ const BillingDashboard = ({ token }) => {
       setMessage('✓ Manual invoice created successfully');
       setTimeout(() => setMessage(''), 3000);
     } catch (error) {
-      alert('Failed to create invoice: ' + error.message);
+      toast('Failed to create invoice: ' + error.message, 'error');
     }
   };
 
@@ -319,7 +321,7 @@ const BillingDashboard = ({ token }) => {
       setMessage(`✓ Generated ${result.count} invoices totaling ${formatCurrency(result.total)}`);
       setTimeout(() => setMessage(''), 5000);
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     } finally {
       setLoading(false);
     }
@@ -334,11 +336,11 @@ const BillingDashboard = ({ token }) => {
       setSelectedInvoice(invoice);
       setShowInvoiceModal(true);
     } catch (error) {
-      alert('Failed to load invoice: ' + error.message);
+      toast('Failed to load invoice: ' + error.message, 'error');
     }
   };
 const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
-  if (!window.confirm(`Are you sure you want to delete invoice ${invoiceNumber}? This cannot be undone.`)) {
+  if (!confirm(`Are you sure you want to delete invoice ${invoiceNumber}? This cannot be undone.`)) {
     return;
   }
   
@@ -357,7 +359,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     setTimeout(() => setMessage(''), 3000);
     loadData();
   } catch (error) {
-    alert('Failed to delete invoice: ' + error.message);
+    toast('Failed to delete invoice: ' + error.message, 'error');
   }
 };
   const handleMarkPaid = async (invoiceId) => {
@@ -372,7 +374,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
         setSelectedInvoice({ ...selectedInvoice, payment_status: 'paid' });
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -391,7 +393,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       setMessage('✓ Payment recorded');
       setTimeout(() => setMessage(''), 3000);
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -410,7 +412,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       setMessage('✓ Authorization added');
       setTimeout(() => setMessage(''), 3000);
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -429,7 +431,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       setMessage('✓ Adjustment recorded');
       setTimeout(() => setMessage(''), 3000);
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -446,12 +448,12 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       setShowRateForm(false);
       loadData();
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
   const handleDeleteRate = async (rateId) => {
-    if (!window.confirm('Delete this rate?')) return;
+    const _cok = await confirm('Delete this rate?', {danger: true}); if (!_cok) return;
     try {
       await fetch(`${API_BASE_URL}/api/referral-source-rates/${rateId}`, {
         method: 'DELETE',
@@ -459,7 +461,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       });
       loadData();
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -475,7 +477,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       a.download = 'invoices.csv';
       a.click();
     } catch (error) {
-      alert('Failed to export: ' + error.message);
+      toast('Failed to export: ' + error.message, 'error');
     }
   };
 
@@ -491,7 +493,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       a.download = `evv-export-${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
     } catch (error) {
-      alert('Failed to export EVV: ' + error.message);
+      toast('Failed to export EVV: ' + error.message, 'error');
     }
   };
 

@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/AuditLogs.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -185,7 +186,7 @@ const AuditLogs = ({ token }) => {
       a.download = `audit-logs-${new Date().toISOString().split('T')[0]}.${format}`;
       a.click();
     } catch (error) {
-      alert('Failed to export: ' + error.message);
+      toast('Failed to export: ' + error.message, 'error');
     }
   };
 
@@ -212,7 +213,7 @@ const AuditLogs = ({ token }) => {
       a.download = `hipaa-compliance-report-${new Date().toISOString().split('T')[0]}.pdf`;
       a.click();
     } catch (error) {
-      alert('Failed to generate report: ' + error.message);
+      toast('Failed to generate report: ' + error.message, 'error');
     }
   };
 

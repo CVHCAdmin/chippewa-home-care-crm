@@ -477,38 +477,175 @@ router.post('/revenue', auth, async (req, res) => {
 router.post('/:type/export', auth, async (req, res) => {
   const { type } = req.params;
   const { startDate, endDate, format } = req.body;
+  const reportType = type; // for PDF title
 
   try {
     let data = [];
     let filename = `report-${type}-${new Date().toISOString().split('T')[0]}`;
+    const sd = startDate || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const ed = endDate || new Date().toISOString().split('T')[0];
 
-    if (type === 'overview') {
+    if (type === 'overview' || type === 'caregiver_hours' || type === 'caregiver-hours') {
       const result = await db.query(`
         SELECT 
           u.first_name || ' ' || u.last_name as caregiver,
-          COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as scheduled_hours,
-          COUNT(DISTINCT s.client_id) as clients
+          COALESCE(SUM(te.duration_minutes) / 60.0, 0) as actual_hours,
+          COUNT(te.id) as shifts,
+          COUNT(DISTINCT te.client_id) as unique_clients
         FROM users u
-        LEFT JOIN schedules s ON s.caregiver_id = u.id
-          AND s.is_active = true
-          AND (s.date >= $1 AND s.date <= $2)
+        LEFT JOIN time_entries te ON te.caregiver_id = u.id
+          AND te.start_time >= $1::timestamptz
+          AND te.start_time < ($2::date + INTERVAL '1 day')::timestamptz
+          AND te.is_complete = true
         WHERE u.role = 'caregiver'
         GROUP BY u.id, u.first_name, u.last_name
-        ORDER BY scheduled_hours DESC
-      `, [startDate, endDate]);
+        ORDER BY actual_hours DESC
+      `, [sd, ed]);
+      data = result.rows;
+    } else if (type === 'billing' || type === 'revenue') {
+      const result = await db.query(`
+        SELECT
+          c.first_name || ' ' || c.last_name as client,
+          i.invoice_number, i.billing_period_start, i.billing_period_end,
+          i.total, i.amount_paid, i.payment_status,
+          COALESCE(rs.name, 'Private Pay') as payer
+        FROM invoices i
+        JOIN clients c ON i.client_id = c.id
+        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+        WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
+        ORDER BY i.billing_period_start DESC, c.last_name
+      `, [sd, ed]);
+      data = result.rows;
+    } else if (type === 'compliance') {
+      const result = await db.query(`
+        SELECT
+          u.first_name || ' ' || u.last_name as caregiver,
+          bc.status as background_check_status,
+          bc.check_date, bc.expiration_date,
+          CASE WHEN bc.expiration_date < CURRENT_DATE THEN 'EXPIRED'
+               WHEN bc.expiration_date < CURRENT_DATE + INTERVAL '60 days' THEN 'Expiring Soon'
+               WHEN bc.expiration_date IS NULL THEN 'No Check on File'
+               ELSE 'Current' END as expiry_status,
+          u.certifications
+        FROM users u
+        LEFT JOIN background_checks bc ON bc.caregiver_id = u.id
+          AND bc.id = (SELECT id FROM background_checks bc2 WHERE bc2.caregiver_id = u.id ORDER BY check_date DESC LIMIT 1)
+        WHERE u.role = 'caregiver' AND u.is_active = true
+        ORDER BY bc.expiration_date ASC NULLS FIRST, u.last_name
+      `, []);
+      data = result.rows;
+    } else if (type === 'clients') {
+      const result = await db.query(`
+        SELECT
+          c.first_name || ' ' || c.last_name as client,
+          c.email, c.phone, c.city, c.state,
+          c.service_type, c.status, c.created_at::date as enrolled_date,
+          COALESCE(rs.name, 'Unknown') as referral_source,
+          COUNT(DISTINCT s.caregiver_id) as assigned_caregivers
+        FROM clients c
+        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+        LEFT JOIN schedules s ON s.client_id = c.id AND s.is_active = true
+        WHERE c.is_active = true
+        GROUP BY c.id, c.first_name, c.last_name, c.email, c.phone, c.city, c.state, c.service_type, c.status, c.created_at, rs.name
+        ORDER BY c.last_name
+      `, []);
+      data = result.rows;
+    } else if (type === 'payroll') {
+      const result = await db.query(`
+        SELECT
+          u.first_name || ' ' || u.last_name as caregiver,
+          COALESCE(SUM(te.duration_minutes) / 60.0, 0) as hours_worked,
+          COALESCE(u.default_pay_rate, 18.00) as hourly_rate,
+          COALESCE(SUM(te.duration_minutes) / 60.0 * COALESCE(u.default_pay_rate, 18.00), 0) as gross_pay,
+          COUNT(te.id) as shifts
+        FROM users u
+        LEFT JOIN time_entries te ON te.caregiver_id = u.id
+          AND te.start_time >= $1::timestamptz
+          AND te.start_time < ($2::date + INTERVAL '1 day')::timestamptz
+          AND te.is_complete = true
+        WHERE u.role = 'caregiver'
+        GROUP BY u.id, u.first_name, u.last_name, u.default_pay_rate
+        ORDER BY gross_pay DESC
+      `, [sd, ed]);
+      data = result.rows;
+    } else {
+      // Fallback: overview
+      const result = await db.query(`
+        SELECT u.first_name || ' ' || u.last_name as caregiver,
+          COALESCE(SUM(te.duration_minutes) / 60.0, 0) as hours
+        FROM users u
+        LEFT JOIN time_entries te ON te.caregiver_id = u.id
+          AND te.start_time >= $1::timestamptz AND te.is_complete = true
+        WHERE u.role = 'caregiver'
+        GROUP BY u.id, u.first_name, u.last_name
+        ORDER BY hours DESC
+      `, [sd]);
       data = result.rows;
     }
 
     if (format === 'csv') {
       const headers = data.length > 0 ? Object.keys(data[0]).join(',') : '';
-      const rows = data.map(row => Object.values(row).join(','));
+      const rows = data.map(row => Object.values(row).map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
       const csv = [headers, ...rows].join('\n');
       
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
       res.send(csv);
+    } else if (format === 'pdf') {
+      const PDFDocument = require('pdfkit');
+      const doc = new PDFDocument({ margin: 50, size: 'LETTER' });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+      doc.pipe(res);
+
+      // Header
+      doc.fontSize(18).fillColor('#2ABBA7').text('Chippewa Valley Home Care', 50, 50);
+      doc.fontSize(13).fillColor('#333').text(`${reportType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} Report`, 50, 75);
+      doc.fontSize(10).fillColor('#666').text(`Period: ${startDate} – ${endDate}`, 50, 95);
+      doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`, 50, 110);
+      doc.moveTo(50, 130).lineTo(562, 130).strokeColor('#2ABBA7').stroke();
+
+      if (data.length === 0) {
+        doc.fontSize(12).fillColor('#666').text('No data found for the selected period.', 50, 150);
+      } else {
+        const keys = Object.keys(data[0]);
+        const colWidth = Math.min(Math.floor(512 / keys.length), 120);
+        let y = 150;
+
+        // Table header
+        doc.fontSize(9).fillColor('#fff');
+        doc.rect(50, y, 512, 18).fill('#2ABBA7');
+        keys.forEach((key, i) => {
+          doc.fillColor('#fff').text(key.replace(/_/g, ' ').toUpperCase(), 53 + i * colWidth, y + 4, { width: colWidth - 4, ellipsis: true });
+        });
+        y += 20;
+
+        // Table rows
+        data.forEach((row, rowIdx) => {
+          if (y > 700) {
+            doc.addPage();
+            y = 50;
+          }
+          if (rowIdx % 2 === 0) {
+            doc.rect(50, y, 512, 16).fill('#F9FAFB');
+          }
+          doc.fontSize(8).fillColor('#333');
+          keys.forEach((key, i) => {
+            const val = row[key] !== null && row[key] !== undefined ? String(row[key]) : '—';
+            doc.text(val, 53 + i * colWidth, y + 3, { width: colWidth - 4, ellipsis: true });
+          });
+          y += 18;
+        });
+
+        // Summary
+        y += 10;
+        doc.fontSize(10).fillColor('#333').text(`Total Records: ${data.length}`, 50, y);
+      }
+
+      doc.end();
     } else {
-      res.status(400).json({ error: 'PDF export not yet implemented' });
+      res.status(400).json({ error: `Unsupported format: ${format}` });
     }
   } catch (error) {
     console.error('Export error:', error);
@@ -633,3 +770,131 @@ router.get('/caregiver-productivity', auth, async (req, res) => {
 });
 
 module.exports = router;
+
+// ==================== PDF EXPORT ====================
+// POST /api/reports/:type/export-pdf
+const PDFDocument = require('pdfkit');
+
+router.post('/:type/export-pdf', auth, async (req, res) => {
+  const { type } = req.params;
+  const { startDate, endDate } = req.body;
+
+  try {
+    // Fetch the data for this report type
+    let reportData = {};
+    const HOURS_CALC = `EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600`;
+
+    if (type === 'overview' || type === 'hours') {
+      const [summary, caregivers] = await Promise.all([
+        db.query(`SELECT COALESCE(SUM(${HOURS_CALC}), 0) as total_hours, COUNT(DISTINCT s.id) as total_shifts
+          FROM schedules s WHERE s.is_active = true
+          AND ((s.date >= $1 AND s.date <= $2) OR (s.day_of_week IS NOT NULL AND s.date IS NULL))`, [startDate, endDate]),
+        db.query(`SELECT u.first_name || ' ' || u.last_name as name,
+            COALESCE(SUM(${HOURS_CALC}), 0) as hours, COUNT(DISTINCT s.client_id) as clients
+          FROM users u LEFT JOIN schedules s ON s.caregiver_id = u.id AND s.is_active = true
+            AND ((s.date >= $1 AND s.date <= $2) OR s.day_of_week IS NOT NULL)
+          WHERE u.role = 'caregiver' AND u.is_active = true
+          GROUP BY u.id, u.first_name, u.last_name ORDER BY hours DESC LIMIT 20`, [startDate, endDate])
+      ]);
+      reportData = { summary: summary.rows[0], caregivers: caregivers.rows };
+    } else if (type === 'performance') {
+      const result = await db.query(`SELECT u.first_name || ' ' || u.last_name as name,
+          COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
+          COUNT(DISTINCT pr.id) as ratings, COUNT(DISTINCT s.client_id) as clients
+        FROM users u LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id AND pr.created_at >= $1 AND pr.created_at <= $2
+        LEFT JOIN schedules s ON s.caregiver_id = u.id AND s.is_active = true
+        WHERE u.role = 'caregiver' AND u.is_active = true
+        GROUP BY u.id, u.first_name, u.last_name ORDER BY avg_rating DESC`, [startDate, endDate]);
+      reportData = { caregivers: result.rows };
+    } else if (type === 'revenue') {
+      const result = await db.query(`SELECT COALESCE(SUM(total), 0) as total_billed,
+          COALESCE(SUM(amount_paid), 0) as collected, COUNT(*) as invoice_count
+        FROM invoices WHERE billing_period_start >= $1 AND billing_period_end <= $2`, [startDate, endDate]);
+      reportData = { revenue: result.rows[0] };
+    }
+
+    // Build PDF
+    const doc = new PDFDocument({ margin: 50, size: 'LETTER' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="cvhc-${type}-report-${startDate}-to-${endDate}.pdf"`);
+    doc.pipe(res);
+
+    // Header
+    doc.rect(0, 0, doc.page.width, 80).fill('#2ABBA7');
+    doc.fillColor('#fff').fontSize(22).font('Helvetica-Bold')
+      .text('Chippewa Valley Home Care', 50, 22);
+    doc.fontSize(12).font('Helvetica')
+      .text(`${type.charAt(0).toUpperCase() + type.slice(1)} Report  •  ${startDate} to ${endDate}`, 50, 50);
+
+    doc.fillColor('#111827').moveDown(3);
+
+    // Content based on type
+    if (type === 'overview' || type === 'hours') {
+      const { summary, caregivers } = reportData;
+      doc.fontSize(16).font('Helvetica-Bold').text('Summary', { underline: true });
+      doc.moveDown(0.5);
+      doc.fontSize(12).font('Helvetica');
+      doc.text(`Total Scheduled Hours: ${parseFloat(summary?.total_hours || 0).toFixed(2)}`);
+      doc.text(`Total Shifts: ${summary?.total_shifts || 0}`);
+      doc.moveDown(1.5);
+
+      doc.fontSize(14).font('Helvetica-Bold').text('Caregiver Breakdown', { underline: true });
+      doc.moveDown(0.5);
+      // Table header
+      doc.fontSize(10).font('Helvetica-Bold');
+      doc.text('Caregiver', 50, doc.y, { width: 200, continued: true });
+      doc.text('Hours', 250, doc.y, { width: 80, continued: true });
+      doc.text('Clients', 330, doc.y);
+      doc.moveTo(50, doc.y).lineTo(480, doc.y).stroke('#E5E7EB');
+      doc.moveDown(0.3);
+
+      doc.font('Helvetica').fontSize(10);
+      (caregivers || []).forEach((cg, i) => {
+        if (doc.y > 680) { doc.addPage(); }
+        const bg = i % 2 === 0 ? '#F9FAFB' : '#fff';
+        doc.rect(48, doc.y - 2, 434, 16).fill(bg);
+        doc.fillColor('#111827');
+        doc.text(cg.name, 50, doc.y, { width: 200, continued: true });
+        doc.text(parseFloat(cg.hours).toFixed(2), 250, doc.y, { width: 80, continued: true });
+        doc.text(String(cg.clients || 0), 330, doc.y);
+        doc.moveDown(0.15);
+      });
+    } else if (type === 'performance') {
+      doc.fontSize(16).font('Helvetica-Bold').text('Caregiver Performance', { underline: true });
+      doc.moveDown(0.5);
+      doc.fontSize(10).font('Helvetica-Bold');
+      doc.text('Caregiver', 50, doc.y, { width: 200, continued: true });
+      doc.text('Avg Rating', 250, doc.y, { width: 100, continued: true });
+      doc.text('Reviews', 350, doc.y);
+      doc.moveTo(50, doc.y).lineTo(480, doc.y).stroke('#E5E7EB');
+      doc.moveDown(0.3);
+      doc.font('Helvetica');
+      (reportData.caregivers || []).forEach(cg => {
+        if (doc.y > 680) doc.addPage();
+        doc.text(cg.name, 50, doc.y, { width: 200, continued: true });
+        doc.text(parseFloat(cg.avg_rating).toFixed(1) + ' / 5', 250, doc.y, { width: 100, continued: true });
+        doc.text(String(cg.ratings || 0), 350, doc.y);
+        doc.moveDown(0.15);
+      });
+    } else if (type === 'revenue') {
+      const { revenue } = reportData;
+      doc.fontSize(16).font('Helvetica-Bold').text('Revenue Summary', { underline: true });
+      doc.moveDown(0.5);
+      doc.fontSize(12).font('Helvetica');
+      doc.text(`Total Billed: $${parseFloat(revenue?.total_billed || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
+      doc.text(`Total Collected: $${parseFloat(revenue?.collected || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
+      doc.text(`Total Invoices: ${revenue?.invoice_count || 0}`);
+      const outstanding = parseFloat(revenue?.total_billed || 0) - parseFloat(revenue?.collected || 0);
+      doc.text(`Outstanding: $${outstanding.toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
+    }
+
+    // Footer
+    doc.fontSize(8).fillColor('#9CA3AF')
+      .text(`Generated ${new Date().toLocaleDateString()} by CVHC CRM`, 50, doc.page.height - 40);
+
+    doc.end();
+  } catch (error) {
+    console.error('PDF export error:', error);
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+  }
+});

@@ -1,6 +1,8 @@
+import { confirm } from '../ConfirmModal';
 // src/components/admin/ComplianceTracking.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { toast } from '../Toast';
 
 const ComplianceTracking = ({ token }) => {
   const [caregivers, setCaregivers] = useState([]);
@@ -158,7 +160,7 @@ const ComplianceTracking = ({ token }) => {
   };
 
   const handleDeleteTraining = async (trainingId) => {
-    if (!window.confirm('Delete this training record?')) return;
+    const _cok = await confirm('Delete this training record?', {danger: true}); if (!_cok) return;
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/training-records/${trainingId}`, {
@@ -674,48 +676,105 @@ const ComplianceTracking = ({ token }) => {
 
           {/* Overview Tab */}
           {tab === 'overview' && (
-            <div className="card">
-              <h3>Compliance Summary</h3>
-              <div style={{ display: 'grid', gap: '1rem' }}>
-                <div style={{ padding: '1rem', background: '#f9f9f9', borderRadius: '4px' }}>
-                  <strong>Background Check</strong>
-                  <p style={{ margin: '0.5rem 0 0 0' }}>
-                    {backgroundCheck ? (
-                      <>
-                        Status: <span style={{ color: getStatusColor(backgroundCheck.status) }}>●</span> {backgroundCheck.status.toUpperCase()}
-                        {backgroundCheck.expiration_date && (
-                          <>
-                            <br/>Expires: {new Date(backgroundCheck.expiration_date).toLocaleDateString()}
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      <span style={{ color: '#d32f2f' }}>NO BACKGROUND CHECK ON FILE</span>
-                    )}
-                  </p>
-                </div>
-
-                <div style={{ padding: '1rem', background: '#f9f9f9', borderRadius: '4px' }}>
-                  <strong>Training Records</strong>
-                  <p style={{ margin: '0.5rem 0 0 0' }}>
-                    {trainingRecords.length} training(s) on file
-                    <br/>
-                    {trainingRecords.filter(t => isExpired(t.expiration_date)).length} expired
-                    <br/>
-                    {trainingRecords.filter(t => isExpiringSoon(t.expiration_date)).length} expiring soon
-                  </p>
-                </div>
-
-                <div style={{ padding: '1rem', background: '#f9f9f9', borderRadius: '4px' }}>
-                  <strong>Documents</strong>
-                  <p style={{ margin: '0.5rem 0 0 0' }}>
-                    {complianceDocuments.length} document(s) on file
-                  </p>
-                </div>
-              </div>
-            </div>
+            <ExpiryOverview token={token} />
           )}
         </>
+      )}
+    </div>
+  );
+};
+
+// ─── All-Caregivers Expiry Overview ───────────────────────────────────────────
+const ExpiryOverview = ({ token }) => {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [days, setDays] = useState(60);
+  const [filter, setFilter] = useState('all'); // all, expiring_soon, expired, no_check, current
+
+  useEffect(() => { loadData(); }, [days]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/background-checks/overview/expiring?days=${days}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const result = await res.json();
+      setData(Array.isArray(result) ? result : []);
+    } catch { toast('Failed to load expiry overview', 'error'); }
+    finally { setLoading(false); }
+  };
+
+  const filtered = data.filter(d => filter === 'all' || d.expiry_status === filter);
+  const counts = {
+    expired: data.filter(d => d.expiry_status === 'expired').length,
+    expiring_soon: data.filter(d => d.expiry_status === 'expiring_soon').length,
+    no_check: data.filter(d => d.expiry_status === 'no_check').length,
+    current: data.filter(d => d.expiry_status === 'current').length,
+  };
+
+  const statusLabel = { expired: { label: 'Expired', color: '#DC2626', bg: '#FEF2F2', border: '#FCA5A5' }, expiring_soon: { label: 'Expiring Soon', color: '#D97706', bg: '#FFFBEB', border: '#FCD34D' }, no_check: { label: 'No Check on File', color: '#6B7280', bg: '#F9FAFB', border: '#D1D5DB' }, current: { label: 'Current', color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0' } };
+
+  return (
+    <div>
+      <h3 style={{ margin: '0 0 1rem' }}>🛡️ Background Check Expiry — All Caregivers</h3>
+
+      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={days} onChange={e => setDays(Number(e.target.value))}
+          style={{ padding: '0.4rem 0.75rem', border: '1px solid #D1D5DB', borderRadius: '6px', fontSize: '0.9rem' }}>
+          <option value={30}>Expiring in 30 days</option>
+          <option value={60}>Expiring in 60 days</option>
+          <option value={90}>Expiring in 90 days</option>
+          <option value={180}>Expiring in 180 days</option>
+        </select>
+        <button onClick={loadData} style={{ padding: '0.4rem 0.875rem', background: '#2ABBA7', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '600' }}>Refresh</button>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+        {Object.entries(counts).map(([key, count]) => {
+          const s = statusLabel[key];
+          return (
+            <button key={key} onClick={() => setFilter(filter === key ? 'all' : key)}
+              style={{ padding: '0.75rem', background: filter === key ? s.bg : '#fff', border: `2px solid ${filter === key ? s.border : '#E5E7EB'}`, borderRadius: '8px', cursor: 'pointer', textAlign: 'center', transition: 'all 0.15s' }}>
+              <div style={{ fontSize: '1.4rem', fontWeight: '800', color: s.color }}>{count}</div>
+              <div style={{ fontSize: '0.72rem', color: '#6B7280', fontWeight: '600' }}>{s.label}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {loading ? <div style={{ textAlign: 'center', padding: '2rem', color: '#6B7280' }}>Loading...</div> : filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '2rem', color: '#6B7280' }}>
+          {filter === 'all' ? 'No caregivers found.' : `No caregivers with "${statusLabel[filter]?.label}" status.`}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {filtered.map(cg => {
+            const s = statusLabel[cg.expiry_status] || statusLabel.no_check;
+            const daysUntil = cg.days_until_expiry ? parseInt(cg.days_until_expiry) : null;
+            return (
+              <div key={cg.caregiver_id} style={{ padding: '0.875rem', background: '#fff', borderRadius: '8px', border: `1px solid ${s.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div>
+                  <div style={{ fontWeight: '700', color: '#111827' }}>{cg.first_name} {cg.last_name}</div>
+                  <div style={{ fontSize: '0.82rem', color: '#6B7280' }}>
+                    {cg.email} {cg.phone && `• ${cg.phone}`}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <span style={{ padding: '0.2rem 0.6rem', borderRadius: '6px', fontSize: '0.78rem', fontWeight: '700', background: s.bg, color: s.color, border: `1px solid ${s.border}` }}>
+                    {s.label}
+                  </span>
+                  <div style={{ fontSize: '0.78rem', color: '#6B7280', marginTop: '0.2rem' }}>
+                    {cg.expiration_date ? `Expires: ${new Date(cg.expiration_date).toLocaleDateString()}` : 'No check on file'}
+                    {daysUntil !== null && daysUntil > 0 && ` (${daysUntil} days)`}
+                    {daysUntil !== null && daysUntil <= 0 && ` (${Math.abs(daysUntil)} days ago)`}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

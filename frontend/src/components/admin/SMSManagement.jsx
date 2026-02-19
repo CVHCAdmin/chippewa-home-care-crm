@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/SMSManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -87,15 +89,15 @@ const SMSManagement = ({ token }) => {
       });
       if (res.ok) {
         const result = await res.json();
-        alert(`Message sent successfully! SID: ${result.sid}`);
+        toast(`Message sent successfully! SID: ${result.sid}`);
         setShowSendModal(false);
         loadMessages();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed to send: ' + error.message);
+      toast('Failed to send: ' + error.message, 'error');
     }
   };
 
@@ -111,15 +113,15 @@ const SMSManagement = ({ token }) => {
       });
       if (res.ok) {
         const result = await res.json();
-        alert(`Sent ${result.sent} messages successfully!`);
+        toast(`Sent ${result.sent} messages successfully!`);
         setShowSendModal(false);
         loadMessages();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed to send: ' + error.message);
+      toast('Failed to send: ' + error.message, 'error');
     }
   };
 
@@ -143,15 +145,15 @@ const SMSManagement = ({ token }) => {
         loadTemplates();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed to save: ' + error.message);
+      toast('Failed to save: ' + error.message, 'error');
     }
   };
 
   const deleteTemplate = async (templateId) => {
-    if (!confirm('Delete this template?')) return;
+    const _cok = await confirm('Delete this template?', {danger: true}); if (!_cok) return;
     try {
       const res = await fetch(`${API_BASE_URL}/api/sms/templates/${templateId}`, {
         method: 'DELETE',
@@ -161,7 +163,7 @@ const SMSManagement = ({ token }) => {
         loadTemplates();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -446,13 +448,13 @@ const SendMessageForm = ({ templates, caregivers, clients, onSend, onSendBulk, o
     e.preventDefault();
     if (mode === 'single') {
       if (!formData.to || !formData.body) {
-        alert('Phone number and message are required');
+        toast('Phone number and message are required');
         return;
       }
       onSend({ to: formData.to, body: formData.body });
     } else {
       if (formData.recipientIds.length === 0 || !formData.body) {
-        alert('Select recipients and enter a message');
+        toast('Select recipients and enter a message');
         return;
       }
       onSendBulk({ 
@@ -595,7 +597,7 @@ const TemplateForm = ({ template, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.name || !formData.body) {
-      alert('Name and message body are required');
+      toast('Name and message body are required');
       return;
     }
     onSubmit(formData);

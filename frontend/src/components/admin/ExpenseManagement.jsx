@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/ExpenseManagement.jsx
 // Complete expense tracking: Categories, Filtering, Reports, Receipt Management, Budgets
 import React, { useState, useEffect } from 'react';
@@ -111,7 +113,7 @@ const ExpenseManagement = ({ token }) => {
       setMessage(editingExpense ? '✓ Expense updated' : '✓ Expense recorded');
       setTimeout(() => setMessage(''), 3000);
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -134,7 +136,7 @@ const ExpenseManagement = ({ token }) => {
   };
 
   const handleDelete = async (expenseId) => {
-    if (!window.confirm('Delete this expense?')) return;
+    const _cok = await confirm('Delete this expense?', {danger: true}); if (!_cok) return;
     try {
       await fetch(`${API_BASE_URL}/api/expenses/${expenseId}`, {
         method: 'DELETE',
@@ -144,7 +146,7 @@ const ExpenseManagement = ({ token }) => {
       setMessage('✓ Expense deleted');
       setTimeout(() => setMessage(''), 2000);
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 

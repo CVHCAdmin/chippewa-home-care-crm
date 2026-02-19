@@ -1,3 +1,4 @@
+import { confirm } from '../ConfirmModal';
 // src/components/admin/PerformanceRatings.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -128,7 +129,7 @@ const PerformanceRatings = ({ token }) => {
   };
 
   const handleDeleteReview = async (reviewId) => {
-    if (!window.confirm('Delete this review? This cannot be undone.')) return;
+    const _cok = await confirm('Delete this review? This cannot be undone.', {danger: true}); if (!_cok) return;
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/performance-reviews/${reviewId}`, {

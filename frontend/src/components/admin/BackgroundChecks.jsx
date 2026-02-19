@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/BackgroundChecks.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -74,10 +75,10 @@ const BackgroundChecks = ({ token }) => {
         loadChecks();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -97,10 +98,10 @@ const BackgroundChecks = ({ token }) => {
         loadChecks();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -360,7 +361,7 @@ const AddCheckForm = ({ caregivers, checkTypes, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.caregiverId || !formData.checkType) {
-      alert('Please select caregiver and check type');
+      toast('Please select caregiver and check type');
       return;
     }
     onSubmit(formData);

@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/FamilyPortalAdmin.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -81,10 +82,10 @@ const FamilyPortalAdmin = ({ token }) => {
         loadFamilyMembers();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -102,14 +103,14 @@ const FamilyPortalAdmin = ({ token }) => {
         loadFamilyMembers();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
   const resetPassword = async (memberId) => {
     const newPassword = prompt('Enter new password (min 8 characters):');
     if (!newPassword || newPassword.length < 8) {
-      alert('Password must be at least 8 characters');
+      toast('Password must be at least 8 characters');
       return;
     }
     try {
@@ -122,13 +123,13 @@ const FamilyPortalAdmin = ({ token }) => {
         body: JSON.stringify({ password: newPassword })
       });
       if (res.ok) {
-        alert('Password reset successfully');
+        toast('Password reset successfully');
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -147,10 +148,10 @@ const FamilyPortalAdmin = ({ token }) => {
         loadMessages();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -460,11 +461,11 @@ const AddMemberForm = ({ clients, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.clientId || !formData.firstName || !formData.email || !formData.password) {
-      alert('Client, name, email and password are required');
+      toast('Client, name, email and password are required');
       return;
     }
     if (formData.password.length < 8) {
-      alert('Password must be at least 8 characters');
+      toast('Password must be at least 8 characters');
       return;
     }
     onSubmit(formData);
@@ -611,7 +612,7 @@ const ReplyForm = ({ message, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!reply.trim()) {
-      alert('Please enter a reply');
+      toast('Please enter a reply');
       return;
     }
     onSubmit(reply);

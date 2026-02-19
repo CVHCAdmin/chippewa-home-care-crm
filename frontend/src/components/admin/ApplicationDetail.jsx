@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/ApplicationDetail.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -51,7 +53,7 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
       setTimeout(() => setMessage(''), 2000);
       loadApplication();
     } catch (error) {
-      alert('Failed to update: ' + error.message);
+      toast('Failed to update: ' + error.message, 'error');
     }
   };
 
@@ -71,12 +73,12 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
       setMessage('Notes saved');
       setTimeout(() => setMessage(''), 2000);
     } catch (error) {
-      alert('Failed to save notes: ' + error.message);
+      toast('Failed to save notes: ' + error.message, 'error');
     }
   };
 
   const handleHireApplicant = async () => {
-    if (!window.confirm('Convert this applicant to a caregiver account?')) return;
+    const _cok = await confirm('Convert this applicant to a caregiver account?', {danger: true}); if (!_cok) return;
 
     setHiring(true);
     try {
@@ -99,7 +101,7 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
       setMessage('✓ Applicant hired and caregiver account created!');
       setTimeout(() => onBack(), 2000);
     } catch (error) {
-      alert('Failed to hire: ' + error.message);
+      toast('Failed to hire: ' + error.message, 'error');
     } finally {
       setHiring(false);
     }

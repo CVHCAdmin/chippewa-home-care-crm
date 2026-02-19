@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/ClientsManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -190,9 +191,9 @@ const ClientsManagement = ({ token }) => {
       setFormData(initialFormData);
       setShowForm(false);
       loadData();
-      alert('Client added successfully!');
+      toast('Client added successfully!');
     } catch (error) {
-      alert('Failed to create client: ' + error.message);
+      toast('Failed to create client: ' + error.message, 'error');
     }
   };
 
