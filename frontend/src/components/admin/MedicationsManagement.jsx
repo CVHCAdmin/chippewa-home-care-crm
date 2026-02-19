@@ -21,7 +21,6 @@ const MedicationsManagement = ({ token }) => {
     return () => window.removeEventListener("beforeunload", fn);
   }, [isDirty]);
 
-  $1Clients();
   }, []);
 
   useEffect(() => {

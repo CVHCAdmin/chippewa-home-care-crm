@@ -6,7 +6,7 @@ import { API_BASE_URL } from '../../config';
 const CarePlans = ({ token }) => {
   const [clients, setClients] = useState([]);
   const [carePlans, setCarePlans] = useState({});
-  $1
+  const [loading, setLoading] = useState(true);
   const [isDirty, setIsDirty] = useState(false);
   const [expandedClient, setExpandedClient] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -33,7 +33,8 @@ const CarePlans = ({ token }) => {
     return () => window.removeEventListener("beforeunload", fn);
   }, [isDirty]);
 
-  $1Data();
+  useEffect(() => {
+    loadData();
   }, []);
 
   const loadData = async () => {
