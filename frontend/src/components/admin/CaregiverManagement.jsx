@@ -344,8 +344,9 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
           </div>
         )}
 
-        {
-      ) : caregivers.length === 0 ? (
+        {loading ? (
+          <div className="spinner"></div>
+        ) : caregivers.length === 0 ? (
         <div className="card card-centered">
           <p>No caregivers yet.</p>
         </div>
