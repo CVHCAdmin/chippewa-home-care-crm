@@ -1,3 +1,4 @@
+import { confirm } from '../ConfirmModal';
 // src/components/admin/SchedulingHub.jsx
 // Unified scheduling hub - consolidates all scheduling features into one page
 import React, { useState, useEffect } from 'react';
@@ -56,6 +57,12 @@ const SchedulingHub = ({ token }) => {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [selectedCaregiver, setSelectedCaregiver] = useState(null);
   const [conflicts, setConflicts] = useState([]);
+  // Bi-weekly anchor: which week is the "ON" week. Defaults to current Sunday.
+  const [biWeeklyAnchorDate, setBiWeeklyAnchorDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - d.getDay()); // Start of current week (Sunday)
+    return d.toISOString().split('T')[0];
+  });
 
   // ── Edit Schedule Modal ──
   const [editModal, setEditModal] = useState(null);
@@ -252,7 +259,7 @@ const SchedulingHub = ({ token }) => {
   };
 
   const convertProspect = async (prospectId) => {
-    if (!window.confirm('Convert this prospect to a full client?')) return;
+    const _cok = await confirm('Convert this prospect to a full client?', {danger: true}); if (!_cok) return;
     try {
       const result = await api(`/api/prospects/${prospectId}/convert`, { method: 'POST' });
       showMsg(`Converted to client: ${result.client.first_name} ${result.client.last_name}`);
@@ -262,7 +269,7 @@ const SchedulingHub = ({ token }) => {
   };
 
   const deleteProspectAppt = async (id) => {
-    if (!window.confirm('Cancel this appointment?')) return;
+    const _cok = await confirm('Cancel this appointment?', {danger: true}); if (!_cok) return;
     try {
       await api(`/api/prospect-appointments/${id}`, { method: 'DELETE' });
       showMsg('Appointment cancelled');
@@ -345,12 +352,46 @@ const SchedulingHub = ({ token }) => {
   // CREATE SCHEDULE LOGIC (caregiver-first flow)
   // ═══════════════════════════════════════════════
 
+  // Load schedules for a caregiver and detect conflicts
   const loadCaregiverSchedules = async (cgId) => {
-    if (!cgId) { setCaregiverSchedules([]); return; }
+    if (!cgId) return;
     try {
-      const data = await api(`/api/schedules/${cgId}`);
-      setCaregiverSchedules(Array.isArray(data) ? data : []);
-    } catch (e) { console.error(e); setCaregiverSchedules([]); }
+      const data = await api(`/api/schedules/caregiver/${cgId}`);
+      const list = Array.isArray(data) ? data : [];
+      setCaregiverSchedules(list);
+      const found = detectConflicts(list);
+      setConflicts(found);
+    } catch (e) {
+      console.error('Failed to load caregiver schedules:', e);
+      setCaregiverSchedules([]);
+      setConflicts([]);
+    }
+  };
+
+
+  const detectConflicts = (schedules) => {
+    const found = [];
+    const recurring = schedules.filter(s => s.day_of_week !== null && s.day_of_week !== undefined && s.is_active !== false);
+    recurring.forEach((a, i) => {
+      recurring.slice(i + 1).forEach(b => {
+        if (a.day_of_week !== b.day_of_week) return;
+        // Both biweekly — only conflict if same anchor alignment
+        if (a.frequency === 'biweekly' && b.frequency === 'biweekly') {
+          if (a.anchor_date && b.anchor_date) {
+            const anchorA = new Date(a.anchor_date + 'T00:00:00');
+            const anchorB = new Date(b.anchor_date + 'T00:00:00');
+            const diffWeeks = Math.floor(Math.abs(anchorA - anchorB) / (7 * 24 * 60 * 60 * 1000));
+            if (diffWeeks % 2 !== 0) return; // offset by 1 week — they never overlap
+          }
+        }
+        const aStart = a.start_time, aEnd = a.end_time;
+        const bStart = b.start_time, bEnd = b.end_time;
+        if (aStart < bEnd && aEnd > bStart) {
+          found.push({ a, b, day: a.day_of_week });
+        }
+      });
+    });
+    return found;
   };
 
   const handleCaregiverSelectCreate = (cgId) => {
@@ -382,11 +423,10 @@ const SchedulingHub = ({ token }) => {
     if (formData.startTime >= formData.endTime) { showMsg('End time must be after start time', 'error'); return; }
 
     const today = new Date().toISOString().split('T')[0];
-    // Anchor date = start of current week (for bi-weekly alignment)
-    const now = new Date();
-    const anchorDate = new Date(now); 
-    anchorDate.setDate(now.getDate() - now.getDay());
-    const anchorStr = anchorDate.toISOString().split('T')[0];
+    // Use user-selected anchor date for bi-weekly, normalized to Sunday of that week
+    const anchorBase = new Date(biWeeklyAnchorDate + 'T12:00:00');
+    anchorBase.setDate(anchorBase.getDate() - anchorBase.getDay()); // normalize to Sunday
+    const anchorStr = anchorBase.toISOString().split('T')[0];
 
     setSaving(true);
     try {
@@ -434,7 +474,7 @@ const SchedulingHub = ({ token }) => {
   };
 
   const handleDeleteSchedule = async (scheduleId) => {
-    if (!window.confirm('Delete this schedule?')) return;
+    const _cok = await confirm('Delete this schedule?', {danger: true}); if (!_cok) return;
     try {
       await api(`/api/schedules/${scheduleId}`, { method: 'DELETE' });
       showMsg('Schedule deleted');
@@ -500,7 +540,10 @@ const SchedulingHub = ({ token }) => {
 
   const getDayName = (dow) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dow] || 'Unknown';
 
-  const calculateTotalHours = (list) => list.reduce((t, s) => t + parseFloat(calculateHours(s.start_time, s.end_time)), 0).toFixed(2);
+  const calculateTotalHours = (list) => list.reduce((t, s) => {
+    const hrs = parseFloat(calculateHours(s.start_time, s.end_time));
+    return t + (s.frequency === 'biweekly' ? hrs / 2 : hrs);
+  }, 0).toFixed(2);
 
   const handleReassign = async (scheduleId, newCaregiverId) => {
     try {
@@ -534,7 +577,7 @@ const SchedulingHub = ({ token }) => {
         if (s.frequency === 'biweekly' && s.anchor_date) {
           const anchor = new Date(s.anchor_date + 'T00:00:00');
           const diffMs = target.getTime() - anchor.getTime();
-          const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+          const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
           if (diffWeeks % 2 !== 0) return false;
         }
         return true;
@@ -586,7 +629,7 @@ const SchedulingHub = ({ token }) => {
   // ═══════════════════════════════════════════════
 
   const approveSwap = async (id) => {
-    if (!confirm('Approve this shift swap?')) return;
+    const _cok = await confirm('Approve this shift swap?', {danger: true}); if (!_cok) return;
     try { await api(`/api/shift-swaps/${id}/approve`, { method: 'PUT' }); loadSwaps(); }
     catch (e) { showMsg('Failed: ' + e.message, 'error'); }
   };
@@ -609,7 +652,7 @@ const SchedulingHub = ({ token }) => {
   };
 
   const deleteAbsence = async (id) => {
-    if (!confirm('Delete this absence?')) return;
+    const _cok = await confirm('Delete this absence?', {danger: true}); if (!_cok) return;
     try { await api(`/api/absences/${id}`, { method: 'DELETE' }); loadAbsences(); }
     catch (e) { showMsg('Failed: ' + e.message, 'error'); }
   };
@@ -663,7 +706,7 @@ const SchedulingHub = ({ token }) => {
   };
 
   const deleteBlackout = async (id) => {
-    if (!confirm('Delete this blackout date?')) return;
+    const _cok = await confirm('Delete this blackout date?', {danger: true}); if (!_cok) return;
     try {
       await api(`/api/blackout-dates/${id}`, { method: 'DELETE' });
       loadAvailability(availCaregiver);
@@ -1250,9 +1293,24 @@ const SchedulingHub = ({ token }) => {
                       {selectedDays.length > 0 && (
                         <div style={{ fontSize: '0.85rem', color: '#9A3412', padding: '0.5rem', background: '#FFEDD5', borderRadius: '4px' }}>
                           📊 Every other week: <strong>{selectedDays.length}</strong> day{selectedDays.length !== 1 ? 's' : ''} — {selectedDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}
-                          <div style={{ fontSize: '0.78rem', marginTop: '0.25rem', color: '#B45309' }}>Starts this week, skips next week, repeats</div>
+                          <div style={{ fontSize: '0.78rem', marginTop: '0.25rem', color: '#B45309' }}>Starts the week of the anchor date below, skips alternating weeks</div>
                         </div>
                       )}
+                      {/* Anchor Date Picker */}
+                      <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#fff', borderRadius: '6px', border: '1px solid #FED7AA' }}>
+                        <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.4rem' }}>
+                          📅 "ON" Week Start Date *
+                        </label>
+                        <input
+                          type="date"
+                          value={biWeeklyAnchorDate}
+                          onChange={e => setBiWeeklyAnchorDate(e.target.value)}
+                          style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '6px', fontSize: '0.9rem' }}
+                        />
+                        <div style={{ fontSize: '0.75rem', color: '#B45309', marginTop: '0.3rem' }}>
+                          Select any date in the week this caregiver should work. The schedule will repeat every other week from that week.
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1330,6 +1388,16 @@ const SchedulingHub = ({ token }) => {
           {/* Existing Schedules Display */}
           {selectedCaregiverId && (
             <div>
+              {conflicts.length > 0 && (
+                <div style={{ marginBottom: "1rem", padding: "0.875rem 1rem", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: "8px" }}>
+                  <div style={{ fontWeight: "700", color: "#991B1B", marginBottom: "0.4rem" }}>⚠️ Schedule Conflicts Detected</div>
+                  {conflicts.map((c, i) => (
+                    <div key={i} style={{ fontSize: "0.85rem", color: "#B91C1C" }}>
+                      {getDayName(c.day)}: {c.a.client_name || "Client"} ({c.a.start_time}-{c.a.end_time}) overlaps with {c.b.client_name || "Client"} ({c.b.start_time}-{c.b.end_time})
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* Recurring Schedules */}
               {hasRecurring && (
                 <div style={{ marginBottom: '1.5rem' }}>
@@ -1823,13 +1891,36 @@ const SchedulingHub = ({ token }) => {
           <div style={{ marginBottom: '1.25rem', padding: '0.5rem 0.75rem', background: '#EFF6FF', borderRadius: '6px', fontSize: '0.85rem', color: '#1E40AF', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>{editModal.scheduleType === 'recurring' ? '🔄 Recurring' : '📅 One-Time'} Schedule</span>
             {editModal.scheduleType === 'recurring' && (
-              <div style={{ display: 'flex', gap: '0.3rem' }}>
-                <button type="button" onClick={() => setEditModal(prev => ({ ...prev, frequency: 'weekly' }))}
-                  style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer',
-                    background: editModal.frequency === 'weekly' ? '#3B82F6' : '#E5E7EB', color: editModal.frequency === 'weekly' ? '#fff' : '#374151' }}>Weekly</button>
-                <button type="button" onClick={() => setEditModal(prev => ({ ...prev, frequency: 'biweekly' }))}
-                  style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer',
-                    background: editModal.frequency === 'biweekly' ? '#F97316' : '#E5E7EB', color: editModal.frequency === 'biweekly' ? '#fff' : '#374151' }}>Bi-Weekly</button>
+              <div>
+                <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.5rem' }}>
+                  <button type="button" onClick={() => {
+                    if (editModal.frequency === 'biweekly') {
+                      // Switching from biweekly → weekly: clear anchor
+                      setEditModal(prev => ({ ...prev, frequency: 'weekly', anchorDate: null }));
+                    } else {
+                      setEditModal(prev => ({ ...prev, frequency: 'weekly' }));
+                    }
+                  }}
+                    style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer',
+                      background: editModal.frequency === 'weekly' ? '#3B82F6' : '#E5E7EB', color: editModal.frequency === 'weekly' ? '#fff' : '#374151' }}>Weekly</button>
+                  <button type="button" onClick={() => {
+                    const now = new Date();
+                    const sunday = new Date(now);
+                    sunday.setDate(now.getDate() - now.getDay());
+                    const newAnchor = sunday.toISOString().split('T')[0];
+                    setEditModal(prev => ({ ...prev, frequency: 'biweekly', anchorDate: prev.anchorDate || newAnchor }));
+                  }}
+                    style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer',
+                      background: editModal.frequency === 'biweekly' ? '#F97316' : '#E5E7EB', color: editModal.frequency === 'biweekly' ? '#fff' : '#374151' }}>Bi-Weekly</button>
+                </div>
+                {editModal.frequency === 'biweekly' && (
+                  <div style={{ padding: '0.6rem', background: '#FFF7ED', borderRadius: '6px', border: '1px solid #FED7AA' }}>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.3rem' }}>📅 "ON" Week Anchor</label>
+                    <input type="date" value={editModal.anchorDate || ''} onChange={e => setEditModal(prev => ({ ...prev, anchorDate: e.target.value }))}
+                      style={{ width: '100%', padding: '0.4rem', border: '1px solid #D1D5DB', borderRadius: '4px', fontSize: '0.85rem' }} />
+                    <div style={{ fontSize: '0.72rem', color: '#B45309', marginTop: '0.2rem' }}>Changing the anchor resets which weeks are "on" vs "off"</div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1926,3 +2017,6 @@ const SchedulingHub = ({ token }) => {
 };
 
 export default SchedulingHub;
+
+// CONFLICT DETECTION - injected at module level (will be picked up by React)
+// NOTE: detectConflicts is added to the component via the code patch below

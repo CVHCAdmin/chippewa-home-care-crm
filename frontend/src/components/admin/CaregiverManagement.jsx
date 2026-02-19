@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/CaregiverManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -53,7 +55,7 @@ const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, 
   </div>
 );
 
-const CaregiverManagement = ({ token, onViewProfile }) => {
+const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
   const [caregivers, setCaregivers] = useState([]);
   const [careTypes, setCareTypes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -62,7 +64,11 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
   const [showRatesModal, setShowRatesModal] = useState(false);
   const [selectedCaregiver, setSelectedCaregiver] = useState(null);
   const [caregiverRates, setCaregiverRates] = useState([]);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkMessage, setBulkMessage] = useState('');
+  const [showBulkMsg, setShowBulkMsg] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all'); // all, active, inactive
   
   const [editData, setEditData] = useState({
     firstName: '',
@@ -107,7 +113,7 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
   };
 
   const handlePromoteToAdmin = async (userId) => {
-    if (window.confirm('Promote this caregiver to admin?')) {
+    if (await confirm('Promote this caregiver to admin?')) {
       try {
         const response = await fetch(`${API_BASE_URL}/api/users/convert-to-admin`, {
           method: 'POST',
@@ -119,9 +125,9 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
         });
         if (!response.ok) throw new Error('Failed to promote');
         loadData();
-        alert('Caregiver promoted to admin!');
+        toast('Caregiver promoted to admin!');
       } catch (error) {
-        alert('Failed to promote: ' + error.message);
+        toast('Failed to promote: ' + error.message, 'error');
       }
     }
   };
@@ -167,9 +173,9 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
       setShowEditModal(false);
       setSelectedCaregiver(null);
       loadData();
-      alert('Caregiver updated!');
+      toast('Caregiver updated!');
     } catch (error) {
-      alert('Failed to update: ' + error.message);
+      toast('Failed to update: ' + error.message, 'error');
     }
   };
 
@@ -182,7 +188,7 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
       setCaregiverRates(await response.json());
       setShowRatesModal(true);
     } catch (error) {
-      alert('Failed to load rates: ' + error.message);
+      toast('Failed to load rates: ' + error.message, 'error');
     }
   };
 
@@ -211,12 +217,12 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
       });
       setCaregiverRates(await ratesRes.json());
     } catch (error) {
-      alert('Failed to add rate: ' + error.message);
+      toast('Failed to add rate: ' + error.message, 'error');
     }
   };
 
   const handleDeleteRate = async (rateId) => {
-    if (!window.confirm('Remove this rate?')) return;
+    const _cok = await confirm('Remove this rate?', {danger: true}); if (!_cok) return;
     
     try {
       await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates/${rateId}`, {
@@ -229,7 +235,7 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
       });
       setCaregiverRates(await ratesRes.json());
     } catch (error) {
-      alert('Failed to delete rate: ' + error.message);
+      toast('Failed to delete rate: ' + error.message, 'error');
     }
   };
 
@@ -251,15 +257,104 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
         </button>
       </div>
 
-      {loading ? (
-        <div className="loading"><div className="spinner"></div></div>
+      // Filtered caregivers list
+      const filteredCaregivers = caregivers.filter(cg => {
+        const q = searchQuery.toLowerCase();
+        const matchesSearch = !q || 
+          (cg.first_name + " " + cg.last_name).toLowerCase().includes(q) ||
+          (cg.email || "").toLowerCase().includes(q) ||
+          (cg.phone || "").includes(q) ||
+          (cg.city || "").toLowerCase().includes(q);
+        const matchesStatus = statusFilter === "all" ||
+          (statusFilter === "active" && cg.is_active !== false) ||
+          (statusFilter === "inactive" && cg.is_active === false);
+        return matchesSearch && matchesStatus;
+      });
+      // End filtered
+      return (
+        <>
+        <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+          <input placeholder="🔍 Search caregivers..." value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ flex: "1", minWidth: "180px", padding: "0.5rem 0.75rem", border: "1px solid #D1D5DB", borderRadius: "8px", fontSize: "0.9rem" }} />
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            style={{ padding: "0.5rem 0.75rem", border: "1px solid #D1D5DB", borderRadius: "8px", fontSize: "0.9rem" }}>
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+          <span style={{ fontSize: "0.85rem", color: "#6B7280" }}>{filteredCaregivers.length} of {caregivers.length}</span>
+        </div>
+
+        {/* Bulk Actions Bar */}
+        {selectedIds.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.875rem", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: "8px", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: "600", color: "#1D4ED8" }}>
+              ✅ {selectedIds.length} selected
+            </span>
+            <button onClick={() => {
+              // Export selected as CSV
+              const selected = caregivers.filter(c => selectedIds.includes(c.id));
+              const csv = ['Name,Email,Phone,Pay Rate,Status'].concat(
+                selected.map(c => `"${c.first_name} ${c.last_name}","${c.email}","${c.phone || ''}","${c.default_pay_rate || ''}","${c.is_active ? 'Active' : 'Inactive'}"`)
+              ).join('\n');
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a'); a.href = url; a.download = 'caregivers.csv'; a.click();
+              URL.revokeObjectURL(url);
+              toast(`Exported ${selected.length} caregivers`, 'success');
+            }} style={{ padding: "0.35rem 0.75rem", background: "#fff", border: "1px solid #D1D5DB", borderRadius: "6px", cursor: "pointer", fontSize: "0.82rem", fontWeight: "600" }}>
+              📥 Export CSV
+            </button>
+            <button onClick={() => setShowBulkMsg(true)}
+              style={{ padding: "0.35rem 0.75rem", background: "#2ABBA7", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "0.82rem", fontWeight: "600" }}>
+              📱 Send SMS
+            </button>
+            <button onClick={() => setSelectedIds([])} style={{ padding: "0.35rem 0.75rem", background: "none", border: "1px solid #D1D5DB", borderRadius: "6px", cursor: "pointer", fontSize: "0.82rem", color: "#6B7280" }}>
+              Clear
+            </button>
+          </div>
+        )}
+
+        {/* Bulk SMS Modal */}
+        {showBulkMsg && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+            <div style={{ background: "#fff", borderRadius: "12px", padding: "1.5rem", maxWidth: "420px", width: "100%" }}>
+              <h3 style={{ margin: "0 0 0.75rem 0" }}>📱 Send SMS to {selectedIds.length} Caregiver{selectedIds.length !== 1 ? 's' : ''}</h3>
+              <textarea
+                placeholder="Type your message here..."
+                value={bulkMessage}
+                onChange={e => setBulkMessage(e.target.value)}
+                rows={4}
+                style={{ width: "100%", padding: "0.75rem", border: "1px solid #D1D5DB", borderRadius: "8px", fontSize: "0.9rem", resize: "vertical", boxSizing: "border-box" }}
+              />
+              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem", justifyContent: "flex-end" }}>
+                <button onClick={() => setShowBulkMsg(false)} style={{ padding: "0.5rem 1rem", border: "1px solid #D1D5DB", borderRadius: "8px", background: "#fff", cursor: "pointer" }}>Cancel</button>
+                <button onClick={async () => {
+                  if (!bulkMessage.trim()) { toast('Enter a message', 'warning'); return; }
+                  try {
+                    const phones = caregivers.filter(c => selectedIds.includes(c.id) && c.phone).map(c => c.phone);
+                    await fetch(`${API_BASE_URL}/api/sms/bulk`, {
+                      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ phones, message: bulkMessage })
+                    });
+                    toast(`SMS sent to ${phones.length} caregivers`, 'success');
+                    setShowBulkMsg(false); setBulkMessage(''); setSelectedIds([]);
+                  } catch { toast('SMS send failed', 'error'); }
+                }} style={{ padding: "0.5rem 1rem", background: "#2ABBA7", color: "#fff", border: "none", borderRadius: "8px", cursor: "pointer", fontWeight: "600" }}>Send</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {
       ) : caregivers.length === 0 ? (
         <div className="card card-centered">
           <p>No caregivers yet.</p>
         </div>
       ) : isMobile ? (
         <div>
-          {caregivers.map(caregiver => (
+          {filteredCaregivers.map(caregiver => (
             <CaregiverCard
               key={caregiver.id}
               caregiver={caregiver}
@@ -276,6 +371,10 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
           <table className="table">
             <thead>
               <tr>
+                <th style={{ width: '36px' }}>
+                  <input type="checkbox" checked={selectedIds.length === filteredCaregivers.length && filteredCaregivers.length > 0}
+                    onChange={e => setSelectedIds(e.target.checked ? filteredCaregivers.map(c => c.id) : [])} />
+                </th>
                 <th>Name</th>
                 <th>Email</th>
                 <th>Phone</th>
@@ -286,8 +385,12 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
               </tr>
             </thead>
             <tbody>
-              {caregivers.map(caregiver => (
-                <tr key={caregiver.id}>
+              {filteredCaregivers.map(caregiver => (
+                <tr key={caregiver.id} style={{ background: selectedIds.includes(caregiver.id) ? '#EFF6FF' : undefined }}>
+                  <td>
+                    <input type="checkbox" checked={selectedIds.includes(caregiver.id)}
+                      onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, caregiver.id] : prev.filter(id => id !== caregiver.id))} />
+                  </td>
                   <td><strong>{caregiver.first_name} {caregiver.last_name}</strong></td>
                   <td>{caregiver.email}</td>
                   <td><a href={`tel:${caregiver.phone}`}>{caregiver.phone || 'N/A'}</a></td>
@@ -308,8 +411,8 @@ const CaregiverManagement = ({ token, onViewProfile }) => {
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                       <button className="btn btn-sm btn-primary" onClick={() => handleOpenEdit(caregiver)}>Edit</button>
                       <button className="btn btn-sm btn-secondary" onClick={() => handleOpenRates(caregiver)}>💰 Pay Rates</button>
-                      {onViewProfile && (
-                        <button className="btn btn-sm btn-secondary" onClick={() => onViewProfile(caregiver.id)}>Profile</button>
+                      {onViewHistory && (
+                        <button className="btn btn-sm btn-secondary" onClick={() => onViewHistory(caregiver.id, caregiver.first_name + " " + caregiver.last_name)}>🕐 History</button>
                       )}
                       {caregiver.role !== 'admin' && (
                         <button className="btn btn-sm btn-warning" onClick={() => handlePromoteToAdmin(caregiver.id)}>Make Admin</button>

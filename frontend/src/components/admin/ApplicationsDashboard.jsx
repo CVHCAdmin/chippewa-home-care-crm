@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/ApplicationsDashboard.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -57,7 +58,7 @@ const ApplicationsDashboard = ({ token }) => {
       setHireResult(data);
       loadApplications();
     } catch (error) {
-      alert('Error: ' + error.message);
+      toast('Error: ' + error.message, 'error');
     } finally {
       setHiring(false);
     }

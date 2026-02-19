@@ -1,14 +1,19 @@
 // src/App.jsx - Main application component
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import CaregiverDashboard from './components/CaregiverDashboard';
 import PaymentPage, { PaymentSuccess } from './components/PaymentPage';
+import { ToastContainer, toast } from './components/Toast';
+import { ConfirmModal } from './components/ConfirmModal';
+import { setSessionExpiredCallback } from './config';
 
 const App = () => {
   return (
     <BrowserRouter>
+      <ToastContainer />
+      <ConfirmModal />
       <Routes>
         {/* Public payment routes - no auth required */}
         <Route path="/pay/:invoiceId" element={<PaymentPage />} />
@@ -26,11 +31,26 @@ const MainApp = () => {
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(localStorage.getItem('token'));
 
+  const handleLogout = useCallback((expired = false) => {
+    localStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+    if (expired) toast('Your session has expired. Please log in again.', 'warning');
+  }, []);
+
   useEffect(() => {
-    // Check if user is logged in
+    setSessionExpiredCallback(() => handleLogout(true));
+  }, [handleLogout]);
+
+  useEffect(() => {
     if (token) {
       try {
         const payload = JSON.parse(atob(token.split('.')[1]));
+        // Check expiry on load
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+          handleLogout(true);
+          return;
+        }
         setUser(payload);
       } catch (error) {
         localStorage.removeItem('token');
@@ -44,12 +64,6 @@ const MainApp = () => {
     localStorage.setItem('token', token);
     setToken(token);
     setUser(userData);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    setToken(null);
-    setUser(null);
   };
 
   if (loading) {

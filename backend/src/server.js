@@ -798,8 +798,29 @@ app.post('/api/time-entries/clock-in', verifyToken, async (req, res) => {
     );
 
     await auditLog(req.user.id, 'CREATE', 'time_entries', entryId, null, result.rows[0]);
-    
-    // Return in expected format
+
+    // Get client name for push notification
+    let clientName = null;
+    if (clientId) {
+      try {
+        const cl = await db.query('SELECT first_name, last_name FROM clients WHERE id = $1', [clientId]);
+        if (cl.rows[0]) clientName = `${cl.rows[0].first_name} ${cl.rows[0].last_name}`;
+      } catch {}
+    }
+
+    // Fire push notification (async, don't await)
+    try {
+      const { sendPushToUser } = require('./routes/pushNotificationRoutes');
+      const startTimeFormatted = new Date(result.rows[0].start_time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      sendPushToUser(req.user.id, {
+        title: '✅ Clocked In',
+        body: `You are clocked in${clientName ? ` for ${clientName}` : ''}. Started at ${startTimeFormatted}.`,
+        icon: '/icon-192.png',
+        tag: `clock-in-${entryId}`,
+        data: { type: 'clock_in', timeEntryId: entryId },
+      });
+    } catch {}
+
     res.status(201).json({
       id: result.rows[0].id,
       client_id: result.rows[0].client_id,
@@ -815,54 +836,87 @@ app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
   try {
     const { latitude, longitude, notes } = req.body;
 
-    // Calculate hours worked
-    const timeEntry = await db.query(`SELECT start_time FROM time_entries WHERE id = $1`, [req.params.id]);
+    const timeEntry = await db.query(
+      `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
+       FROM time_entries te
+       LEFT JOIN clients c ON te.client_id = c.id
+       WHERE te.id = $1`,
+      [req.params.id]
+    );
     if (timeEntry.rows.length === 0) {
       return res.status(404).json({ error: 'Time entry not found' });
     }
-    
+
     const clockIn = new Date(timeEntry.rows[0].start_time);
     const clockOut = new Date();
     const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
+    const durationMinutes = Math.round(hoursWorked * 60);
 
     const result = await db.query(
       `UPDATE time_entries SET 
         end_time = NOW(),
         clock_out_location = $1,
         duration_minutes = $2,
+        is_complete = true,
         notes = $3,
         updated_at = NOW()
        WHERE id = $4
        RETURNING *`,
-      [latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, (hoursWorked * 60).toFixed(0), notes || null, req.params.id]
+      [
+        latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null,
+        durationMinutes,
+        notes || null,
+        req.params.id
+      ]
     );
 
     await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
+
+    // Fire push notification (async)
+    try {
+      const { sendPushToUser } = require('./routes/pushNotificationRoutes');
+      const clientName = timeEntry.rows[0].client_first_name
+        ? `${timeEntry.rows[0].client_first_name} ${timeEntry.rows[0].client_last_name}`
+        : null;
+      const hrs = hoursWorked.toFixed(2);
+      const durationStr = durationMinutes >= 60
+        ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
+        : `${durationMinutes}m`;
+
+      sendPushToUser(req.user.id, {
+        title: '🕐 Clocked Out',
+        body: `Shift complete${clientName ? ` — ${clientName}` : ''}. Duration: ${durationStr} (${hrs}h).`,
+        icon: '/icon-192.png',
+        tag: `clock-out-${req.params.id}`,
+        data: { type: 'clock_out' },
+      });
+    } catch {}
+
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// POST /api/time-entries/:id/gps - Track GPS during active session
+// POST /api/time-entries/:id/gps - Track GPS during active session (writes breadcrumbs)
 app.post('/api/time-entries/:id/gps', verifyToken, async (req, res) => {
   try {
-    const { latitude, longitude, accuracy } = req.body;
-    
-    // Store GPS point (you could create a separate gps_tracks table for full history)
-    // For now, we'll just update the last known location
-    const result = await db.query(
-      `UPDATE time_entries SET 
-        last_location = $1,
-        updated_at = NOW()
-       WHERE id = $2 AND end_time IS NULL
-       RETURNING id`,
-      [JSON.stringify({ lat: latitude, lng: longitude, accuracy, timestamp: new Date() }), req.params.id]
+    const { latitude, longitude, accuracy, speed, heading } = req.body;
+
+    const entryCheck = await db.query(
+      `SELECT id FROM time_entries WHERE id = $1 AND caregiver_id = $2 AND end_time IS NULL`,
+      [req.params.id, req.user.id]
     );
 
-    if (result.rows.length === 0) {
+    if (entryCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Active time entry not found' });
     }
+
+    await db.query(
+      `INSERT INTO gps_tracking (caregiver_id, time_entry_id, latitude, longitude, accuracy, speed, heading, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+      [req.user.id, req.params.id, latitude, longitude, accuracy || null, speed || null, heading || null]
+    );
 
     res.json({ success: true });
   } catch (error) {
@@ -870,35 +924,55 @@ app.post('/api/time-entries/:id/gps', verifyToken, async (req, res) => {
   }
 });
 
-// PATCH /api/time-entries/:id/clock-out (keep for backwards compatibility)
-app.patch('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
+// GET /api/time-entries/:id/gps - Get GPS breadcrumb trail for a specific shift
+app.get('/api/time-entries/:id/gps', verifyToken, async (req, res) => {
   try {
-    const { latitude, longitude, notes } = req.body;
-
-    // Calculate hours worked
-    const timeEntry = await db.query(`SELECT start_time FROM time_entries WHERE id = $1`, [req.params.id]);
-    const clockIn = new Date(timeEntry.rows[0].start_time);
-    const clockOut = new Date();
-    const hoursWorked = (clockOut - clockIn) / (1000 * 60 * 60);
-
     const result = await db.query(
-      `UPDATE time_entries SET 
-        end_time = NOW(),
-        clock_out_location = $1,
-        duration_minutes = $2,
-        notes = $3,
-        updated_at = NOW()
-       WHERE id = $4
-       RETURNING *`,
-      [JSON.stringify({ lat: latitude, lng: longitude }), (hoursWorked * 60).toFixed(0), notes || null, req.params.id]
+      `SELECT latitude, longitude, accuracy, speed, heading, timestamp
+       FROM gps_tracking
+       WHERE time_entry_id = $1
+       ORDER BY timestamp ASC`,
+      [req.params.id]
     );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Time entry not found' });
-    }
+// GET /api/time-entries/caregiver-history/:caregiverId - Full shift history with GPS
+app.get('/api/time-entries/caregiver-history/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const { startDate, endDate, limit = 50 } = req.query;
+    const result = await db.query(
+      `SELECT 
+        te.*,
+        c.first_name as client_first_name, c.last_name as client_last_name,
+        c.address as client_address, c.city as client_city,
+        (SELECT COUNT(*) FROM gps_tracking gt WHERE gt.time_entry_id = te.id) as gps_point_count
+       FROM time_entries te
+       LEFT JOIN clients c ON te.client_id = c.id
+       WHERE te.caregiver_id = $1
+         ${startDate ? 'AND te.start_time >= $4::timestamptz' : ''}
+         ${endDate ? 'AND te.start_time <= $5::timestamptz' : ''}
+       ORDER BY te.start_time DESC
+       LIMIT $2`,
+      [req.params.caregiverId, limit,
+        ...(startDate ? [startDate] : []),
+        ...(endDate ? [endDate] : [])
+      ].filter((_, i) => {
+        if (i === 2 && !startDate) return false;
+        if (i === 3 && !endDate) return false;
+        return true;
+      })
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-    await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
-    res.json(result.rows[0]);
+
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3570,13 +3644,15 @@ app.use('/api/open-shifts', verifyToken, require('./routes/openShiftsRoutes'));
 app.use('/api/medications', verifyToken, require('./routes/medicationsRoutes'));
 app.use('/api/documents', verifyToken, require('./routes/documentsRoutes'));
 app.use('/api/adl', verifyToken, require('./routes/adlRoutes'));
-app.use('/api/background-checks', verifyToken, require('./routes/backgroundChecksRoutes'));
+app.use('/api/background-checks', verifyToken, require('./routes/backgroundCheckRoutes'));
 app.use('/api/family-portal', require('./routes/familyPortalRoutes')); // No verifyToken - has its own auth
 app.use('/api/shift-swaps', verifyToken, require('./routes/shiftSwapsRoutes'));
 app.use('/api/alerts', verifyToken, require('./routes/alertsRoutes'));
 app.use('/api', billingRoutes);
 app.use('/api/route-optimizer', verifyToken, require('./routes/routeOptimizerRoutes'));
 app.use('/api/matching', verifyToken, require('./routes/matchingRoutes'));
+app.use('/api/emergency', verifyToken, require('./routes/emergencyRoutes'));
+app.use('/api/push', verifyToken, require('./routes/pushNotificationRoutes').router);
 
 // ============ CARE TYPES ============
 app.get('/api/care-types', verifyToken, async (req, res) => {

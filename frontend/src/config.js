@@ -1,24 +1,44 @@
-// src/config.js - Updated for Vite
+// src/config.js - API utilities with token expiry handling
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://chippewa-home-care-api.onrender.com';
 
-// src/utils/api.js
+// Global logout callback — set by App on mount
+let _onSessionExpired = null;
+export const setSessionExpiredCallback = (fn) => { _onSessionExpired = fn; };
+
+// Check if JWT is expired (without verifying signature)
+export const isTokenExpired = (token) => {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    if (!payload.exp) return false;
+    return payload.exp * 1000 < Date.now();
+  } catch {
+    return true;
+  }
+};
+
 export const apiCall = async (endpoint, options = {}, token) => {
-  const headers = {
-    'Content-Type': 'application/json',
-    ...options.headers
-  };
+  const headers = { 'Content-Type': 'application/json', ...options.headers };
 
   if (token) {
+    if (isTokenExpired(token)) {
+      if (_onSessionExpired) _onSessionExpired();
+      throw new Error('SESSION_EXPIRED');
+    }
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers
-  });
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
+
+  if (response.status === 401) {
+    if (_onSessionExpired) _onSessionExpired();
+    throw new Error('SESSION_EXPIRED');
+  }
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    const text = await response.text();
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch {}
+    throw new Error(msg);
   }
 
   return response.json();
@@ -40,7 +60,7 @@ export const createSchedule = (data, token) => apiCall('/api/schedules', { metho
 
 export const clockIn = (data, token) => apiCall('/api/time-entries/clock-in', { method: 'POST', body: JSON.stringify(data) }, token);
 export const clockOut = (id, data, token) => apiCall(`/api/time-entries/${id}/clock-out`, { method: 'POST', body: JSON.stringify(data) }, token);
-export const trackGPS = (data, token) => apiCall('/api/gps-tracking', { method: 'POST', body: JSON.stringify(data) }, token);
+export const trackGPS = (id, data, token) => apiCall(`/api/time-entries/${id}/gps`, { method: 'POST', body: JSON.stringify(data) }, token);
 
 export const getInvoices = (token) => apiCall('/api/invoices', { method: 'GET' }, token);
 export const generateInvoice = (data, token) => apiCall('/api/invoices/generate', { method: 'POST', body: JSON.stringify(data) }, token);

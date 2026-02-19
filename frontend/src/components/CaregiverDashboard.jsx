@@ -1,9 +1,31 @@
+import { toast } from './Toast';
 // src/components/CaregiverDashboard.jsx
 // Enhanced with self-service: availability, open shifts pickup, time off requests
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../config';
 import CaregiverClientModal from './CaregiverClientModal';
 import MileageTracker from './MileageTracker';
+import ShiftMissReport from './caregiver/ShiftMissReport';
+
+const subscribeToPush = async (token) => {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    const reg = await navigator.serviceWorker.ready;
+    const vapidRes = await fetch(`${API_BASE_URL}/api/push/vapid-key`, { headers: { Authorization: `Bearer ${token}` } });
+    const { publicKey } = await vapidRes.json();
+    if (!publicKey || publicKey === 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') return;
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: publicKey,
+    });
+    await fetch(`${API_BASE_URL}/api/push/subscribe`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription }),
+    });
+  } catch (e) {
+    console.log('[Push] subscription skipped:', e.message);
+  }
+};
 
 const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('home');
@@ -42,10 +64,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [timeOffRequests, setTimeOffRequests] = useState([]);
   const [newTimeOff, setNewTimeOff] = useState({ startDate: '', endDate: '', reason: '' });
   const [message, setMessage] = useState({ text: '', type: '' });
+  const [showMissReport, setShowMissReport] = useState(false);
 
   useEffect(() => {
     loadData();
     startGPSTracking();
+    // Subscribe to push notifications on mount
+    subscribeToPush(token);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -188,13 +213,47 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         (err) => setLocationError(err.message),
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
       );
+    }
+  };
+
+  // Push GPS breadcrumbs every 60 seconds during active shift
+  const startGPSBreadcrumbs = (sessionId) => {
+    if (!("geolocation" in navigator)) return;
+    const interval = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          fetch(`${API_BASE_URL}/api/time-entries/${sessionId}/gps`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+            body: JSON.stringify({ latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy, speed: pos.coords.speed, heading: pos.coords.heading })
+          }).catch(() => {});
+          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+        },
+        () => {}, // silent fail for breadcrumbs
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }, 60000); // every 60s
+    return interval;
+  };
+  const gpsIntervalRef = React.useRef(null);
+
+  const _startGPSTracking_REMOVED = () => {
+    if ("geolocation" in navigator) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+          setLocationError(null);
+        },
+        (err) => setLocationError(err.message),
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      );
     } else {
       setLocationError('Geolocation not supported');
     }
   };
 
   const handleClockIn = async () => {
-    if (!selectedClient) return alert('Please select a client.');
+    if (!selectedClient) return toast('Please select a client.');
 
     try {
       const res = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
@@ -206,18 +265,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           longitude: location?.lng || null 
         })
       });
-      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-      setActiveSession(await res.json());
+      const _clockInData = await res.json();
+      if (!res.ok) throw new Error(_clockInData.error || "Failed");
+      setActiveSession(_clockInData);
+      gpsIntervalRef.current = startGPSBreadcrumbs(_clockInData.id);
       if (!location) {
         showMsg('Clocked in (location unavailable)', 'warning');
       }
     } catch (error) {
-      alert('Failed to clock in: ' + error.message);
+      toast('Failed to clock in: ' + error.message, 'error');
     }
   };
 
   const handleClockOut = () => {
-    if (!activeSession) return alert('No active session.');
+    if (!activeSession) return toast('No active session.');
     setShowNoteModal(true);
   };
 
@@ -235,7 +296,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       setShowNoteModal(false);
       loadData();
     } catch (error) {
-      alert('Failed to clock out: ' + error.message);
+      toast('Failed to clock out: ' + error.message, 'error');
     }
   };
 
@@ -434,39 +495,82 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         )}
       </div>
 
-      <div className="card">
-        <div className="card-title">{activeSession ? '🟢 Clocked In' : '⏰ Clock In/Out'}</div>
+      {/* MOBILE-FIRST CLOCK-IN — Full prominent card */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {activeSession ? (
-          <div style={{ textAlign: 'center', padding: '1rem 0' }}>
-            <div style={{ fontSize: '0.9rem', color: '#666' }}>Working with: <strong>{getClientName(activeSession.client_id)}</strong></div>
-            <div style={{ fontSize: '3rem', fontWeight: 'bold', fontFamily: 'monospace', color: '#2563eb' }}>{formatElapsed(elapsedTime)}</div>
-            <button className="btn btn-danger btn-block" style={{ marginTop: '1rem' }} onClick={handleClockOut}>🛑 Clock Out</button>
+          // ACTIVE SESSION — big timer, center-stage
+          <div style={{ textAlign: 'center', padding: '2rem 1.5rem', background: 'linear-gradient(135deg, #F0FDF4, #DCFCE7)' }}>
+            <div style={{ fontSize: '0.9rem', color: '#166534', fontWeight: '600', marginBottom: '0.25rem' }}>
+              🟢 Clocked In with {getClientName(activeSession.client_id)}
+            </div>
+            <div style={{ fontSize: '4rem', fontWeight: '900', fontFamily: 'monospace', color: '#16A34A', lineHeight: 1.1, margin: '0.5rem 0' }}>
+              {formatElapsed(elapsedTime)}
+            </div>
+            <div style={{ fontSize: '0.82rem', color: '#4B5563', marginBottom: '1.5rem' }}>
+              {location ? `📍 GPS Active (±${location.accuracy?.toFixed(0)}m)` : '📍 Location unavailable'}
+            </div>
+            <button
+              onClick={handleClockOut}
+              style={{
+                width: '100%', padding: '1.125rem', background: '#DC2626', color: '#fff',
+                border: 'none', borderRadius: '12px', cursor: 'pointer',
+                fontWeight: '800', fontSize: '1.15rem', letterSpacing: '0.02em',
+                boxShadow: '0 4px 12px rgba(220,38,38,0.3)'
+              }}
+            >
+              🛑 Clock Out
+            </button>
           </div>
         ) : (
-          <>
-            <div className="form-group">
-              <label>Select Client</label>
-              <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}>
+          // CLOCK IN — prominent select + button
+          <div style={{ padding: '1.5rem' }}>
+            <div style={{ fontSize: '1.1rem', fontWeight: '800', color: '#111827', marginBottom: '1rem', textAlign: 'center' }}>
+              ⏰ Ready to Start a Shift?
+            </div>
+            <div className="form-group" style={{ marginBottom: '0.875rem' }}>
+              <label style={{ fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Select Client *</label>
+              <select
+                value={selectedClient}
+                onChange={(e) => setSelectedClient(e.target.value)}
+                style={{ width: '100%', padding: '0.875rem', fontSize: '1rem', border: '2px solid #D1D5DB', borderRadius: '10px', background: '#fff', boxSizing: 'border-box' }}
+              >
                 <option value="">Choose client...</option>
                 {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
               </select>
             </div>
-            <div className={`alert ${location ? 'alert-success' : 'alert-info'}`} style={{ marginBottom: '1rem' }}>
-              {location ? `📍 GPS Active (±${location.accuracy?.toFixed(0)}m)` : '📍 ' + (locationError ? 'Location unavailable - you can still clock in' : 'Getting location...')}
+            <div style={{ padding: '0.6rem 0.875rem', background: location ? '#F0FDF4' : '#F9FAFB', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.85rem', color: location ? '#166534' : '#6B7280', border: `1px solid ${location ? '#BBF7D0' : '#E5E7EB'}` }}>
+              {location ? `✅ GPS Active (±${location.accuracy?.toFixed(0)}m)` : locationError ? '⚠️ Location unavailable — you can still clock in' : '📍 Getting your location...'}
             </div>
-            <button className="btn btn-primary btn-block" onClick={handleClockIn} disabled={!selectedClient}>▶️ Clock In</button>
-          </>
+            <button
+              onClick={handleClockIn}
+              disabled={!selectedClient}
+              style={{
+                width: '100%', padding: '1.125rem', background: selectedClient ? '#2ABBA7' : '#D1D5DB',
+                color: selectedClient ? '#fff' : '#9CA3AF', border: 'none', borderRadius: '12px',
+                cursor: selectedClient ? 'pointer' : 'not-allowed', fontWeight: '800', fontSize: '1.15rem',
+                transition: 'all 0.15s', boxShadow: selectedClient ? '0 4px 12px rgba(42,187,167,0.3)' : 'none'
+              }}
+            >
+              ▶️ Clock In
+            </button>
+          </div>
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '1rem' }}>
+      {/* Quick Actions row */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
         <div className="card" style={{ textAlign: 'center', cursor: 'pointer', padding: '1rem' }} onClick={() => handlePageClick('open-shifts')}>
-          <div style={{ fontSize: '2rem' }}>📋</div>
-          <div style={{ fontWeight: '600' }}>Open Shifts</div>
+          <div style={{ fontSize: '1.6rem' }}>📋</div>
+          <div style={{ fontWeight: '600', fontSize: '0.82rem' }}>Open Shifts</div>
         </div>
         <div className="card" style={{ textAlign: 'center', cursor: 'pointer', padding: '1rem' }} onClick={() => handlePageClick('availability')}>
-          <div style={{ fontSize: '2rem' }}>⏰</div>
-          <div style={{ fontWeight: '600' }}>Availability</div>
+          <div style={{ fontSize: '1.6rem' }}>⏰</div>
+          <div style={{ fontWeight: '600', fontSize: '0.82rem' }}>Availability</div>
+        </div>
+        <div className="card" style={{ textAlign: 'center', cursor: 'pointer', padding: '1rem', background: '#FEF2F2', border: '1px solid #FCA5A5' }}
+          onClick={() => setShowMissReport(true)}>
+          <div style={{ fontSize: '1.6rem' }}>🚨</div>
+          <div style={{ fontWeight: '600', fontSize: '0.82rem', color: '#DC2626' }}>Miss Report</div>
         </div>
       </div>
     </>
@@ -724,6 +828,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           </li>
           <li><a href="#" className={currentPage === 'open-shifts' ? 'active' : ''} onClick={() => handlePageClick('open-shifts')}>📋 Open Shifts</a></li>
           <li><a href="#" className={currentPage === 'availability' ? 'active' : ''} onClick={() => handlePageClick('availability')}>⏰ Availability</a></li>
+          <li><a href="#" className={currentPage === 'miss-report' ? 'active' : ''} onClick={() => handlePageClick('miss-report')}>🚨 Report Miss</a></li>
           <li><a href="#" className={currentPage === 'time-off' ? 'active' : ''} onClick={() => handlePageClick('time-off')}>🏖️ Time Off</a></li>
           <li style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', marginTop: '0.5rem' }}>
             <a href="#" className={currentPage === 'settings' ? 'active' : ''} onClick={() => handlePageClick('settings')}>⚙️ Settings</a>
@@ -749,6 +854,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           {currentPage === 'open-shifts' && renderOpenShiftsPage()}
           {currentPage === 'availability' && renderAvailabilityPage()}
           {currentPage === 'time-off' && renderTimeOffPage()}
+          {currentPage === 'miss-report' && renderMissReportPage()}
           {currentPage === 'settings' && renderSettingsPage()}
         </div>
       </div>
@@ -768,6 +874,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       )}
 
       <CaregiverClientModal clientId={viewingClientId} isOpen={!!viewingClientId} onClose={() => setViewingClientId(null)} token={token} />
+
+      {/* Shift Miss Report Modal */}
+      {showMissReport && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: '500px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <ShiftMissReport token={token} userId={user.id} onClose={() => setShowMissReport(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

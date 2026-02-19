@@ -1,3 +1,4 @@
+import { confirm } from '../ConfirmModal';
 // src/components/admin/IncidentReporting.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -114,7 +115,7 @@ const IncidentReporting = ({ token }) => {
   };
 
   const handleDeleteIncident = async (incidentId) => {
-    if (!window.confirm('Delete this incident report? This cannot be undone.')) return;
+    const _cok = await confirm('Delete this incident report? This cannot be undone.', {danger: true}); if (!_cok) return;
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/incidents/${incidentId}`, {

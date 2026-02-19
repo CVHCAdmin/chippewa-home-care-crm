@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/PayrollProcessing.jsx
 // Complete payroll: Overtime, Mileage, PTO, Shift Differentials, Pay Stubs, Exports
 import React, { useState, useEffect } from 'react';
@@ -190,7 +191,7 @@ const PayrollProcessing = ({ token }) => {
       setTimeout(() => setMessage(''), 2000);
       calculatePayroll();
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -208,7 +209,7 @@ const PayrollProcessing = ({ token }) => {
       setTimeout(() => setMessage(''), 2000);
       calculatePayroll();
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -226,7 +227,7 @@ const PayrollProcessing = ({ token }) => {
       a.download = `payroll-${payPeriod.startDate}-to-${payPeriod.endDate}.${format}`;
       a.click();
     } catch (error) {
-      alert('Failed to export: ' + error.message);
+      toast('Failed to export: ' + error.message, 'error');
     }
   };
 
@@ -246,7 +247,7 @@ const PayrollProcessing = ({ token }) => {
       setMessage('✓ QuickBooks export downloaded');
       setTimeout(() => setMessage(''), 3000);
     } catch (error) {
-      alert('Failed to export: ' + error.message);
+      toast('Failed to export: ' + error.message, 'error');
     }
   };
 

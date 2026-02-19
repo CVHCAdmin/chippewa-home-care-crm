@@ -1,11 +1,13 @@
+import { confirm } from '../ConfirmModal';
 // src/components/admin/CarePlans.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 
 const CarePlans = ({ token }) => {
   const [clients, setClients] = useState([]);
   const [carePlans, setCarePlans] = useState({});
-  const [loading, setLoading] = useState(true);
+  $1
+  const [isDirty, setIsDirty] = useState(false);
   const [expandedClient, setExpandedClient] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [message, setMessage] = useState('');
@@ -26,7 +28,12 @@ const CarePlans = ({ token }) => {
   });
 
   useEffect(() => {
-    loadData();
+    const fn = (e) => { if (isDirty) { e.preventDefault(); e.returnValue = "You have unsaved changes. Leave anyway?"; return e.returnValue; } };
+    window.addEventListener("beforeunload", fn);
+    return () => window.removeEventListener("beforeunload", fn);
+  }, [isDirty]);
+
+  $1Data();
   }, []);
 
   const loadData = async () => {
@@ -113,7 +120,7 @@ const CarePlans = ({ token }) => {
   };
 
   const handleDeletePlan = async (planId) => {
-    if (!window.confirm('Delete this care plan?')) return;
+    const _cok = await confirm('Delete this care plan?', {danger: true}); if (!_cok) return;
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/care-plans/${planId}`, {

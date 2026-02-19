@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/AlertsManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -61,10 +63,10 @@ const AlertsManagement = ({ token }) => {
         loadAlerts();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -78,7 +80,7 @@ const AlertsManagement = ({ token }) => {
         loadAlerts();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -97,12 +99,12 @@ const AlertsManagement = ({ token }) => {
         loadAlerts();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
   const dismissAlert = async (alertId) => {
-    if (!confirm('Dismiss this alert without resolving?')) return;
+    const _cok = await confirm('Dismiss this alert without resolving?', {danger: true}); if (!_cok) return;
     try {
       const res = await fetch(`${API_BASE_URL}/api/alerts/${alertId}/dismiss`, {
         method: 'PUT',
@@ -112,7 +114,7 @@ const AlertsManagement = ({ token }) => {
         loadAlerts();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -402,7 +404,7 @@ const CreateAlertForm = ({ alertTypes, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.message) {
-      alert('Message is required');
+      toast('Message is required');
       return;
     }
     onSubmit(formData);

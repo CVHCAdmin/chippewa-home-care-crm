@@ -1,3 +1,4 @@
+import { toast } from '../Toast';
 // src/components/admin/ReportsAnalytics.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -71,31 +72,26 @@ const ReportsAnalytics = ({ token }) => {
 
   const exportReport = async (format) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/reports/${reportType}/export`, {
+      const endpoint = format === 'pdf'
+        ? `${API_BASE_URL}/api/reports/${reportType}/export-pdf`
+        : `${API_BASE_URL}/api/reports/${reportType}/export`;
+      const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          startDate: dateRange.startDate,
-          endDate: dateRange.endDate,
-          caregiverId: caregiverFilter || null,
-          clientId: clientFilter || null,
-          format
-        })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ startDate: dateRange.startDate, endDate: dateRange.endDate,
+          caregiverId: caregiverFilter || null, clientId: clientFilter || null, format })
       });
-
       if (!response.ok) throw new Error('Export failed');
-
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `report-${reportType}-${new Date().toISOString().split('T')[0]}.${format}`;
+      a.download = `cvhc-${reportType}-report-${dateRange.startDate}-to-${dateRange.endDate}.${format}`;
       a.click();
+      window.URL.revokeObjectURL(url);
+      toast(`${format.toUpperCase()} export downloaded!`, 'success');
     } catch (error) {
-      alert('Failed to export: ' + error.message);
+      toast('Failed to export: ' + error.message, 'error');
     }
   };
 

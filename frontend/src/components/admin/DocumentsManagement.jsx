@@ -1,3 +1,5 @@
+import { confirm } from '../ConfirmModal';
+import { toast } from '../Toast';
 // src/components/admin/DocumentsManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
@@ -70,15 +72,15 @@ const DocumentsManagement = ({ token }) => {
         loadDocuments();
       } else {
         const err = await res.json();
-        alert('Failed: ' + err.error);
+        toast('Failed: ' + err.error, 'error');
       }
     } catch (error) {
-      alert('Failed to upload: ' + error.message);
+      toast('Failed to upload: ' + error.message, 'error');
     }
   };
 
   const deleteDocument = async (docId) => {
-    if (!confirm('Delete this document? This cannot be undone.')) return;
+    const _cok = await confirm('Delete this document? This cannot be undone.', {danger: true}); if (!_cok) return;
     try {
       const res = await fetch(`${API_BASE_URL}/api/documents/${docId}`, {
         method: 'DELETE',
@@ -88,7 +90,7 @@ const DocumentsManagement = ({ token }) => {
         loadDocuments();
       }
     } catch (error) {
-      alert('Failed: ' + error.message);
+      toast('Failed: ' + error.message, 'error');
     }
   };
 
@@ -107,7 +109,7 @@ const DocumentsManagement = ({ token }) => {
         window.URL.revokeObjectURL(url);
       }
     } catch (error) {
-      alert('Failed to download: ' + error.message);
+      toast('Failed to download: ' + error.message, 'error');
     }
   };
 
@@ -346,11 +348,11 @@ const UploadForm = ({ clients, caregivers, onSubmit, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!file) {
-      alert('Please select a file');
+      toast('Please select a file');
       return;
     }
     if (!formData.entityId) {
-      alert('Please select a client or caregiver');
+      toast('Please select a client or caregiver');
       return;
     }
 
