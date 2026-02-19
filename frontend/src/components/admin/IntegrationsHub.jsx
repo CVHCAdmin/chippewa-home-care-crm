@@ -80,7 +80,13 @@ const IntegrationsHub = ({ token }) => {
   const [selected, setSelected] = useState([]);
 
   const headers = { 'Content-Type':'application/json', Authorization:`Bearer ${token}` };
-  const get = useCallback(async (url) => { const r = await fetch(`${API_BASE_URL}${url}`,{headers:{Authorization:`Bearer ${token}`}}); return r.ok ? r.json() : null; }, [token]);
+  const get = useCallback(async (url) => {
+    try {
+      const r = await fetch(`${API_BASE_URL}${url}`,{headers:{Authorization:`Bearer ${token}`}});
+      if (r.status === 429) { console.warn('[Rate limited]', url); return null; }
+      return r.ok ? r.json() : null;
+    } catch(e) { return null; }
+  }, [token]);
 
   // Payroll form
   const [payPeriod, setPayPeriod] = useState({ start: '', end: '' });
@@ -94,24 +100,45 @@ const IntegrationsHub = ({ token }) => {
   const [remitForm, setRemitForm] = useState({ payerId:'', payerName:'', checkNumber:'', checkDate:'', paymentDate:'', totalAmount:'', notes:'', lineItems:[] });
   const fileRef = useRef(null);
 
+  // Stagger requests to avoid rate limiting on Render free tier
   useEffect(() => {
-    Promise.all([
-      get('/api/sandata/config').then(d => d && setSandataConfig(d)),
-      get('/api/gusto/config').then(d => d && setGustoConfig(d)),
-      get('/api/sandata/status').then(d => d && setEvvData(d)),
-      get('/api/authorizations/summary').then(d => d && setAuthSummary(d)),
-      get('/api/failsafe/issues').then(d => d && setOpenIssues(d)),
-      get('/api/remittance/payer-summary').then(d => d && setPayerSummary(d)),
-      get('/api/clients').then(d => d && setClients(d)),
-      get('/api/remittance/payers').then(d => d && setPayers(d)),
-      get('/api/edi/service-codes').then(d => d && setServiceCodes(d)),
-    ]);
+    const delay = (ms) => new Promise(r => setTimeout(r, ms));
+    const loadCore = async () => {
+      // Batch 1: small config calls
+      await Promise.all([
+        get('/api/sandata/config').then(d => d && setSandataConfig(d)),
+        get('/api/gusto/config').then(d => d && setGustoConfig(d)),
+      ]);
+      await delay(400);
+      // Batch 2: summary data
+      await Promise.all([
+        get('/api/authorizations/summary').then(d => d && setAuthSummary(d)),
+        get('/api/remittance/payer-summary').then(d => d && setPayerSummary(d)).catch(() => {}),
+      ]);
+      await delay(400);
+      // Batch 3: list data
+      await Promise.all([
+        get('/api/clients').then(d => d && setClients(d)),
+        get('/api/remittance/payers').then(d => d && setPayers(d)),
+      ]);
+      await delay(400);
+      // Batch 4: integration-specific (graceful fail until migration_v4.sql runs)
+      get('/api/sandata/status').then(d => d && setEvvData(d)).catch(() => {});
+      get('/api/failsafe/issues').then(d => d && setOpenIssues(d)).catch(() => {});
+      get('/api/edi/service-codes').then(d => d && setServiceCodes(d)).catch(() => {});
+    };
+    loadCore();
   }, []);
 
   useEffect(() => {
-    if (tab === 'authorizations') get('/api/authorizations').then(d => d && setAuthorizations(d));
-    if (tab === 'claims') get('/api/edi/batches').then(d => d && setEdiBatches(d));
-    if (tab === 'remittance') get('/api/remittance/batches').then(d => d && setRemittanceBatches(d));
+    const delay = (ms) => new Promise(r => setTimeout(r, ms));
+    const loadTab = async () => {
+      await delay(300);
+      if (tab === 'authorizations') get('/api/authorizations').then(d => d && setAuthorizations(d)).catch(() => {});
+      if (tab === 'claims') get('/api/edi/batches').then(d => d && setEdiBatches(d)).catch(() => {});
+      if (tab === 'remittance') get('/api/remittance/batches').then(d => d && setRemittanceBatches(d)).catch(() => {});
+    };
+    loadTab();
   }, [tab]);
 
   const setLoad = (key, val) => setLoading(p => ({...p,[key]:val}));

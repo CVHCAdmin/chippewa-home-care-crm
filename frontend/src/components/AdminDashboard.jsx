@@ -162,7 +162,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
 
   // Poll unread count every 30s
   useEffect(() => {
-    const interval = setInterval(loadUnreadCount, 30000);
+    const interval = setInterval(loadUnreadCount, 90000);
     return () => clearInterval(interval);
   }, []);
 
@@ -188,6 +188,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
       const res = await fetch(`${API_BASE_URL}/api/push/unread-count`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      if (res.status === 429) return; // rate limited - skip silently
       if (res.ok) {
         const data = await res.json();
         setUnreadCount(data.count || 0);

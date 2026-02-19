@@ -87,11 +87,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         const res = await fetch(`${API_BASE_URL}/api/messages/unread-count`, {
           headers: { Authorization: `Bearer ${token}` }
         });
+        if (res.status === 429) return; // rate limited - skip
         if (res.ok) { const data = await res.json(); setUnreadMessages(data.count); }
       } catch (e) { }
     };
     checkUnread();
-    const interval = setInterval(checkUnread, 30000);
+    const interval = setInterval(checkUnread, 90000);
     return () => clearInterval(interval);
   }, [token]);
 
