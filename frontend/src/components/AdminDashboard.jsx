@@ -3,6 +3,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { API_BASE_URL } from '../config';
 import { getDashboardSummary } from '../config';
 import { toast } from './Toast';
+import HelpPanel from './HelpPanel';
+import MessageBoard from './admin/MessageBoard';
 
 // Admin pages
 import DashboardOverview from './admin/DashboardOverview';
@@ -97,6 +99,7 @@ const NAV_SECTIONS = [
       { id: 'sms', label: 'SMS', icon: '📱' },
       { id: 'family-portal', label: 'Family Portal', icon: '🏠' },
       { id: 'alerts', label: 'Alerts', icon: '🔔' },
+      { id: 'messages', label: 'Messages', icon: '💬' },
       { id: 'notifications', label: 'Notifications', icon: '📬' },
     ]
   },
@@ -107,6 +110,7 @@ const ALL_ITEMS = NAV_SECTIONS.flatMap(s => s.items);
 
 const AdminDashboard = ({ user, token, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
+  const [showHelp, setShowHelp] = useState(false);
   const [selectedCaregiverId, setSelectedCaregiverId] = useState(null);
   const [selectedCaregiverName, setSelectedCaregiverName] = useState('');
   const [summary, setSummary] = useState(null);
@@ -227,6 +231,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
       case 'care-plans': return <CarePlans token={token} />;
       case 'incidents': return <IncidentReporting token={token} />;
       case 'notifications': return <NotificationCenter token={token} />;
+      case 'messages': return <MessageBoard token={token} />;
       case 'compliance': return <ComplianceTracking token={token} />;
       case 'reports': return <ReportsAnalytics token={token} />;
       case 'payroll': return <PayrollProcessing token={token} />;
@@ -409,8 +414,19 @@ const AdminDashboard = ({ user, token, onLogout }) => {
                 </span>
               )}
             </button>
+
+            {/* Help button */}
+            <button
+              onClick={() => setShowHelp(true)}
+              style={{ background: '#2ABBA7', border: 'none', borderRadius: '8px', padding: '0.4rem 0.75rem', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '700', color: '#fff' }}
+              title="Help Center"
+            >
+              ❓ Help
+            </button>
           </div>
         </div>
+
+        <HelpPanel isOpen={showHelp} onClose={() => setShowHelp(false)} currentPage={currentPage} />
 
         <div className="container">
           {loading ? (
