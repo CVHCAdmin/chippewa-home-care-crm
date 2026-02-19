@@ -248,6 +248,19 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
   };
 
+  const filteredCaregivers = caregivers.filter(cg => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch = !q || 
+      (cg.first_name + " " + cg.last_name).toLowerCase().includes(q) ||
+      (cg.email || "").toLowerCase().includes(q) ||
+      (cg.phone || "").includes(q) ||
+      (cg.city || "").toLowerCase().includes(q);
+    const matchesStatus = statusFilter === "all" ||
+      (statusFilter === "active" && cg.is_active !== false) ||
+      (statusFilter === "inactive" && cg.is_active === false);
+    return matchesSearch && matchesStatus;
+  });
+
   return (
     <div>
       <div className="page-header">
@@ -257,23 +270,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
         </button>
       </div>
 
-      // Filtered caregivers list
-      const filteredCaregivers = caregivers.filter(cg => {
-        const q = searchQuery.toLowerCase();
-        const matchesSearch = !q || 
-          (cg.first_name + " " + cg.last_name).toLowerCase().includes(q) ||
-          (cg.email || "").toLowerCase().includes(q) ||
-          (cg.phone || "").includes(q) ||
-          (cg.city || "").toLowerCase().includes(q);
-        const matchesStatus = statusFilter === "all" ||
-          (statusFilter === "active" && cg.is_active !== false) ||
-          (statusFilter === "inactive" && cg.is_active === false);
-        return matchesSearch && matchesStatus;
-      });
-      // End filtered
-      return (
-        <>
-        <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "center" }}>
           <input placeholder="🔍 Search caregivers..." value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             style={{ flex: "1", minWidth: "180px", padding: "0.5rem 0.75rem", border: "1px solid #D1D5DB", borderRadius: "8px", fontSize: "0.9rem" }} />
