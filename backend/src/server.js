@@ -257,27 +257,48 @@ app.get('/api/caregivers', verifyToken, async (req, res) => {
   }
 });
 
-// PUT /api/caregivers/:id - Update caregiver info including pay rate and address
+// PUT /api/caregivers/:id - Update caregiver info including email, pay rate, address
 app.put('/api/caregivers/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { firstName, lastName, phone, payRate, address, city, state, zip, latitude, longitude } = req.body;
+    const { firstName, lastName, email, phone, payRate, address, city, state, zip,
+            latitude, longitude, hireDate, emergencyContactName, emergencyContactPhone,
+            isActive, notes } = req.body;
+
+    // Check email uniqueness if changing
+    if (email) {
+      const existing = await db.query(
+        'SELECT id FROM users WHERE email = $1 AND id != $2', [email, req.params.id]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ error: 'Email already in use by another account' });
+      }
+    }
     
     const result = await db.query(
       `UPDATE users SET 
         first_name = COALESCE($1, first_name),
         last_name = COALESCE($2, last_name),
-        phone = COALESCE($3, phone),
-        default_pay_rate = COALESCE($4, default_pay_rate),
-        address = COALESCE($5, address),
-        city = COALESCE($6, city),
-        state = COALESCE($7, state),
-        zip = COALESCE($8, zip),
-        latitude = COALESCE($9, latitude),
-        longitude = COALESCE($10, longitude),
+        email = COALESCE($3, email),
+        phone = COALESCE($4, phone),
+        default_pay_rate = COALESCE($5, default_pay_rate),
+        address = COALESCE($6, address),
+        city = COALESCE($7, city),
+        state = COALESCE($8, state),
+        zip = COALESCE($9, zip),
+        latitude = COALESCE($10, latitude),
+        longitude = COALESCE($11, longitude),
+        hire_date = COALESCE($12, hire_date),
+        emergency_contact_name = COALESCE($13, emergency_contact_name),
+        emergency_contact_phone = COALESCE($14, emergency_contact_phone),
+        is_active = COALESCE($15, is_active),
         updated_at = NOW()
-       WHERE id = $11 AND role = 'caregiver'
-       RETURNING id, email, first_name, last_name, phone, default_pay_rate, address, city, state, zip, latitude, longitude`,
-      [firstName, lastName, phone, payRate, address, city, state, zip, latitude, longitude, req.params.id]
+       WHERE id = $16 AND role = 'caregiver'
+       RETURNING id, email, first_name, last_name, phone, default_pay_rate, address, city, state, zip,
+                 latitude, longitude, hire_date, emergency_contact_name, emergency_contact_phone,
+                 is_active, created_at`,
+      [firstName, lastName, email, phone, payRate, address, city, state, zip,
+       latitude, longitude, hireDate || null, emergencyContactName, emergencyContactPhone,
+       isActive, req.params.id]
     );
     
     if (result.rows.length === 0) {
@@ -944,6 +965,94 @@ app.get('/api/time-entries/:id/gps', verifyToken, async (req, res) => {
       [req.params.id]
     );
     res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/caregivers/:id/summary - Full earnings, hours, clients summary
+app.get('/api/caregivers/:id/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const caregiverId = req.params.id;
+    const { period = '30' } = req.query; // days
+
+    const [userRes, earningsRes, clientsRes, recentShiftsRes, scheduleRes, ratesRes] = await Promise.all([
+      // Full user profile
+      db.query(`
+        SELECT u.*, cp.notes, cp.capabilities, cp.limitations, cp.npi_number, cp.taxonomy_code, cp.evv_worker_id
+        FROM users u LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
+        WHERE u.id = $1
+      `, [caregiverId]),
+
+      // Earnings summary
+      db.query(`
+        SELECT
+          COUNT(*) as total_shifts,
+          COUNT(*) FILTER (WHERE is_complete = true) as completed_shifts,
+          ROUND(SUM(CASE WHEN is_complete THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as total_hours,
+          ROUND(SUM(CASE WHEN is_complete THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END * u.default_pay_rate)::numeric, 2) as total_earnings,
+          ROUND(SUM(CASE WHEN is_complete AND start_time >= NOW() - INTERVAL '7 days' THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as hours_this_week,
+          ROUND(SUM(CASE WHEN is_complete AND start_time >= date_trunc('month', NOW()) THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END * u.default_pay_rate)::numeric, 2) as earnings_this_month,
+          ROUND(SUM(CASE WHEN is_complete AND start_time >= date_trunc('month', NOW()) THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as hours_this_month,
+          ROUND(SUM(CASE WHEN is_complete AND start_time >= NOW() - INTERVAL '30 days' THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as hours_last_30,
+          ROUND(AVG(CASE WHEN is_complete THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 END)::numeric, 2) as avg_shift_hours,
+          MAX(start_time) as last_shift_date
+        FROM time_entries te
+        JOIN users u ON u.id = te.caregiver_id
+        WHERE te.caregiver_id = $1
+      `, [caregiverId]),
+
+      // Clients served
+      db.query(`
+        SELECT DISTINCT c.id, c.first_name, c.last_name, c.address, c.city,
+          COUNT(te.id) as shift_count,
+          ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric, 1) as total_hours,
+          MAX(te.start_time) as last_visit
+        FROM time_entries te
+        JOIN clients c ON te.client_id = c.id
+        WHERE te.caregiver_id = $1 AND te.is_complete = true
+        GROUP BY c.id, c.first_name, c.last_name, c.address, c.city
+        ORDER BY last_visit DESC
+      `, [caregiverId]),
+
+      // Recent shifts
+      db.query(`
+        SELECT te.id, te.start_time, te.end_time, te.is_complete,
+          ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600::numeric, 2) as hours,
+          c.first_name as client_first, c.last_name as client_last,
+          c.address as client_address
+        FROM time_entries te
+        JOIN clients c ON te.client_id = c.id
+        WHERE te.caregiver_id = $1
+        ORDER BY te.start_time DESC LIMIT 10
+      `, [caregiverId]),
+
+      // Schedule (upcoming)
+      db.query(`
+        SELECT s.*, ct.name as care_type_name,
+          c.first_name as client_first, c.last_name as client_last
+        FROM schedules s
+        LEFT JOIN clients c ON s.client_id = c.id
+        LEFT JOIN care_types ct ON s.care_type_id = ct.id
+        WHERE s.caregiver_id = $1 AND s.date >= CURRENT_DATE
+        ORDER BY s.date, s.start_time LIMIT 14
+      `, [caregiverId]),
+
+      // Pay rates history
+      db.query(`
+        SELECT * FROM caregiver_pay_rates
+        WHERE caregiver_id = $1 ORDER BY effective_date DESC LIMIT 5
+      `, [caregiverId]).catch(() => ({ rows: [] })),
+    ]);
+
+    res.json({
+      profile: userRes.rows[0],
+      earnings: earningsRes.rows[0],
+      clients: clientsRes.rows,
+      recentShifts: recentShiftsRes.rows,
+      schedule: scheduleRes.rows,
+      payRates: ratesRes.rows,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

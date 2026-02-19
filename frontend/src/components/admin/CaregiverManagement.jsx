@@ -4,6 +4,7 @@ import { toast } from '../Toast';
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import AddCaregiverModal from './AddCaregiverModal';
+import CaregiverDetail from './CaregiverDetail';
 
 // Mobile-friendly caregiver card
 const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, onPromote }) => (
@@ -43,6 +44,7 @@ const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, 
     </div>
     
     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <button className="btn btn-sm" style={{background:'#0F172A',color:'#fff',border:'none',borderRadius:6,padding:'0.25rem 0.6rem',cursor:'pointer',fontWeight:700,fontSize:'0.78rem'}} onClick={() => onProfile && onProfile(caregiver.id)}>👁 Full Profile</button>
       <button className="btn btn-sm btn-primary" onClick={() => onEdit(caregiver)}>✏️ Edit</button>
       <button className="btn btn-sm btn-secondary" onClick={() => onRates(caregiver)}>💰 Rates</button>
       {onProfile && (
@@ -57,6 +59,7 @@ const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, 
 
 const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [detailId, setDetailId] = useState(null);
   const [caregivers, setCaregivers] = useState([]);
   const [careTypes, setCareTypes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -262,6 +265,11 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
     return matchesSearch && matchesStatus;
   });
 
+  // Show full detail view when a caregiver is clicked
+  if (detailId) {
+    return <CaregiverDetail caregiverId={detailId} token={token} onBack={() => { setDetailId(null); loadCaregivers(); }} />;
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -408,6 +416,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <button className="btn btn-sm" style={{background:'#0F172A',color:'#fff',border:'none',borderRadius:6,padding:'0.25rem 0.6rem',cursor:'pointer',fontWeight:700,fontSize:'0.78rem'}} onClick={() => setDetailId(caregiver.id)}>👁 Full Profile</button>
                       <button className="btn btn-sm btn-primary" onClick={() => handleOpenEdit(caregiver)}>Edit</button>
                       <button className="btn btn-sm btn-secondary" onClick={() => handleOpenRates(caregiver)}>💰 Pay Rates</button>
                       {onViewHistory && (
