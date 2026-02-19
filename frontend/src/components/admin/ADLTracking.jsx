@@ -41,6 +41,8 @@ const ADLTracking = ({ token }) => {
     return () => window.removeEventListener("beforeunload", fn);
   }, [isDirty]);
 
+  useEffect(() => {
+    loadClients();
   }, []);
 
   useEffect(() => {
