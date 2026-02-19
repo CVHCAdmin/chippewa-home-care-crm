@@ -3646,6 +3646,7 @@ app.use('/api', billingRoutes);
 app.use('/api/route-optimizer', verifyToken, require('./routes/routeOptimizerRoutes'));
 app.use('/api/matching', verifyToken, require('./routes/matchingRoutes'));
 app.use('/api/emergency', verifyToken, require('./routes/emergencyRoutes'));
+app.use('/api/messages', verifyToken, require('./routes/messageRoutes'));
 app.use('/api/push', verifyToken, require('./routes/pushNotificationRoutes').router);
 
 // ============ CARE TYPES ============
@@ -4752,18 +4753,6 @@ app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (r
   } catch (error) {
     console.error('Coverage overview error:', error);
     res.status(500).json({ error: error.message });
-  }
-});
-
-
-// Serve React frontend in production
-const path = require('path');
-const frontendBuild = path.join(__dirname, '../../frontend/build');
-app.use(express.static(frontendBuild));
-app.get('*', (req, res) => {
-  // Only serve index.html for non-API routes
-  if (!req.path.startsWith('/api/')) {
-    res.sendFile(path.join(frontendBuild, 'index.html'));
   }
 });
 

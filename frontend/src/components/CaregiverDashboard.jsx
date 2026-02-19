@@ -6,6 +6,8 @@ import { API_BASE_URL } from '../config';
 import CaregiverClientModal from './CaregiverClientModal';
 import MileageTracker from './MileageTracker';
 import ShiftMissReport from './caregiver/ShiftMissReport';
+import CaregiverHelp from './caregiver/CaregiverHelp';
+import CaregiverMessages from './caregiver/CaregiverMessages';
 
 const subscribeToPush = async (token) => {
   try {
@@ -65,16 +67,33 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [newTimeOff, setNewTimeOff] = useState({ startDate: '', endDate: '', reason: '' });
   const [message, setMessage] = useState({ text: '', type: '' });
   const [showMissReport, setShowMissReport] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [showMessages, setShowMessages] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   useEffect(() => {
     loadData();
     startGPSTracking();
-    // Subscribe to push notifications on mount
     subscribeToPush(token);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
+
+  // Poll for unread messages
+  useEffect(() => {
+    const checkUnread = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/messages/unread-count`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) { const data = await res.json(); setUnreadMessages(data.count); }
+      } catch (e) { }
+    };
+    checkUnread();
+    const interval = setInterval(checkUnread, 30000);
+    return () => clearInterval(interval);
+  }, [token]);
 
   useEffect(() => {
     if (activeSession) {
@@ -572,6 +591,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           <div style={{ fontSize: '1.6rem' }}>🚨</div>
           <div style={{ fontWeight: '600', fontSize: '0.82rem', color: '#DC2626' }}>Miss Report</div>
         </div>
+        <div className="card" style={{ textAlign: 'center', cursor: 'pointer', padding: '1rem', background: '#EEF2FF', border: '1px solid #C7D2FE', position: 'relative' }}
+          onClick={() => setShowMessages(true)}>
+          <div style={{ fontSize: '1.6rem' }}>💬</div>
+          <div style={{ fontWeight: '600', fontSize: '0.82rem', color: '#4338CA' }}>Messages</div>
+          {unreadMessages > 0 && (
+            <span style={{ position: 'absolute', top: '6px', right: '6px', background: '#EF4444', color: '#fff', borderRadius: '99px', fontSize: '0.62rem', fontWeight: '700', padding: '1px 6px', minWidth: '16px', textAlign: 'center' }}>{unreadMessages}</span>
+          )}
+        </div>
+        <div className="card" style={{ textAlign: 'center', cursor: 'pointer', padding: '1rem', background: '#F0FDFB', border: '1px solid #A7F3D0' }}
+          onClick={() => setShowHelp(true)}>
+          <div style={{ fontSize: '1.6rem' }}>❓</div>
+          <div style={{ fontWeight: '600', fontSize: '0.82rem', color: '#065F46' }}>Help</div>
+        </div>
       </div>
     </>
     );
@@ -874,6 +906,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       )}
 
       <CaregiverClientModal clientId={viewingClientId} isOpen={!!viewingClientId} onClose={() => setViewingClientId(null)} token={token} />
+
+      {/* Messages Modal */}
+      {showMessages && <CaregiverMessages token={token} onClose={() => { setShowMessages(false); setUnreadMessages(0); }} />}
+
+      {/* Help Modal */}
+      {showHelp && <CaregiverHelp onClose={() => setShowHelp(false)} />}
 
       {/* Shift Miss Report Modal */}
       {showMissReport && (

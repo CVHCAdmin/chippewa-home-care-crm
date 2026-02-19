@@ -67,12 +67,124 @@ router.post('/miss-report', auth, async (req, res) => {
       );
     }
 
-    // Mark schedule as needing coverage if schedule provided
-    if (scheduleId) {
-      await db.query(
-        `UPDATE absences SET notes = $1 WHERE id = $2`,
-        [JSON.stringify({ scheduleId, scheduleInfo: scheduleInfo ? { clientName: `${scheduleInfo.client_first_name} ${scheduleInfo.client_last_name}`, startTime: scheduleInfo.start_time, endTime: scheduleInfo.end_time } : null, alternativeContact }), reportId]
-      );
+    // Store schedule info in absence notes
+    await db.query(
+      `UPDATE absences SET notes = $1 WHERE id = $2`,
+      [JSON.stringify({ scheduleId, scheduleInfo: scheduleInfo ? { clientName: `${scheduleInfo.client_first_name} ${scheduleInfo.client_last_name}`, startTime: scheduleInfo.start_time, endTime: scheduleInfo.end_time } : null, alternativeContact }), reportId]
+    );
+
+    // ── AUTO-CREATE OPEN SHIFT ────────────────────────────────────────────────
+    let openShiftId = null;
+    let notifiedCount = 0;
+
+    if (scheduleInfo && scheduleInfo.client_id) {
+      try {
+        // Create open shift from this miss report
+        const osResult = await db.query(`
+          INSERT INTO open_shifts (
+            client_id, schedule_id, shift_date, start_time, end_time,
+            notes, urgency, created_by, source_absence_id, auto_created, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'urgent', $7, $8, true, 'open')
+          RETURNING id
+        `, [
+          scheduleInfo.client_id,
+          scheduleId || null,
+          date,
+          scheduleInfo.start_time,
+          scheduleInfo.end_time,
+          `Coverage needed — ${cgName} called out. Reason: ${reason || 'None given'}`,
+          caregiverId,
+          reportId
+        ]);
+        openShiftId = osResult.rows[0].id;
+
+        // Find caregivers NOT scheduled at this time
+        const shiftStart = scheduleInfo.start_time;
+        const shiftEnd = scheduleInfo.end_time;
+
+        const available = await db.query(`
+          SELECT DISTINCT u.id, u.first_name, u.last_name, u.phone
+          FROM users u
+          WHERE u.role = 'caregiver'
+            AND u.is_active = true
+            AND u.id != $1
+            AND u.id NOT IN (
+              -- Exclude caregivers already scheduled at this time on this date
+              SELECT DISTINCT s.caregiver_id
+              FROM schedules s
+              WHERE s.is_active = true
+                AND s.day_of_week = EXTRACT(DOW FROM $2::date)
+                AND (
+                  (s.start_time <= $3 AND s.end_time > $3) OR
+                  (s.start_time < $4 AND s.end_time >= $4) OR
+                  (s.start_time >= $3 AND s.end_time <= $4)
+                )
+            )
+            AND u.id NOT IN (
+              -- Exclude caregivers with approved time off
+              SELECT caregiver_id FROM absences
+              WHERE type = 'time_off' AND date = $2 AND status = 'approved'
+            )
+          LIMIT 30
+        `, [caregiverId, date, shiftStart, shiftEnd]);
+
+        const availableCaregivers = available.rows;
+
+        // Send push notifications to available caregivers
+        let webpush;
+        try { webpush = require('web-push'); } catch (e) { webpush = null; }
+
+        if (webpush && process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
+          webpush.setVapidDetails('mailto:admin@chippewahomecare.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
+        }
+
+        for (const cg of availableCaregivers) {
+          try {
+            // Log notification
+            await db.query(`
+              INSERT INTO open_shift_notifications (open_shift_id, caregiver_id, notification_type)
+              VALUES ($1, $2, 'push') ON CONFLICT DO NOTHING
+            `, [openShiftId, cg.id]);
+
+            // Send push
+            if (webpush && process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
+              const subs = await db.query(
+                `SELECT subscription FROM push_subscriptions WHERE user_id = $1 AND is_active = true`,
+                [cg.id]
+              );
+              for (const sub of subs.rows) {
+                try {
+                  await webpush.sendNotification(sub.subscription, JSON.stringify({
+                    title: '🚨 Urgent Open Shift',
+                    body: `${scheduleInfo.client_first_name} ${scheduleInfo.client_last_name} needs coverage on ${date} (${shiftStart}–${shiftEnd}). Tap to claim.`,
+                    data: { type: 'open_shift', openShiftId }
+                  }));
+                } catch (e) { /* ignore */ }
+              }
+            }
+
+            // Add in-app notification too
+            await db.query(`
+              INSERT INTO notifications (id, user_id, type, title, message, is_read, created_at)
+              VALUES ($1, $2, 'open_shift', '🚨 Urgent Shift Available', $3, false, NOW())
+            `, [uuidv4(), cg.id,
+              `${scheduleInfo.client_first_name} ${scheduleInfo.client_last_name} needs coverage on ${date} from ${shiftStart} to ${shiftEnd}. Open the app to claim this shift.`
+            ]);
+
+            notifiedCount++;
+          } catch (e) { /* continue */ }
+        }
+
+        // Update open shift with notified count
+        await db.query(
+          `UPDATE open_shifts SET notified_caregiver_count = $1 WHERE id = $2`,
+          [notifiedCount, openShiftId]
+        );
+
+      } catch (osError) {
+        console.error('Error creating open shift from miss report:', osError.message);
+        // Don't fail the whole request — the miss report was still saved
+      }
     }
 
     res.status(201).json({
@@ -80,6 +192,8 @@ router.post('/miss-report', auth, async (req, res) => {
       message: 'Your report has been submitted. The admin team has been notified.',
       date,
       status: 'submitted',
+      openShiftCreated: !!openShiftId,
+      caregiversNotified: notifiedCount,
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
