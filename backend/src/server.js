@@ -892,6 +892,12 @@ app.post('/api/time-entries/:id/clock-out', verifyToken, async (req, res) => {
       });
     } catch {}
 
+    // Auto-create EVV visit record (async - doesn't block response)
+    try {
+      const { createEVVFromTimeEntry } = require('./routes/sandataRoutes');
+      createEVVFromTimeEntry(req.params.id).catch(e => console.error('[EVV auto-create]', e.message));
+    } catch(e) {}
+
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3647,6 +3653,12 @@ app.use('/api/route-optimizer', verifyToken, require('./routes/routeOptimizerRou
 app.use('/api/matching', verifyToken, require('./routes/matchingRoutes'));
 app.use('/api/emergency', verifyToken, require('./routes/emergencyRoutes'));
 app.use('/api/messages', verifyToken, require('./routes/messageRoutes'));
+app.use('/api/remittance', verifyToken, require('./routes/remittanceRoutes'));
+app.use('/api/sandata', verifyToken, require('./routes/sandataRoutes'));
+app.use('/api/authorizations', verifyToken, require('./routes/authorizationRoutes'));
+app.use('/api/failsafe', verifyToken, require('./routes/failsafeRoutes'));
+app.use('/api/edi', verifyToken, require('./routes/ediRoutes'));
+app.use('/api/gusto', verifyToken, require('./routes/gustoRoutes'));
 app.use('/api/push', verifyToken, require('./routes/pushNotificationRoutes').router);
 
 // ============ CARE TYPES ============

@@ -5,6 +5,7 @@ import { getDashboardSummary } from '../config';
 import { toast } from './Toast';
 import HelpPanel from './HelpPanel';
 import MessageBoard from './admin/MessageBoard';
+import IntegrationsHub from './admin/IntegrationsHub';
 
 // Admin pages
 import DashboardOverview from './admin/DashboardOverview';
@@ -100,6 +101,7 @@ const NAV_SECTIONS = [
       { id: 'family-portal', label: 'Family Portal', icon: '🏠' },
       { id: 'alerts', label: 'Alerts', icon: '🔔' },
       { id: 'messages', label: 'Messages', icon: '💬' },
+      { id: 'integrations', label: 'Integrations Hub', icon: '🔌' },
       { id: 'notifications', label: 'Notifications', icon: '📬' },
     ]
   },
@@ -232,6 +234,7 @@ const AdminDashboard = ({ user, token, onLogout }) => {
       case 'incidents': return <IncidentReporting token={token} />;
       case 'notifications': return <NotificationCenter token={token} />;
       case 'messages': return <MessageBoard token={token} />;
+      case 'integrations': return <IntegrationsHub token={token} />;
       case 'compliance': return <ComplianceTracking token={token} />;
       case 'reports': return <ReportsAnalytics token={token} />;
       case 'payroll': return <PayrollProcessing token={token} />;
