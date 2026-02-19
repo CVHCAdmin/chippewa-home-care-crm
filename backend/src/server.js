@@ -4755,6 +4755,18 @@ app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (r
   }
 });
 
+
+// Serve React frontend in production
+const path = require('path');
+const frontendBuild = path.join(__dirname, '../../frontend/build');
+app.use(express.static(frontendBuild));
+app.get('*', (req, res) => {
+  // Only serve index.html for non-API routes
+  if (!req.path.startsWith('/api/')) {
+    res.sendFile(path.join(frontendBuild, 'index.html'));
+  }
+});
+
 // Start server
 app.listen(port, () => {
   console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
