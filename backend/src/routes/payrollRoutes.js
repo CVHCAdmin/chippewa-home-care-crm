@@ -24,22 +24,22 @@ router.post('/calculate', auth, async (req, res) => {
         u.last_name,
         COALESCE(u.hourly_rate, $3::numeric)                       AS hourly_rate,
         COALESCE(
-          ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes, 0))::numeric / 60, 2),
+          ROUND(SUM(COALESCE(te.duration_minutes, 0))::numeric / 60, 2),
           0
         )                                                          AS total_hours,
         COALESCE(
           ROUND(SUM(
-            CASE WHEN EXTRACT(DOW FROM te.clock_in_time) IN (0,6)
-                 THEN COALESCE(te.billable_minutes, te.duration_minutes, 0)
+            CASE WHEN EXTRACT(DOW FROM te.start_time) IN (0,6)
+                 THEN COALESCE(te.duration_minutes, 0)
                  ELSE 0 END
           )::numeric / 60, 2),
           0
         )                                                          AS weekend_hours,
         COALESCE(
           ROUND(SUM(
-            CASE WHEN EXTRACT(HOUR FROM te.clock_in_time) >= 18
-                   OR EXTRACT(HOUR FROM te.clock_in_time) < 6
-                 THEN COALESCE(te.billable_minutes, te.duration_minutes, 0)
+            CASE WHEN EXTRACT(HOUR FROM te.start_time) >= 18
+                   OR EXTRACT(HOUR FROM te.start_time) < 6
+                 THEN COALESCE(te.duration_minutes, 0)
                  ELSE 0 END
           )::numeric / 60, 2),
           0
@@ -62,8 +62,8 @@ router.post('/calculate', auth, async (req, res) => {
       FROM users u
       LEFT JOIN time_entries te
         ON te.caregiver_id = u.id
-        AND DATE(te.clock_in_time) >= $1::date
-        AND DATE(te.clock_in_time) <= $2::date
+        AND DATE(te.start_time) >= $1::date
+        AND DATE(te.start_time) <= $2::date
         AND te.is_complete = true
       LEFT JOIN payroll_records pr
         ON pr.caregiver_id = u.id
@@ -71,7 +71,7 @@ router.post('/calculate', auth, async (req, res) => {
       WHERE u.role = 'caregiver' AND u.is_active = true
       GROUP BY u.id, u.first_name, u.last_name, u.hourly_rate, pr.status, pr.check_number
       HAVING
-        COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes, 0)), 0) > 0
+        COALESCE(SUM(COALESCE(te.duration_minutes, 0)), 0) > 0
         OR COALESCE((
           SELECT SUM(p.hours) FROM pto p
           WHERE p.caregiver_id = u.id
@@ -244,16 +244,16 @@ router.post('/export', auth, async (req, res) => {
       SELECT
         u.first_name, u.last_name,
         COALESCE(u.hourly_rate, $3::numeric) AS hourly_rate,
-        ROUND(COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes, 0))::numeric / 60, 0), 2) AS total_hours
+        ROUND(COALESCE(SUM(COALESCE(te.duration_minutes, 0))::numeric / 60, 0), 2) AS total_hours
       FROM users u
       LEFT JOIN time_entries te
         ON te.caregiver_id = u.id
-        AND DATE(te.clock_in_time) >= $1::date
-        AND DATE(te.clock_in_time) <= $2::date
+        AND DATE(te.start_time) >= $1::date
+        AND DATE(te.start_time) <= $2::date
         AND te.is_complete = true
       WHERE u.role = 'caregiver' AND u.is_active = true
       GROUP BY u.id, u.first_name, u.last_name, u.hourly_rate
-      HAVING COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes, 0)), 0) > 0
+      HAVING COALESCE(SUM(COALESCE(te.duration_minutes, 0)), 0) > 0
       ORDER BY u.last_name
     `, [startDate, endDate, process.env.DEFAULT_HOURLY_RATE || 15]);
 
