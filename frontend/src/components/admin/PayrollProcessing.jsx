@@ -416,7 +416,7 @@ const PayrollProcessing = ({ token }) => {
       )}
 
       {activeTab === 'payroll' && (
-
+      <div>
       {/* Summary Cards */}
       <div className="grid">
         <div className="stat-card">
@@ -811,8 +811,9 @@ const PayrollProcessing = ({ token }) => {
           </div>
         </div>
       )}
-    </div>
+      </div>
       )}
+    </div>
 
   );
 };
