@@ -1173,22 +1173,23 @@ app.get('/api/caregivers/:id/summary', verifyToken, requireAdmin, async (req, re
         ORDER BY te.start_time DESC LIMIT 10
       `, [caregiverId]),
 
-      // Schedule (upcoming)
+      // Schedule (upcoming) - no care_type_id on schedules table
       safeQuery(`
-        SELECT s.*, ct.name as care_type_name,
-          c.first_name as client_first, c.last_name as client_last
+        SELECT s.id, s.caregiver_id, s.client_id, s.date, s.start_time, s.end_time,
+          s.schedule_type, s.notes, s.frequency,
+          c.first_name as client_first, c.last_name as client_last,
+          c.address as client_address, c.city as client_city
         FROM schedules s
         LEFT JOIN clients c ON s.client_id = c.id
-        LEFT JOIN care_types ct ON s.care_type_id = ct.id
-        WHERE s.caregiver_id = $1 AND s.date >= CURRENT_DATE
+        WHERE s.caregiver_id = $1 AND s.date >= CURRENT_DATE AND s.is_active = true
         ORDER BY s.date, s.start_time LIMIT 14
       `, [caregiverId]),
 
-      // Pay rates history
-      safeQuery(`
-        SELECT * FROM caregiver_pay_rates
-        WHERE caregiver_id = $1 ORDER BY effective_date DESC LIMIT 5
-      `, [caregiverId]),
+      // Pay rates - return current rate from users table (caregiver_pay_rates table not yet created)
+      db.query(`
+        SELECT default_pay_rate as rate, hire_date as effective_date, 'Current rate' as notes
+        FROM users WHERE id = $1
+      `, [caregiverId]).catch(() => ({ rows: [] })),
     ]);
 
     res.json({
