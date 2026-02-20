@@ -1,5 +1,8 @@
 // src/config.js - API utilities with token expiry handling
+// On native (Capacitor Android/iOS), relative URLs don't work — must use absolute URL
+const isNativeApp = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
 export const API_BASE_URL = import.meta.env.VITE_API_URL || (
+  isNativeApp ? 'https://chippewa-home-care-api.onrender.com' :
   import.meta.env.DEV ? 'http://localhost:5000' : ''
 );
 
