@@ -8,7 +8,7 @@ import PaymentPage, { PaymentSuccess } from './components/PaymentPage';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
 import { setSessionExpiredCallback } from './config';
-import { OfflineBanner } from './hooks/useOfflineSync.jsx';
+import OfflineBanner from './components/OfflineBanner';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 const App = () => {
