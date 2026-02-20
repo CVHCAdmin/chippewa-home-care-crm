@@ -123,10 +123,30 @@ export default function DragDropScheduler({ token, onScheduleChange }) {
 
   function getShiftsForCell(caregiverId, dayIndex) {
     const dateStr = weekDateStrs[dayIndex];
+    const cellDate = new Date(dateStr + 'T00:00:00');
+
     return schedules.filter(s => {
       if (s.caregiver_id !== caregiverId) return false;
+
+      // One-off schedule — match exact date only
       if (s.date) return s.date.slice(0, 10) === dateStr;
-      if (s.day_of_week !== null && s.day_of_week !== undefined) return Number(s.day_of_week) === dayIndex;
+
+      // Recurring schedule — match day of week, but only from the week it was created onwards
+      if (s.day_of_week !== null && s.day_of_week !== undefined) {
+        if (Number(s.day_of_week) !== dayIndex) return false;
+
+        // Don't show on weeks before the schedule was created/effective
+        // Prefer effective_date or anchor_date if set, fall back to created_at
+        const effectiveFrom = s.effective_date || s.anchor_date || s.created_at;
+        if (effectiveFrom) {
+          const fromDate = new Date(effectiveFrom);
+          fromDate.setHours(0, 0, 0, 0);
+          if (cellDate < fromDate) return false;
+        }
+
+        return true;
+      }
+
       return false;
     });
   }
