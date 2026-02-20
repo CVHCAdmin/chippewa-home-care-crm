@@ -1,9 +1,12 @@
 // src/config.js - API utilities with token expiry handling
-// On native (Capacitor Android/iOS), relative URLs don't work — must use absolute URL
-const isNativeApp = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
+// API URL resolution:
+// 1. VITE_API_URL env var (set in Netlify dashboard for web)
+// 2. Dev server
+// 3. Production fallback (used by Android APK — relative URLs don't work in Capacitor)
 export const API_BASE_URL = import.meta.env.VITE_API_URL || (
-  isNativeApp ? 'https://chippewa-home-care-api.onrender.com' :
-  import.meta.env.DEV ? 'http://localhost:5000' : ''
+  import.meta.env.DEV
+    ? 'http://localhost:5000'
+    : 'https://chippewa-home-care-api.onrender.com'
 );
 
 // Global logout callback — set by App on mount
