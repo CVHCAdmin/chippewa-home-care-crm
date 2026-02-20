@@ -1119,11 +1119,9 @@ app.get('/api/caregivers/:id/summary', verifyToken, requireAdmin, async (req, re
     };
 
     const [userRes, earningsRes, clientsRes, recentShiftsRes, scheduleRes, ratesRes] = await Promise.all([
-      // Full user profile - safe query that works before and after migration_v4
-      db.query(`
-        SELECT u.*, cp.notes, cp.capabilities, cp.limitations, cp.preferred_hours,
-          cp.available_mon, cp.available_tue, cp.available_wed, cp.available_thu,
-          cp.available_fri, cp.available_sat, cp.available_sun
+      // Full user profile - only columns guaranteed to exist
+      safeQuery(`
+        SELECT u.*, cp.notes, cp.capabilities, cp.limitations
         FROM users u LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
         WHERE u.id = $1
       `, [caregiverId]),
@@ -1173,12 +1171,13 @@ app.get('/api/caregivers/:id/summary', verifyToken, requireAdmin, async (req, re
         ORDER BY te.start_time DESC LIMIT 10
       `, [caregiverId]),
 
-      // Schedule (upcoming) - no care_type_id on schedules table
+      // Schedule (upcoming) + scheduled hours this week
       safeQuery(`
         SELECT s.id, s.caregiver_id, s.client_id, s.date, s.start_time, s.end_time,
           s.schedule_type, s.notes, s.frequency,
           c.first_name as client_first, c.last_name as client_last,
-          c.address as client_address, c.city as client_city
+          c.address as client_address, c.city as client_city,
+          ROUND(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600.0::numeric, 2) as shift_hours
         FROM schedules s
         LEFT JOIN clients c ON s.client_id = c.id
         WHERE s.caregiver_id = $1 AND s.date >= CURRENT_DATE AND s.is_active = true
@@ -1192,9 +1191,36 @@ app.get('/api/caregivers/:id/summary', verifyToken, requireAdmin, async (req, re
       `, [caregiverId]).catch(() => ({ rows: [] })),
     ]);
 
+    // Compute scheduled hours this week from schedules
+    const now = new Date();
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay()); // Sunday
+    weekStart.setHours(0,0,0,0);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    weekEnd.setHours(23,59,59,999);
+    const weekStartStr = weekStart.toISOString().split('T')[0];
+    const weekEndStr = weekEnd.toISOString().split('T')[0];
+
+    const scheduledWeekRes = await safeQuery(`
+      SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600.0), 0) as scheduled_hours_week
+      FROM schedules
+      WHERE caregiver_id = $1 AND is_active = true
+        AND ((date >= $2 AND date <= $3) OR day_of_week = $4)
+    `, [caregiverId, weekStartStr, weekEndStr, now.getDay()]);
+
+    const earnings = earningsRes.rows[0] || {};
+    // Use scheduled hours if actual clocked hours are 0
+    const scheduledHrsWeek = parseFloat(scheduledWeekRes.rows[0]?.scheduled_hours_week || 0);
+    const clockedHrsWeek = parseFloat(earnings.hours_this_week || 0);
+    if (clockedHrsWeek === 0 && scheduledHrsWeek > 0) {
+      earnings.hours_this_week = scheduledHrsWeek.toFixed(2);
+      earnings.hours_this_week_source = 'scheduled';
+    }
+
     res.json({
       profile: userRes.rows[0],
-      earnings: earningsRes.rows[0],
+      earnings,
       clients: clientsRes.rows,
       recentShifts: recentShiftsRes.rows,
       schedule: scheduleRes.rows,
