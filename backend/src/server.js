@@ -124,6 +124,45 @@ app.use('/api', miscRoutes);
 // Billing
 app.use('/api/billing', verifyToken, billingRoutes);
 
+// ─── SCHEDULES-ALL (explicit — router.get('-all') never matched due to Express path rules) ───
+const db = require('./db');
+app.get('/api/schedules-all', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT s.*, s.frequency, s.effective_date, s.anchor_date,
+              u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
+              c.first_name as client_first_name, c.last_name as client_last_name
+       FROM schedules s
+       JOIN users u ON s.caregiver_id = u.id
+       JOIN clients c ON s.client_id = c.id
+       WHERE s.is_active = true
+       ORDER BY s.day_of_week, s.date, s.start_time`
+    );
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate } = req.body;
+    if (startTime && endTime && startTime >= endTime) return res.status(400).json({ error: 'End time must be after start time' });
+    const result = await db.query(
+      `UPDATE schedules SET
+        client_id = COALESCE($1, client_id), day_of_week = $2, date = $3,
+        start_time = COALESCE($4, start_time), end_time = COALESCE($5, end_time),
+        notes = $6, frequency = COALESCE($7, frequency),
+        effective_date = COALESCE($8, effective_date), anchor_date = COALESCE($9, anchor_date),
+        updated_at = NOW()
+       WHERE id = $10 AND is_active = true RETURNING *`,
+      [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
+       notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // Pre-existing dedicated route files
 app.use('/api/reports',            verifyToken, require('./routes/reports'));
 app.use('/api/payroll',            verifyToken, require('./routes/payrollRoutes'));
