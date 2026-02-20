@@ -742,7 +742,7 @@ const SchedulingHub = ({ token }) => {
   if (loading) return <div className="loading"><div className="spinner"></div></div>;
 
   const tabs = [
-    { id: 'dragdrop', label: '🖱️ Drag & Drop', mLabel: '🖱️' },
+    { id: 'dragdrop', label: '📅 Week Grid', mLabel: '📅' },
     { id: 'week', label: '📅 Week View', mLabel: '📅' },
     { id: 'calendar', label: '📆 Calendar', mLabel: '📆' },
     { id: 'create', label: '➕ Create', mLabel: '➕' },
