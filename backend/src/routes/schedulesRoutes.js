@@ -14,8 +14,12 @@ const verifyToken = (req, res, next) => {
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
   }
+  if (!process.env.JWT_SECRET) {
+    console.error('FATAL: JWT_SECRET env var not set');
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
   } catch (error) {
@@ -47,38 +51,8 @@ const auditLog = async (userId, action, tableName, recordId, oldData, newData) =
 };
 
 // ==================== SCHEDULES ROUTES ====================
-
-// GET /api/schedules/:caregiverId - Get schedules for a specific caregiver
-router.get('/:caregiverId', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT * FROM schedules WHERE caregiver_id = $1 AND is_active = true ORDER BY day_of_week, date, start_time`,
-      [req.params.caregiverId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET /api/schedules-all - Get all schedules for calendar view
-// Note: This is mounted at /api/schedules, so use /all path
-router.get('-all', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT s.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
-              c.first_name as client_first_name, c.last_name as client_last_name
-       FROM schedules s
-       JOIN users u ON s.caregiver_id = u.id
-       JOIN clients c ON s.client_id = c.id
-       WHERE s.is_active = true
-       ORDER BY s.day_of_week, s.date, s.start_time`
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// NOTE: GET /:caregiverId and GET -all are handled by inline routes in server.js
+// (registered before this router) which include richer JOIN queries.
 
 // POST /api/schedules - Create new schedule
 router.post('/', verifyToken, async (req, res) => {
