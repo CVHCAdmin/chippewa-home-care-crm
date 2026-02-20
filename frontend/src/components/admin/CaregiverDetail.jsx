@@ -47,6 +47,8 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   const [bgForm, setBgForm] = useState({ checkType: 'criminal', provider: '', cost: '', notes: '', status: 'pending' });
   const [showBgForm, setShowBgForm] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
+  const [shiftFilter, setShiftFilter] = useState({ start: '', end: '' });
+  const [allShifts, setAllShifts] = useState(null);
 
   const hdr = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
@@ -381,8 +383,6 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   );
 
   // ── SHIFTS TAB ─────────────────────────────────────────────────────────────────
-  const [shiftFilter, setShiftFilter] = useState({ start: '', end: '' });
-  const [allShifts, setAllShifts] = useState(null);
   const loadShifts = async () => {
     const params = new URLSearchParams();
     if (shiftFilter.start) params.set('startDate', shiftFilter.start + 'T00:00:00');
