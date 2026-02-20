@@ -55,15 +55,17 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [sumRes, bgRes] = await Promise.all([
+      const [sumRes, bgRes, profRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/caregivers/${caregiverId}/summary`, { headers: hdr }),
         fetch(`${API_BASE_URL}/api/background-checks/caregiver/${caregiverId}`, { headers: hdr }),
+        fetch(`${API_BASE_URL}/api/caregiver-profile/${caregiverId}`, { headers: hdr }),
       ]);
-      const sum = await sumRes.json();
+      const sum = sumRes.ok ? await sumRes.json() : {};
       const bg = bgRes.ok ? await bgRes.json() : [];
+      const prof = profRes.ok ? await profRes.json() : {};
       setData(sum);
       setBgChecks(Array.isArray(bg) ? bg : []);
-      // Populate form from profile
+      // Populate form from profile - merge summary profile + separate profile endpoint
       const p = sum.profile || {};
       setForm({
         firstName: p.first_name || '',
@@ -79,11 +81,11 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
         emergencyContactName: p.emergency_contact_name || '',
         emergencyContactPhone: p.emergency_contact_phone || '',
         isActive: p.is_active !== false,
-        notes: p.notes || '',
-        capabilities: p.capabilities || '',
-        limitations: p.limitations || '',
-        npiNumber: p.npi_number || '',
-        evvWorkerId: p.evv_worker_id || '',
+        notes: p.notes || prof.notes || '',
+        capabilities: p.capabilities || prof.capabilities || '',
+        limitations: p.limitations || prof.limitations || '',
+        npiNumber: p.npi_number || prof.npi_number || '',
+        evvWorkerId: p.evv_worker_id || prof.evv_worker_id || '',
       });
     } catch (e) { toast('Failed to load caregiver', 'error'); }
     setLoading(false);

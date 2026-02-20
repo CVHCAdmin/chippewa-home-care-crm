@@ -19,6 +19,9 @@ const PayrollProcessing = ({ token }) => {
   const [showPTOModal, setShowPTOModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [caregivers, setCaregivers] = useState([]);
+  const [activeTab, setActiveTab] = useState('payroll');
+  const [discrepancies, setDiscrepancies] = useState(null);
+  const [discrepancyLoading, setDiscrepancyLoading] = useState(false);
   
   // Payroll settings
   const [settings, setSettings] = useState({
@@ -284,6 +287,17 @@ const PayrollProcessing = ({ token }) => {
 
   const formatCurrency = (amount) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
 
+  const loadDiscrepancies = async () => {
+    setDiscrepancyLoading(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/payroll/discrepancies?startDate=${payPeriod.startDate}&endDate=${payPeriod.endDate}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (r.ok) setDiscrepancies(await r.json());
+    } catch(e) {}
+    setDiscrepancyLoading(false);
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -298,6 +312,110 @@ const PayrollProcessing = ({ token }) => {
       </div>
 
       {message && <div className={`alert ${message.includes('Error') ? 'alert-error' : 'alert-success'}`}>{message}</div>}
+
+      {/* Tab selector */}
+      <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #E5E7EB', marginBottom: '1.25rem' }}>
+        {[['payroll','💰 Payroll'],['discrepancies','⚠️ Hour Discrepancies']].map(([id,label]) => (
+          <button key={id} onClick={() => { setActiveTab(id); if(id==='discrepancies') loadDiscrepancies(); }}
+            style={{ padding:'0.55rem 1.25rem', border:'none', background:'none', cursor:'pointer',
+              fontWeight: activeTab===id ? 800 : 500, fontSize:'0.875rem',
+              color: activeTab===id ? '#2ABBA7' : '#6B7280',
+              borderBottom: `2px solid ${activeTab===id ? '#2ABBA7' : 'transparent'}`,
+              marginBottom: -2 }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Discrepancies Tab */}
+      {activeTab === 'discrepancies' && (
+        <div>
+          <div style={{ background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:12, padding:'1rem 1.25rem', marginBottom:'1rem', fontSize:'0.875rem', color:'#92400E' }}>
+            <strong>📋 How payroll hours work:</strong> Caregivers are paid for <strong>allotted hours only</strong> — the hours authorized per client per shift. 
+            If a caregiver clocks in late, their shift end adjusts forward by the late amount so they still get their full allotted time. 
+            If they work over their allotted hours, only the allotted hours are billable. Discrepancies of 5+ minutes are flagged here.
+          </div>
+          <div style={{ display:'flex', gap:'0.75rem', marginBottom:'1rem', flexWrap:'wrap', alignItems:'flex-end' }}>
+            <div>
+              <label style={{ display:'block', fontWeight:700, fontSize:'0.75rem', color:'#6B7280', marginBottom:4 }}>FROM</label>
+              <input type="date" value={payPeriod.startDate} onChange={e=>setPayPeriod(p=>({...p,startDate:e.target.value}))}
+                style={{ padding:'0.5rem', border:'1px solid #D1D5DB', borderRadius:8, fontSize:'0.875rem' }}/>
+            </div>
+            <div>
+              <label style={{ display:'block', fontWeight:700, fontSize:'0.75rem', color:'#6B7280', marginBottom:4 }}>TO</label>
+              <input type="date" value={payPeriod.endDate} onChange={e=>setPayPeriod(p=>({...p,endDate:e.target.value}))}
+                style={{ padding:'0.5rem', border:'1px solid #D1D5DB', borderRadius:8, fontSize:'0.875rem' }}/>
+            </div>
+            <button onClick={loadDiscrepancies} style={{ padding:'0.55rem 1.25rem', background:'#2ABBA7', color:'#fff', border:'none', borderRadius:8, cursor:'pointer', fontWeight:700 }}>
+              {discrepancyLoading ? 'Loading...' : 'Run Report'}
+            </button>
+          </div>
+
+          {discrepancies && (
+            <>
+              {/* Summary */}
+              <div style={{ display:'flex', gap:'0.75rem', marginBottom:'1rem', flexWrap:'wrap' }}>
+                {[
+                  { label:'Shifts with Discrepancies', val: discrepancies.totals.totalShifts, color:'#6366F1' },
+                  { label:'Over Allotted', val: discrepancies.totals.overageCount + ' shifts', color:'#EF4444' },
+                  { label:'Under Allotted', val: discrepancies.totals.underageCount + ' shifts', color:'#F59E0B' },
+                  { label:'Total Overage Cost', val: '$' + parseFloat(discrepancies.totals.totalOverageCost||0).toFixed(2), color:'#DC2626' },
+                ].map(s => (
+                  <div key={s.label} style={{ flex:1, minWidth:140, padding:'1rem', background:'#F9FAFB', borderRadius:12, borderLeft:`4px solid ${s.color}` }}>
+                    <div style={{ fontSize:'1.25rem', fontWeight:800, color:s.color }}>{s.val}</div>
+                    <div style={{ fontSize:'0.72rem', color:'#6B7280', marginTop:2 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Table */}
+              {discrepancies.discrepancies.length === 0 ? (
+                <div style={{ textAlign:'center', padding:'2rem', color:'#9CA3AF', background:'#F9FAFB', borderRadius:12 }}>
+                  ✅ No significant discrepancies found in this period
+                </div>
+              ) : (
+                <div style={{ overflowX:'auto' }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.82rem' }}>
+                    <thead>
+                      <tr style={{ background:'#F9FAFB' }}>
+                        {['Caregiver','Client','Date','Allotted','Actual','Billable','Discrepancy','Allotted Pay','Actual Cost','Overage $'].map(h => (
+                          <th key={h} style={{ padding:'0.5rem 0.75rem', textAlign:'left', fontWeight:700, color:'#374151', borderBottom:'1px solid #E5E7EB', whiteSpace:'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {discrepancies.discrepancies.map(d => {
+                        const over = parseFloat(d.discrepancy_hours) > 0;
+                        const under = parseFloat(d.discrepancy_hours) < 0;
+                        return (
+                          <tr key={d.id} style={{ borderBottom:'1px solid #F3F4F6', background: over ? '#FFF5F5' : under ? '#FFFBEB' : '#fff' }}>
+                            <td style={{ padding:'0.5rem 0.75rem', fontWeight:600 }}>{d.caregiver_first} {d.caregiver_last}</td>
+                            <td style={{ padding:'0.5rem 0.75rem' }}>{d.client_first} {d.client_last}</td>
+                            <td style={{ padding:'0.5rem 0.75rem', color:'#6B7280' }}>{new Date(d.start_time).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</td>
+                            <td style={{ padding:'0.5rem 0.75rem' }}>{d.allotted_hours}h</td>
+                            <td style={{ padding:'0.5rem 0.75rem' }}>{d.actual_hours}h</td>
+                            <td style={{ padding:'0.5rem 0.75rem', fontWeight:700, color:'#2ABBA7' }}>{d.billable_hours}h</td>
+                            <td style={{ padding:'0.5rem 0.75rem', fontWeight:700, color: over?'#DC2626':under?'#F59E0B':'#374151' }}>
+                              {over ? '+' : ''}{d.discrepancy_hours}h {over ? '⚠️ Over' : under ? '⬇️ Short' : ''}
+                            </td>
+                            <td style={{ padding:'0.5rem 0.75rem', color:'#065F46' }}>${d.billable_pay}</td>
+                            <td style={{ padding:'0.5rem 0.75rem', color:'#6B7280' }}>${d.actual_pay}</td>
+                            <td style={{ padding:'0.5rem 0.75rem', fontWeight:700, color: over?'#DC2626':'#9CA3AF' }}>
+                              {over ? `$${d.overage_cost}` : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'payroll' && (
 
       {/* Summary Cards */}
       <div className="grid">
@@ -694,6 +812,8 @@ const PayrollProcessing = ({ token }) => {
         </div>
       )}
     </div>
+      )}
+
   );
 };
 
