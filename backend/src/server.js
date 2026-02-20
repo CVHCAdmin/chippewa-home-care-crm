@@ -989,14 +989,14 @@ app.get('/api/caregivers/:id/summary', verifyToken, requireAdmin, async (req, re
         SELECT
           COUNT(*) as total_shifts,
           COUNT(*) FILTER (WHERE is_complete = true) as completed_shifts,
-          ROUND(SUM(CASE WHEN is_complete THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as total_hours,
-          ROUND(SUM(CASE WHEN is_complete THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END * u.default_pay_rate)::numeric, 2) as total_earnings,
-          ROUND(SUM(CASE WHEN is_complete AND start_time >= NOW() - INTERVAL '7 days' THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as hours_this_week,
-          ROUND(SUM(CASE WHEN is_complete AND start_time >= date_trunc('month', NOW()) THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END * u.default_pay_rate)::numeric, 2) as earnings_this_month,
-          ROUND(SUM(CASE WHEN is_complete AND start_time >= date_trunc('month', NOW()) THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as hours_this_month,
-          ROUND(SUM(CASE WHEN is_complete AND start_time >= NOW() - INTERVAL '30 days' THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 ELSE 0 END)::numeric, 2) as hours_last_30,
-          ROUND(AVG(CASE WHEN is_complete THEN EXTRACT(EPOCH FROM (end_time - start_time))/3600 END)::numeric, 2) as avg_shift_hours,
-          MAX(start_time) as last_shift_date
+          ROUND(COALESCE(SUM(CASE WHEN te.is_complete THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 ELSE 0 END), 0)::numeric, 2) as total_hours,
+          ROUND(COALESCE(SUM(CASE WHEN te.is_complete THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 * COALESCE(u.default_pay_rate,0) ELSE 0 END), 0)::numeric, 2) as total_earnings,
+          ROUND(COALESCE(SUM(CASE WHEN te.is_complete AND te.start_time >= NOW() - INTERVAL '7 days' THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 ELSE 0 END), 0)::numeric, 2) as hours_this_week,
+          ROUND(COALESCE(SUM(CASE WHEN te.is_complete AND te.start_time >= date_trunc('month', NOW()) THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 * COALESCE(u.default_pay_rate,0) ELSE 0 END), 0)::numeric, 2) as earnings_this_month,
+          ROUND(COALESCE(SUM(CASE WHEN te.is_complete AND te.start_time >= date_trunc('month', NOW()) THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 ELSE 0 END), 0)::numeric, 2) as hours_this_month,
+          ROUND(COALESCE(SUM(CASE WHEN te.is_complete AND te.start_time >= NOW() - INTERVAL '30 days' THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 ELSE 0 END), 0)::numeric, 2) as hours_last_30,
+          ROUND(COALESCE(AVG(CASE WHEN te.is_complete AND te.end_time IS NOT NULL THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 END), 0)::numeric, 2) as avg_shift_hours,
+          MAX(te.start_time) as last_shift_date
         FROM time_entries te
         JOIN users u ON u.id = te.caregiver_id
         WHERE te.caregiver_id = $1
@@ -1018,7 +1018,9 @@ app.get('/api/caregivers/:id/summary', verifyToken, requireAdmin, async (req, re
       // Recent shifts
       db.query(`
         SELECT te.id, te.start_time, te.end_time, te.is_complete,
-          ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600::numeric, 2) as hours,
+          CASE WHEN te.end_time IS NOT NULL
+            THEN ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0::numeric, 2)
+            ELSE NULL END as hours,
           c.first_name as client_first, c.last_name as client_last,
           c.address as client_address
         FROM time_entries te
