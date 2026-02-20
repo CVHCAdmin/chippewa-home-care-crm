@@ -291,3 +291,144 @@ router.post('/export/quickbooks', auth, async (req, res) => {
 });
 
 module.exports = router;
+
+// ==================== PAYROLL CRUD (migrated from miscRoutes) ====================
+// These were shadowed by miscRoutes — now live here exclusively
+
+const { v4: uuidv4 } = require('uuid');
+const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+
+// POST /api/payroll/run
+router.post('/run', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { payPeriodStart, payPeriodEnd } = req.body;
+    if (!payPeriodStart || !payPeriodEnd) return res.status(400).json({ error: 'payPeriodStart and payPeriodEnd are required' });
+    const payrollId = uuidv4();
+    const payrollNumber = `PR-${Date.now()}`;
+    const timeEntriesResult = await db.query(
+      `SELECT te.*, u.first_name, u.last_name, cr.base_hourly_rate FROM time_entries te
+       JOIN users u ON te.caregiver_id = u.id LEFT JOIN caregiver_rates cr ON te.caregiver_id = cr.caregiver_id
+       WHERE te.start_time >= $1 AND te.start_time <= $2 AND te.duration_minutes > 0 ORDER BY te.caregiver_id`,
+      [payPeriodStart, payPeriodEnd]
+    );
+    const caregiverPayroll = {};
+    let totalGrossPay = 0;
+    for (const entry of timeEntriesResult.rows) {
+      if (!caregiverPayroll[entry.caregiver_id]) {
+        caregiverPayroll[entry.caregiver_id] = { caregiverId: entry.caregiver_id, caregiverName: `${entry.first_name} ${entry.last_name}`, totalHours: 0, hourlyRate: entry.base_hourly_rate || 18.50, grossPay: 0, lineItems: [] };
+      }
+      caregiverPayroll[entry.caregiver_id].totalHours += parseFloat(entry.billable_minutes || entry.duration_minutes || 0) / 60;
+    }
+    const lineItems = [];
+    for (const caregiverId in caregiverPayroll) {
+      const p = caregiverPayroll[caregiverId];
+      p.grossPay = (p.totalHours * p.hourlyRate).toFixed(2);
+      totalGrossPay += parseFloat(p.grossPay);
+      lineItems.push({ caregiverId, description: `Hours: ${p.totalHours.toFixed(2)} × $${p.hourlyRate.toFixed(2)}/hr`, totalHours: p.totalHours.toFixed(2), hourlyRate: p.hourlyRate, grossAmount: p.grossPay });
+    }
+    const totalTaxes = (totalGrossPay * 0.0765).toFixed(2);
+    const totalNetPay = (totalGrossPay - parseFloat(totalTaxes)).toFixed(2);
+    const payrollResult = await db.query(
+      `INSERT INTO payroll (id, payroll_number, pay_period_start, pay_period_end, total_hours, gross_pay, taxes, net_pay, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending') RETURNING *`,
+      [payrollId, payrollNumber, payPeriodStart, payPeriodEnd, Object.values(caregiverPayroll).reduce((s, p) => s + p.totalHours, 0).toFixed(2), totalGrossPay, totalTaxes, totalNetPay]
+    );
+    for (const item of lineItems) {
+      await db.query(`INSERT INTO payroll_line_items (payroll_id, caregiver_id, description, total_hours, hourly_rate, gross_amount) VALUES ($1,$2,$3,$4,$5,$6)`, [payrollId, item.caregiverId, item.description, item.totalHours, item.hourlyRate, item.grossAmount]);
+    }
+    await auditLog(req.user.id, 'CREATE', 'payroll', payrollId, null, payrollResult.rows[0]);
+    res.status(201).json({ ...payrollResult.rows[0], lineItems, caregiverCount: lineItems.length });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/payroll/summary
+router.get('/summary', auth, async (req, res) => {
+  try {
+    const [summary, caregiverStats] = await Promise.all([
+      db.query(`SELECT COUNT(DISTINCT id) as total_payrolls, COUNT(DISTINCT CASE WHEN status='pending' THEN id END) as pending_payrolls, COUNT(DISTINCT CASE WHEN status='processed' THEN id END) as processed_payrolls, COUNT(DISTINCT CASE WHEN status='paid' THEN id END) as paid_payrolls, SUM(gross_pay) as total_gross_pay, SUM(taxes) as total_taxes, SUM(net_pay) as total_net_pay, AVG(total_hours) as average_hours_per_payroll, MAX(pay_period_end) as latest_payroll_date FROM payroll`),
+      db.query(`SELECT u.id, u.first_name, u.last_name, COUNT(pli.id) as payroll_count, SUM(pli.total_hours) as total_hours_paid, SUM(pli.gross_amount) as total_earned FROM users u LEFT JOIN payroll_line_items pli ON u.id = pli.caregiver_id WHERE u.role = 'caregiver' GROUP BY u.id, u.first_name, u.last_name ORDER BY total_earned DESC NULLS LAST`),
+    ]);
+    res.json({ summary: summary.rows[0], caregiverStats: caregiverStats.rows });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/payroll/caregiver/:caregiverId
+router.get('/caregiver/:caregiverId', auth, async (req, res) => {
+  try {
+    res.json((await db.query(`SELECT pli.*, p.payroll_number, p.pay_period_start, p.pay_period_end, p.status FROM payroll_line_items pli JOIN payroll p ON pli.payroll_id = p.id WHERE pli.caregiver_id = $1 ORDER BY p.pay_period_end DESC`, [req.params.caregiverId])).rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/payroll/periods
+router.get('/periods', auth, async (req, res) => {
+  try {
+    res.json((await db.query(`SELECT DISTINCT pay_period_start, pay_period_end FROM payroll ORDER BY pay_period_end DESC`)).rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/payroll/discrepancies
+router.get('/discrepancies', auth, async (req, res) => {
+  try {
+    const { startDate, endDate, minDiscrepancy = 5 } = req.query;
+    const start = startDate || new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+    const end = endDate || new Date().toISOString().split('T')[0];
+    const result = await db.query(`
+      SELECT te.id, te.start_time, te.end_time, te.duration_minutes, te.allotted_minutes, te.billable_minutes,
+        ROUND(te.duration_minutes::numeric/60,2) as actual_hours,
+        ROUND(COALESCE(te.allotted_minutes,te.duration_minutes)::numeric/60,2) as allotted_hours,
+        ROUND(te.billable_minutes::numeric/60,2) as billable_hours,
+        ROUND((te.duration_minutes-COALESCE(te.allotted_minutes,te.duration_minutes))::numeric/60,2) as discrepancy_hours,
+        u.first_name as caregiver_first, u.last_name as caregiver_last, u.default_pay_rate,
+        ROUND(te.billable_minutes::numeric/60*u.default_pay_rate,2) as billable_pay,
+        ROUND(te.duration_minutes::numeric/60*u.default_pay_rate,2) as actual_pay,
+        ROUND((te.duration_minutes-COALESCE(te.allotted_minutes,te.duration_minutes))::numeric/60*u.default_pay_rate,2) as overage_cost,
+        c.first_name as client_first, c.last_name as client_last
+      FROM time_entries te JOIN users u ON te.caregiver_id=u.id JOIN clients c ON te.client_id=c.id
+      WHERE te.is_complete=true AND te.start_time>=$1::date AND te.start_time<$2::date+INTERVAL '1 day'
+        AND te.allotted_minutes IS NOT NULL AND ABS(COALESCE(te.duration_minutes-te.allotted_minutes,0))>=$3
+      ORDER BY ABS(COALESCE(te.duration_minutes-te.allotted_minutes,0)) DESC
+    `, [start, end, parseInt(minDiscrepancy)]);
+    const totals = result.rows.reduce((acc, r) => {
+      acc.totalShifts++;
+      acc.totalActualHours += parseFloat(r.actual_hours || 0);
+      acc.totalAllottedHours += parseFloat(r.allotted_hours || 0);
+      acc.totalBillableHours += parseFloat(r.billable_hours || 0);
+      acc.totalOverageCost += parseFloat(r.overage_cost || 0);
+      if (parseFloat(r.discrepancy_hours) > 0) acc.overageCount++;
+      if (parseFloat(r.discrepancy_hours) < 0) acc.underageCount++;
+      return acc;
+    }, { totalShifts: 0, totalActualHours: 0, totalAllottedHours: 0, totalBillableHours: 0, totalOverageCost: 0, overageCount: 0, underageCount: 0 });
+    res.json({ discrepancies: result.rows, totals, period: { start, end } });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/payroll (list all)
+router.get('/', auth, async (req, res) => {
+  try {
+    res.json((await db.query(`SELECT * FROM payroll ORDER BY pay_period_end DESC`)).rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/payroll/:payrollId
+router.get('/:payrollId', auth, async (req, res) => {
+  try {
+    const payrollResult = await db.query(`SELECT * FROM payroll WHERE id = $1`, [req.params.payrollId]);
+    if (payrollResult.rows.length === 0) return res.status(404).json({ error: 'Payroll not found' });
+    const lineItemsResult = await db.query(`SELECT pli.*, u.first_name, u.last_name FROM payroll_line_items pli JOIN users u ON pli.caregiver_id = u.id WHERE pli.payroll_id = $1 ORDER BY u.first_name, u.last_name`, [req.params.payrollId]);
+    res.json({ ...payrollResult.rows[0], lineItems: lineItemsResult.rows });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// PATCH /api/payroll/:payrollId/status
+router.patch('/:payrollId/status', auth, async (req, res) => {
+  try {
+    const { status, processedDate, paymentMethod } = req.body;
+    if (!status) return res.status(400).json({ error: 'status is required' });
+    const result = await db.query(
+      `UPDATE payroll SET status=$1, processed_date=CASE WHEN $1='processed' THEN COALESCE($2,NOW()) ELSE processed_date END, payment_method=COALESCE($3,payment_method), updated_at=NOW() WHERE id=$4 RETURNING *`,
+      [status, processedDate, paymentMethod, req.params.payrollId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Payroll not found' });
+    await auditLog(req.user.id, 'UPDATE', 'payroll', req.params.payrollId, null, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
