@@ -1,5 +1,7 @@
 // src/config.js - API utilities with token expiry handling
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://chippewa-home-care-api.onrender.com';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || (
+  import.meta.env.DEV ? 'http://localhost:5000' : ''
+);
 
 // Global logout callback — set by App on mount
 let _onSessionExpired = null;
@@ -68,9 +70,9 @@ export const clockIn = (data, token) => apiCall('/api/time-entries/clock-in', { 
 export const clockOut = (id, data, token) => apiCall(`/api/time-entries/${id}/clock-out`, { method: 'POST', body: JSON.stringify(data) }, token);
 export const trackGPS = (id, data, token) => apiCall(`/api/time-entries/${id}/gps`, { method: 'POST', body: JSON.stringify(data) }, token);
 
-export const getInvoices = (token) => apiCall('/api/invoices', { method: 'GET' }, token);
-export const generateInvoice = (data, token) => apiCall('/api/invoices/generate', { method: 'POST', body: JSON.stringify(data) }, token);
-export const updateInvoiceStatus = (id, data, token) => apiCall(`/api/invoices/${id}/payment-status`, { method: 'PUT', body: JSON.stringify(data) }, token);
+export const getInvoices = (token) => apiCall('/api/billing/invoices', { method: 'GET' }, token);
+export const generateInvoice = (data, token) => apiCall('/api/billing/invoices/generate', { method: 'POST', body: JSON.stringify(data) }, token);
+export const updateInvoiceStatus = (id, data, token) => apiCall(`/api/billing/invoices/${id}/payment-status`, { method: 'PUT', body: JSON.stringify(data) }, token);
 
 export const getDashboardSummary = (token) => apiCall('/api/dashboard/summary', { method: 'GET' }, token);
 export const getDashboardReferrals = (token) => apiCall('/api/dashboard/referrals', { method: 'GET' }, token);
@@ -78,7 +80,7 @@ export const getDashboardHours = (token) => apiCall('/api/dashboard/caregiver-ho
 
 export const exportInvoicesCSV = async (token) => {
   const headers = { 'Authorization': `Bearer ${token}` };
-  const response = await fetch(`${API_BASE_URL}/api/export/invoices-csv`, { headers });
+  const response = await fetch(`${API_BASE_URL}/api/billing/export/invoices-csv`, { headers });
   return response.blob();
 };
 
