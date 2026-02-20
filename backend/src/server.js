@@ -30,20 +30,23 @@ const port = process.env.PORT || 5000;
 app.use(helmet());
 app.use(compression());
 
-// CORS — fully env-driven, no hardcoded domains
-// Set ALLOWED_ORIGINS=https://your-app.netlify.app,https://yourdomain.com in Render
+// CORS — CVHC defaults + ALLOWED_ORIGINS env var for additional domains (white-labeling)
+// To add a new domain: set ALLOWED_ORIGINS=https://newclient.netlify.app in Render env vars
 app.use(cors({
   origin: (origin, callback) => {
-    const rawOrigins = process.env.ALLOWED_ORIGINS || '';
-    const allowed = rawOrigins
-      .split(',')
-      .map(o => o.trim())
-      .filter(Boolean);
+    const defaultOrigins = [
+      'https://cvhc-crm.netlify.app',
+      'https://chippewavalleyhomecare.com',
+      'https://www.chippewavalleyhomecare.com',
+      process.env.FRONTEND_URL,
+      'http://localhost:3000',
+      'http://localhost:5173',
+    ].filter(Boolean);
 
-    // Always allow localhost in development
-    if (process.env.NODE_ENV !== 'production') {
-      allowed.push('http://localhost:3000', 'http://localhost:5173');
-    }
+    const extraOrigins = (process.env.ALLOWED_ORIGINS || '')
+      .split(',').map(o => o.trim()).filter(Boolean);
+
+    const allowed = [...new Set([...defaultOrigins, ...extraOrigins])];
 
     if (!origin || allowed.includes(origin)) return callback(null, true);
     callback(new Error(`CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`));
