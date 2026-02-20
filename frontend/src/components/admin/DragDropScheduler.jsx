@@ -107,6 +107,16 @@ export default function DragDropScheduler({ token, onScheduleChange }) {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Global drag cleanup — ensures stuck state always clears if drag ends outside a drop zone
+  useEffect(() => {
+    const cleanup = () => {
+      setDragging(null);
+      setDragOver(null);
+    };
+    document.addEventListener('dragend', cleanup);
+    return () => document.removeEventListener('dragend', cleanup);
+  }, []);
+
   // ── Compute which schedules belong in a cell ───────────────────────────────
   const weekDates  = getWeekDates(weekOf);
   const weekDateStrs = weekDates.map(d => d.toISOString().split('T')[0]);
@@ -134,7 +144,9 @@ export default function DragDropScheduler({ token, onScheduleChange }) {
     setDragOver({ caregiverId, dayIndex });
   }
 
-  function handleDragLeave() {
+  function handleDragLeave(e) {
+    // Only clear if we're actually leaving the cell, not just moving to a child element
+    if (e.currentTarget.contains(e.relatedTarget)) return;
     setDragOver(null);
   }
 
@@ -200,14 +212,15 @@ export default function DragDropScheduler({ token, onScheduleChange }) {
     }
   }
 
-  function handleDragEnd() {
+  function handleDragEnd(e) {
+    e.preventDefault();
     setDragging(null);
     setDragOver(null);
   }
 
   // ── Create new shift by clicking a cell ──────────────────────────────────
   function handleCellClick(caregiverId, dayIndex) {
-    if (dragging) return;
+    if (saving) return; // don't open modal while a save is in progress
     setNewShift({ caregiverId, dayIndex });
     setNewShiftForm({ clientId: '', startTime: '09:00', endTime: '13:00', notes: '' });
   }
