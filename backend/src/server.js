@@ -125,7 +125,6 @@ app.use('/api', miscRoutes);
 app.use('/api/billing', verifyToken, billingRoutes);
 
 // ─── SCHEDULES-ALL (explicit — router.get('-all') never matched due to Express path rules) ───
-const db = require('./db');
 app.get('/api/schedules-all', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
