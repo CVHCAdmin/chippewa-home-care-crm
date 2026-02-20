@@ -7,6 +7,23 @@ const db = require('../db');
 const auth = require('../middleware/auth');
 
 // Get all open shifts
+router.get('/available', auth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT os.*, c.first_name as client_first_name, c.last_name as client_last_name
+      FROM open_shifts os
+      LEFT JOIN clients c ON os.client_id = c.id
+      WHERE os.status = 'open' 
+        AND (os.shift_date >= CURRENT_DATE OR os.shift_date IS NULL)
+      ORDER BY os.shift_date, os.start_time
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get available shifts error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/', auth, async (req, res) => {
   const { status, startDate, endDate, urgency } = req.query;
   try {

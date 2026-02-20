@@ -51,12 +51,22 @@ const port = process.env.PORT || 5000;
 app.use(helmet());
 app.use(compression());
 app.use(cors({
-  origin: [
-    'https://cvhc-crm.netlify.app',
-    'https://chippewavalleyhomecare.com',
-    'https://www.chippewavalleyhomecare.com',
-    process.env.FRONTEND_URL || 'http://localhost:3000'
-  ],
+  origin: (origin, callback) => {
+    // Build allowed origins from env (comma-separated) + hardcoded defaults
+    const envOrigins = process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+      : [];
+    const defaultOrigins = [
+      'https://cvhc-crm.netlify.app',
+      'https://chippewavalleyhomecare.com',
+      'https://www.chippewavalleyhomecare.com',
+      process.env.FRONTEND_URL || 'http://localhost:3000',
+    ];
+    const allowed = [...new Set([...defaultOrigins, ...envOrigins])];
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin || allowed.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -4244,11 +4254,6 @@ app.put('/api/clients/:id/billing', verifyToken, requireAdmin, async (req, res) 
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
-});
 // ============ SMART SCHEDULING ROUTES ============
 
 // Helper to get week start (Sunday)
@@ -4565,6 +4570,7 @@ app.post('/api/scheduling/auto-fill', verifyToken, requireAdmin, async (req, res
       return !(end1 <= start2 || start1 >= end2);
     };
 
+    // Boolean variant (suggest-caregivers uses an object variant above)
     const hasRequiredCerts = (caregiverCerts, required) => {
       if (!required || required.length === 0) return true;
       const certs = caregiverCerts || [];
@@ -4853,73 +4859,6 @@ app.post('/api/scheduling/bulk-create', verifyToken, requireAdmin, async (req, r
     res.status(500).json({ error: error.message });
   }
 });
-// GET /api/open-shifts/available - Get shifts available for pickup
-app.get('/api/open-shifts/available', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT os.*, c.first_name as client_first_name, c.last_name as client_last_name
-      FROM open_shifts os
-      LEFT JOIN clients c ON os.client_id = c.id
-      WHERE os.status = 'open' 
-        AND (os.shift_date >= CURRENT_DATE OR os.shift_date IS NULL)
-      ORDER BY os.shift_date, os.start_time
-    `);
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Get available shifts error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST /api/open-shifts/:shiftId/claim - Caregiver claims an open shift
-app.post('/api/open-shifts/:shiftId/claim', verifyToken, async (req, res) => {
-  try {
-    const { shiftId } = req.params;
-    const caregiverId = req.user.id;
-
-    // Get the open shift
-    const shiftResult = await db.query(
-      `SELECT * FROM open_shifts WHERE id = $1 AND status = 'open'`,
-      [shiftId]
-    );
-
-    if (shiftResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Shift not found or already claimed' });
-    }
-
-    const shift = shiftResult.rows[0];
-
-    // Check for conflicts
-    const conflictResult = await db.query(`
-      SELECT id FROM schedules 
-      WHERE caregiver_id = $1 AND is_active = true
-        AND date = $2
-        AND NOT (end_time <= $3 OR start_time >= $4)
-    `, [caregiverId, shift.date, shift.start_time, shift.end_time]);
-
-    if (conflictResult.rows.length > 0) {
-      return res.status(400).json({ error: 'You have a conflicting schedule' });
-    }
-
-    // Create the schedule
-    const scheduleId = uuidv4();
-    await db.query(`
-      INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, date, start_time, end_time, notes)
-      VALUES ($1, $2, $3, 'one-time', $4, $5, $6, $7)
-    `, [scheduleId, caregiverId, shift.client_id, shift.date, shift.start_time, shift.end_time, shift.notes]);
-
-    // Update open shift status
-    await db.query(`
-      UPDATE open_shifts SET status = 'filled', filled_by = $1, filled_at = NOW() WHERE id = $2
-    `, [caregiverId, shiftId]);
-
-    res.json({ success: true, scheduleId });
-  } catch (error) {
-    console.error('Claim shift error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // GET /api/absences/my - Get current user's time off requests
 app.get('/api/absences/my', verifyToken, async (req, res) => {
   try {
