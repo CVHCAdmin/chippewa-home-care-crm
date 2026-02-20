@@ -1,31 +1,29 @@
 {
-  "name": "HomeCare CRM",
+  "name": "CVHC HomeCare",
   "short_name": "HomeCare",
-  "description": "Home care agency management — scheduling, EVV, payroll, and more",
+  "description": "Chippewa Valley Home Care — scheduling, EVV, payroll, and care management",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#1D4ED8",
   "theme_color": "#1D4ED8",
+  "lang": "en-US",
   "icons": [
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
+    { "src": "/icon-72.png",  "sizes": "72x72",   "type": "image/png", "purpose": "any" },
+    { "src": "/icon-96.png",  "sizes": "96x96",   "type": "image/png", "purpose": "any" },
+    { "src": "/icon-128.png", "sizes": "128x128", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-144.png", "sizes": "144x144", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-152.png", "sizes": "152x152", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-384.png", "sizes": "384x384", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ],
   "shortcuts": [
     {
       "name": "Clock In",
       "short_name": "Clock In",
-      "description": "Quick clock-in to start a shift",
+      "description": "Start a shift",
       "url": "/?action=clock-in",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     },
@@ -35,7 +33,15 @@
       "description": "View today's schedule",
       "url": "/?view=schedule",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Messages",
+      "short_name": "Messages",
+      "description": "View messages",
+      "url": "/?view=messages",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ],
-  "categories": ["business", "productivity", "medical"]
+  "categories": ["business", "productivity", "medical"],
+  "prefer_related_applications": false
 }
