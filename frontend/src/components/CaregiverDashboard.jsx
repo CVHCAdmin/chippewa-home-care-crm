@@ -1,13 +1,15 @@
-import { toast } from './Toast';
 // src/components/CaregiverDashboard.jsx
 // Enhanced with self-service: availability, open shifts pickup, time off requests
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { API_BASE_URL } from '../config';
+import { toast } from './Toast';
 import CaregiverClientModal from './CaregiverClientModal';
 import MileageTracker from './MileageTracker';
 import ShiftMissReport from './caregiver/ShiftMissReport';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
+import { useGeolocation, useHaptics, useOfflineSync, isNative } from '../hooks/useNative';
+import OfflineBanner from './OfflineBanner';
 
 const subscribeToPush = async (token) => {
   try {
@@ -35,8 +37,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [clients, setClients] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [location, setLocation] = useState(null);
-  const [locationError, setLocationError] = useState(null);
   const [selectedClient, setSelectedClient] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -45,6 +45,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [recentVisits, setRecentVisits] = useState([]);
   const [viewingClientId, setViewingClientId] = useState(null);
   const timerRef = useRef(null);
+
+  // Native GPS — works on web AND iOS/Android
+  const { position: location, error: locationError, getPosition } = useGeolocation({ watch: true });
+  const { impact, notification: hapticNotify } = useHaptics();
+  const { online, queueCount } = useOfflineSync();
 
   // Self-service state
   const [openShifts, setOpenShifts] = useState([]);
@@ -73,7 +78,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   useEffect(() => {
     loadData();
-    startGPSTracking();
+    // GPS tracking handled by useGeolocation hook (watch: true)
     subscribeToPush(token);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -295,23 +300,42 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     if (!selectedClient) return toast('Please select a client.');
 
     try {
+      // Get fresh position if we don't have one
+      let lat = location?.latitude || null;
+      let lng = location?.longitude || null;
+      if (!lat) {
+        await getPosition();
+        lat = location?.latitude || null;
+        lng = location?.longitude || null;
+      }
+
+      await impact('medium'); // native haptic on button press
+
       const res = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ 
-          clientId: selectedClient, 
-          latitude: location?.lat || null, 
-          longitude: location?.lng || null 
-        })
+        body: JSON.stringify({ clientId: selectedClient, latitude: lat, longitude: lng })
       });
-      const _clockInData = await res.json();
-      if (!res.ok) throw new Error(_clockInData.error || "Failed");
-      setActiveSession(_clockInData);
-      gpsIntervalRef.current = startGPSBreadcrumbs(_clockInData.id);
-      if (!location) {
-        showMsg('Clocked in (location unavailable)', 'warning');
+
+      if (!res.ok) {
+        // If offline, service worker queued it — res will have queued:true
+        const data = await res.json();
+        if (data.queued) {
+          await hapticNotify('warning');
+          toast('Clocked in offline — will sync when reconnected', 'warning');
+          setActiveSession({ id: 'offline-' + Date.now(), offline: true });
+          return;
+        }
+        throw new Error(data.error || 'Failed');
       }
+
+      const clockInData = await res.json();
+      await hapticNotify('success'); // success haptic
+      setActiveSession(clockInData);
+      gpsIntervalRef.current = startGPSBreadcrumbs(clockInData.id);
+      if (!lat) toast('Clocked in (location unavailable)', 'warning');
     } catch (error) {
+      await hapticNotify('error');
       toast('Failed to clock in: ' + error.message, 'error');
     }
   };
@@ -323,18 +347,39 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const completeClockOut = async () => {
     try {
+      await impact('heavy'); // strong haptic for clock out
+
+      const lat = location?.latitude || null;
+      const lng = location?.longitude || null;
+
       const res = await fetch(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ latitude: location?.lat, longitude: location?.lng, notes: visitNote })
+        body: JSON.stringify({ latitude: lat, longitude: lng, notes: visitNote })
       });
-      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+
+      if (!res.ok) {
+        const data = await res.json();
+        if (data.queued) {
+          await hapticNotify('warning');
+          toast('Clocked out offline — will sync when reconnected', 'warning');
+          setActiveSession(null);
+          setSelectedClient('');
+          setVisitNote('');
+          setShowNoteModal(false);
+          return;
+        }
+        throw new Error(data.error || 'Failed');
+      }
+
+      await hapticNotify('success');
       setActiveSession(null);
       setSelectedClient('');
       setVisitNote('');
       setShowNoteModal(false);
       loadData();
     } catch (error) {
+      await hapticNotify('error');
       toast('Failed to clock out: ' + error.message, 'error');
     }
   };
