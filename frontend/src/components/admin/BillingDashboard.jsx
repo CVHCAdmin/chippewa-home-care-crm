@@ -140,11 +140,11 @@ const BillingDashboard = ({ token }) => {
   const loadData = async () => {
     try {
       const [invoiceRes, clientRes, rsRes, ctRes, ratesRes, caregiversRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/invoices`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/billing/invoices`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/clients`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/referral-sources`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/care-types`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`${API_BASE_URL}/api/referral-source-rates`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/billing/referral-source-rates`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/users?role=caregiver`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
 
@@ -166,7 +166,7 @@ const BillingDashboard = ({ token }) => {
       } catch (e) { console.log('Authorizations endpoint not available'); }
 
       try {
-        const payRes = await fetch(`${API_BASE_URL}/api/invoice-payments`, { headers: { 'Authorization': `Bearer ${token}` } });
+        const payRes = await fetch(`${API_BASE_URL}/api/billing/invoice-payments`, { headers: { 'Authorization': `Bearer ${token}` } });
         if (payRes.ok) setPayments(await payRes.json());
       } catch (e) { console.log('Payments endpoint not available'); }
 
@@ -180,7 +180,7 @@ const BillingDashboard = ({ token }) => {
   const handleGenerateInvoice = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch(`${API_BASE_URL}/api/invoices/generate-with-rates`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/generate-with-rates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(formData)
@@ -223,7 +223,7 @@ const BillingDashboard = ({ token }) => {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/invoices/manual`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/manual`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
@@ -308,7 +308,7 @@ const BillingDashboard = ({ token }) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/invoices/batch-generate`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/batch-generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(batchFormData)
@@ -329,7 +329,7 @@ const BillingDashboard = ({ token }) => {
 
   const handleViewInvoice = async (invoiceId) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/invoices/${invoiceId}`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoiceId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const invoice = await response.json();
@@ -345,7 +345,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   }
   
   try {
-    const response = await fetch(`${API_BASE_URL}/api/invoices/${invoiceId}`, {
+    const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoiceId}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -364,7 +364,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
 };
   const handleMarkPaid = async (invoiceId) => {
     try {
-      await fetch(`${API_BASE_URL}/api/invoices/${invoiceId}/payment-status`, {
+      await fetch(`${API_BASE_URL}/api/billing/invoices/${invoiceId}/payment-status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ status: 'paid', paymentDate: new Date() })
@@ -381,7 +381,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   const handleRecordPayment = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch(`${API_BASE_URL}/api/invoice-payments`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoice-payments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(paymentFormData)
@@ -419,7 +419,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   const handleRecordAdjustment = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch(`${API_BASE_URL}/api/invoice-adjustments`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoice-adjustments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(adjustmentFormData)
@@ -438,7 +438,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   const handleAddRate = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch(`${API_BASE_URL}/api/referral-source-rates`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/referral-source-rates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(rateFormData)
@@ -455,7 +455,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   const handleDeleteRate = async (rateId) => {
     const _cok = await confirm('Delete this rate?', {danger: true}); if (!_cok) return;
     try {
-      await fetch(`${API_BASE_URL}/api/referral-source-rates/${rateId}`, {
+      await fetch(`${API_BASE_URL}/api/billing/referral-source-rates/${rateId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -467,7 +467,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
 
   const handleExportCSV = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/export/invoices-csv`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/export/invoices-csv`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const blob = await response.blob();
@@ -483,7 +483,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
 
   const handleExportEVV = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/export/evv`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/export/evv`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const blob = await response.blob();

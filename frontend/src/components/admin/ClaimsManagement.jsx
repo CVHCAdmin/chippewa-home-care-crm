@@ -65,7 +65,7 @@ const ClaimsManagement = ({ token }) => {
 
   const loadInvoices = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/invoices?status=pending`, {
+      const res = await fetch(`${API_BASE_URL}/api/billing/invoices?status=pending`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
