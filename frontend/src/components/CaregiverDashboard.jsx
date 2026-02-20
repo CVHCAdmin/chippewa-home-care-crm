@@ -240,6 +240,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const startGPSBreadcrumbs = (sessionId) => {
     if (!("geolocation" in navigator)) return;
     const interval = setInterval(() => {
+      // GPS breadcrumb
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           fetch(`${API_BASE_URL}/api/time-entries/${sessionId}/gps`, {
@@ -249,9 +250,27 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           }).catch(() => {});
           setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
         },
-        () => {}, // silent fail for breadcrumbs
+        () => {},
         { enableHighAccuracy: true, timeout: 10000 }
       );
+
+      // 15-minute shift warning check (runs every 60s alongside GPS)
+      fetch(`${API_BASE_URL}/api/time-entries/check-warnings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ timeEntryId: sessionId })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.warning && !d.overTime) {
+          // 15-min warning - show in-app alert
+          toast(`⏰ ${d.minutesRemaining} min remaining — start wrapping up your shift!`, 'warning');
+        } else if (d.warning && d.overTime) {
+          toast(`⚠️ You are ${d.minutesOver} min over your scheduled time — please clock out`, 'error');
+        }
+      })
+      .catch(() => {});
+
     }, 60000); // every 60s
     return interval;
   };
