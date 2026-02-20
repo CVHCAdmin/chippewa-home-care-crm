@@ -1,4 +1,4 @@
-// server.js - Chippewa Valley Home Care API
+// server.js - HomeCare CRM API
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -20,6 +20,28 @@ const schedulesRoutes = require('./routes/schedulesRoutes');
 
 // Load environment variables
 dotenv.config();
+
+// ============ STARTUP VALIDATION ============
+// Required vars — server refuses to start if any are missing
+const REQUIRED_ENV = ['JWT_SECRET', 'DATABASE_URL'];
+const MISSING = REQUIRED_ENV.filter(k => !process.env[k]);
+if (MISSING.length) {
+  console.error(`\n❌ FATAL: Missing required environment variables:\n  ${MISSING.join('\n  ')}\n`);
+  console.error('Copy .env.example to .env and fill in all required values.\n');
+  process.exit(1);
+}
+
+// Warn (but don't crash) about optional-but-important vars
+const WARN_IF_MISSING = [
+  'ENCRYPTION_KEY', 'STRIPE_SECRET_KEY', 'TWILIO_ACCOUNT_SID',
+  'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'FRONTEND_URL'
+];
+WARN_IF_MISSING.filter(k => !process.env[k]).forEach(k =>
+  console.warn(`⚠️  Optional env var not set: ${k}`)
+);
+
+// Single source of truth for JWT secret
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const app = express();
 app.set('trust proxy', 1);
@@ -93,7 +115,7 @@ const verifyToken = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
+    const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
     next();
   } catch (error) {
@@ -109,11 +131,8 @@ const requireAdmin = (req, res, next) => {
 };
 
 // ============ ROUTES ============
-app.use('/api/reports', reports);
-app.use('/api/claims', claimsRoutes); 
-app.use('/api/stripe', stripeRoutes);
-app.use('/api/applications', applicationsRoutes);
-app.use('/api/schedules', schedulesRoutes);
+// Route registrations consolidated at bottom of file — see line ~3989
+// (removed early duplicate registrations of /api/reports, /api/claims, /api/stripe, /api/applications, /api/schedules)
 
 // ---- AUTHENTICATION ROUTES ----
 app.post('/api/auth/login', async (req, res) => {
@@ -134,8 +153,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: `${user.first_name} ${user.last_name}` },
-      process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      { expiresIn: '24h' }
+      JWT_SECRET,
     );
 
     res.json({
@@ -543,12 +561,22 @@ app.patch('/api/clients/:id/onboarding/:stepId', verifyToken, async (req, res) =
     const stepId = req.params.stepId;
     const updates = req.body;
 
-    // Build dynamic UPDATE query based on fields provided
+    // SECURITY: Strict whitelist to prevent SQL injection via dynamic column names
+    const ALLOWED_COLUMNS = new Set([
+      'step_name', 'step_status', 'completed_at', 'completed_by',
+      'notes', 'documents_received', 'signature_obtained',
+      'effective_date', 'review_date', 'assigned_to',
+      'form_data', 'is_complete', 'skipped', 'skipped_reason'
+    ]);
+
     let updateFields = [];
     let params = [];
     let paramIndex = 1;
 
     Object.keys(updates).forEach(key => {
+      if (!ALLOWED_COLUMNS.has(key)) {
+        throw new Error(`Invalid field: ${key}`);
+      }
       updateFields.push(`${key} = $${paramIndex}`);
       params.push(updates[key]);
       paramIndex++;
@@ -798,7 +826,7 @@ app.get('/api/time-entries/recent', verifyToken, async (req, res) => {
       start_time: entry.start_time,
       end_time: entry.end_time,
       notes: entry.notes,
-      hours_worked: entry.hours_worked,
+      hours_worked: entry.duration_minutes ? (entry.duration_minutes / 60).toFixed(2) : null,
       client_name: `${entry.client_first_name} ${entry.client_last_name}`
     }));
     
@@ -1548,7 +1576,7 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
        JOIN users u ON te.caregiver_id = u.id
        LEFT JOIN caregiver_rates cr ON te.caregiver_id = cr.caregiver_id
        WHERE te.start_time >= $1 AND te.start_time <= $2
-       AND te.hours_worked > 0
+       AND te.duration_minutes > 0
        ORDER BY te.caregiver_id`,
       [payPeriodStart, payPeriodEnd]
     );
@@ -1569,11 +1597,11 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
         };
       }
 
-      caregiverPayroll[entry.caregiver_id].totalHours += parseFloat(entry.hours_worked);
+      caregiverPayroll[entry.caregiver_id].totalHours += parseFloat(entry.billable_minutes || entry.duration_minutes || 0) / 60;
       caregiverPayroll[entry.caregiver_id].lineItems.push({
         timeEntryId: entry.id,
         date: entry.start_time,
-        hours: entry.hours_worked,
+        hours: ((entry.billable_minutes || entry.duration_minutes || 0) / 60).toFixed(2),
         rate: entry.base_hourly_rate || 18.50
       });
     }
@@ -1624,6 +1652,65 @@ app.post('/api/payroll/run', verifyToken, requireAdmin, async (req, res) => {
       ...payrollResult.rows[0],
       lineItems: lineItems,
       caregiverCount: lineItems.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/payroll - List all payrolls
+// GET /api/payroll/caregiver/:caregiverId - must be BEFORE /:payrollId to avoid shadowing
+app.get('/api/payroll/caregiver/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT pli.*, p.payroll_number, p.pay_period_start, p.pay_period_end, p.status
+       FROM payroll_line_items pli
+       JOIN payroll p ON pli.payroll_id = p.id
+       WHERE pli.caregiver_id = $1
+       ORDER BY p.pay_period_end DESC`,
+      [req.params.caregiverId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/payroll/summary - must be BEFORE /:payrollId to avoid shadowing
+app.get('/api/payroll/summary', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT 
+        COUNT(DISTINCT id) as total_payrolls,
+        COUNT(DISTINCT CASE WHEN status = 'pending' THEN id END) as pending_payrolls,
+        COUNT(DISTINCT CASE WHEN status = 'processed' THEN id END) as processed_payrolls,
+        COUNT(DISTINCT CASE WHEN status = 'paid' THEN id END) as paid_payrolls,
+        SUM(gross_pay) as total_gross_pay,
+        SUM(taxes) as total_taxes,
+        SUM(net_pay) as total_net_pay,
+        AVG(total_hours) as average_hours_per_payroll,
+        MAX(pay_period_end) as latest_payroll_date
+       FROM payroll`
+    );
+
+    const caregiverResult = await db.query(
+      `SELECT 
+        u.id,
+        u.first_name,
+        u.last_name,
+        COUNT(pli.id) as payroll_count,
+        SUM(pli.total_hours) as total_hours_paid,
+        SUM(pli.gross_amount) as total_earned
+       FROM users u
+       LEFT JOIN payroll_line_items pli ON u.id = pli.caregiver_id
+       WHERE u.role = 'caregiver'
+       GROUP BY u.id, u.first_name, u.last_name
+       ORDER BY total_earned DESC NULLS LAST`
+    );
+
+    res.json({
+      summary: result.rows[0],
+      caregiverStats: caregiverResult.rows
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1703,63 +1790,7 @@ app.patch('/api/payroll/:payrollId/status', verifyToken, requireAdmin, async (re
   }
 });
 
-// GET /api/payroll/caregiver/:caregiverId - Get caregiver payroll history
-app.get('/api/payroll/caregiver/:caregiverId', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT pli.*, p.payroll_number, p.pay_period_start, p.pay_period_end, p.status
-       FROM payroll_line_items pli
-       JOIN payroll p ON pli.payroll_id = p.id
-       WHERE pli.caregiver_id = $1
-       ORDER BY p.pay_period_end DESC`,
-      [req.params.caregiverId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET /api/payroll/summary - Payroll overview and reports
-app.get('/api/payroll/summary', verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT 
-        COUNT(DISTINCT id) as total_payrolls,
-        COUNT(DISTINCT CASE WHEN status = 'pending' THEN id END) as pending_payrolls,
-        COUNT(DISTINCT CASE WHEN status = 'processed' THEN id END) as processed_payrolls,
-        COUNT(DISTINCT CASE WHEN status = 'paid' THEN id END) as paid_payrolls,
-        SUM(gross_pay) as total_gross_pay,
-        SUM(taxes) as total_taxes,
-        SUM(net_pay) as total_net_pay,
-        AVG(total_hours) as average_hours_per_payroll,
-        MAX(pay_period_end) as latest_payroll_date
-       FROM payroll`
-    );
-
-    const caregiverResult = await db.query(
-      `SELECT 
-        u.id,
-        u.first_name,
-        u.last_name,
-        COUNT(pli.id) as payroll_count,
-        SUM(pli.total_hours) as total_hours_paid,
-        SUM(pli.gross_amount) as total_earned
-       FROM users u
-       LEFT JOIN payroll_line_items pli ON u.id = pli.caregiver_id
-       WHERE u.role = 'caregiver'
-       GROUP BY u.id, u.first_name, u.last_name
-       ORDER BY total_earned DESC NULLS LAST`
-    );
-
-    res.json({
-      summary: result.rows[0],
-      caregiverStats: caregiverResult.rows
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// NOTE: /api/payroll/caregiver/:caregiverId and /api/payroll/summary moved above /:payrollId to fix route shadowing
 
 // GET /api/payroll-periods - List distinct pay periods
 app.get('/api/payroll-periods', verifyToken, requireAdmin, async (req, res) => {
@@ -1857,7 +1888,7 @@ app.get('/api/reports/caregiver-performance', verifyToken, requireAdmin, async (
         u.id,
         u.first_name || ' ' || u.last_name as caregiver_name,
         COUNT(DISTINCT te.id) as time_entries,
-        SUM(te.hours_worked) as total_hours,
+        ROUND(COALESCE(SUM(te.billable_minutes), SUM(te.duration_minutes), 0)::numeric / 60, 2) as total_hours,
         cr.base_hourly_rate,
         SUM(pli.gross_amount) as total_earned,
         COUNT(DISTINCT s.id) as active_schedules,
@@ -1893,7 +1924,7 @@ app.get('/api/reports/client-summary', verifyToken, requireAdmin, async (req, re
         SUM(CASE WHEN i.payment_status = 'paid' THEN i.total ELSE 0 END) as amount_paid,
         SUM(CASE WHEN i.payment_status = 'pending' THEN i.total ELSE 0 END) as amount_pending,
         COUNT(DISTINCT te.caregiver_id) as unique_caregivers,
-        SUM(te.hours_worked) as total_hours_worked
+        ROUND(COALESCE(SUM(te.billable_minutes), SUM(te.duration_minutes), 0)::numeric / 60, 2) as total_hours_worked
        FROM clients c
        LEFT JOIN invoices i ON c.id = i.client_id
        LEFT JOIN schedules s ON c.id = s.client_id AND s.is_active = true
@@ -1982,7 +2013,7 @@ app.get('/api/reports/dashboard', verifyToken, requireAdmin, async (req, res) =>
         (SELECT COUNT(*) FROM schedules WHERE is_active = true) as active_schedules,
         COALESCE((SELECT AVG(NULLIF((billing_period_end::date - billing_period_start::date), 0)) FROM invoices), 0) as avg_billing_period_days,
         COALESCE((SELECT SUM(total) FROM invoices WHERE payment_status = 'paid'), 0) - COALESCE((SELECT SUM(net_pay) FROM payroll WHERE status = 'paid'), 0) - COALESCE((SELECT SUM(amount) FROM expenses), 0) as net_profit,
-        COALESCE((SELECT SUM(CAST(hours_worked AS DECIMAL)) FROM time_entries), 0) as total_hours,
+        COALESCE((SELECT ROUND(SUM(duration_minutes)::numeric / 60, 2) FROM time_entries), 0) as total_hours,
         (SELECT COUNT(*) FROM schedules WHERE status = 'completed') as completed_shifts,
         COALESCE((SELECT AVG(CAST(rating AS DECIMAL)) FROM performance_reviews WHERE overall_assessment = 'excellent'), 0) as avg_satisfaction
       `
@@ -3237,18 +3268,7 @@ app.get('/api/compliance/summary', verifyToken, requireAdmin, async (req, res) =
 });
 
 // ---- REFERRAL SOURCES ----
-
-// GET /api/referral-sources - Get all referral sources
-app.get('/api/referral-sources', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT * FROM referral_sources ORDER BY name ASC`
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// NOTE: GET /api/referral-sources is defined earlier with JOIN + is_active filter — this section handles mutations only
 
 // POST /api/referral-sources - Create referral source
 app.post('/api/referral-sources', verifyToken, requireAdmin, async (req, res) => {
@@ -3264,7 +3284,7 @@ app.post('/api/referral-sources', verifyToken, requireAdmin, async (req, res) =>
       `INSERT INTO referral_sources (id, name, type, contact_name, email, phone, address, city, state, zip, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [sourceId, name, type, contactName || null, email || null, phone || null, address || null, city || null, state || 'WI', zip || null, req.user.id]
+      [sourceId, name, type, contactName || null, email || null, phone || null, address || null, city || null, state || process.env.AGENCY_STATE || null, zip || null, req.user.id]
     );
 
     await auditLog(req.user.id, 'CREATE', 'referral_sources', sourceId, null, result.rows[0]);
@@ -3680,7 +3700,7 @@ app.post('/api/prospects', verifyToken, async (req, res) => {
     const result = await db.query(
       `INSERT INTO prospects (first_name, last_name, phone, email, address, city, state, notes, source)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [firstName, lastName, phone || null, email || null, address || null, city || null, state || 'WI', notes || null, source || null]
+      [firstName, lastName, phone || null, email || null, address || null, city || null, state || process.env.AGENCY_STATE || null, notes || null, source || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -3953,10 +3973,13 @@ app.get('/health', (req, res) => {
 });
 // ---- NEW ADMIN FEATURES ----
 app.use('/api/reports', verifyToken, require('./routes/reports'));
-app.use('/api/payroll', verifyToken, require('./routes/payroll'));
+app.use('/api/payroll', verifyToken, require('./routes/payrollRoutes'));
 app.use('/api/audit-logs', verifyToken, require('./routes/auditLogs'));
 app.use('/api/users', verifyToken, require('./routes/users'));
 app.use('/api/claims', verifyToken, require('./routes/claimsRoutes'));
+app.use('/api/stripe', require('./routes/stripeRoutes')); // Stripe has its own webhook signature verification
+app.use('/api/applications', verifyToken, require('./routes/applicationsRoutes'));
+app.use('/api/schedules', verifyToken, require('./routes/schedulesRoutes'));
 app.use('/api/sms', verifyToken, require('./routes/smsRoutes'));
 app.use('/api/open-shifts', verifyToken, require('./routes/openShiftsRoutes'));
 app.use('/api/medications', verifyToken, require('./routes/medicationsRoutes'));
@@ -5086,9 +5109,26 @@ app.get('/api/scheduling/coverage-overview', verifyToken, requireAdmin, async (r
   }
 });
 
+// ============ GLOBAL ERROR HANDLER ============
+// Catches any unhandled errors from routes — never leaks stack traces to clients
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  // Log full error server-side
+  console.error(`[ERROR] ${req.method} ${req.path}`, {
+    status,
+    message: err.message,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+  });
+  // Return generic message to client
+  res.status(status).json({
+    error: status < 500 ? err.message : 'An unexpected error occurred. Please try again.',
+  });
+});
+
 // Start server
+const agencyName = process.env.AGENCY_NAME || 'HomeCare CRM';
 app.listen(port, () => {
-  console.log(`🚀 Chippewa Valley Home Care API running on port ${port}`);
-  console.log(`📊 Admin Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+  console.log(`🚀 ${agencyName} API running on port ${port}`);
+  console.log(`📊 Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
 });
 

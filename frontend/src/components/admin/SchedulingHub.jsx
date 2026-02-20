@@ -1,9 +1,10 @@
-import { confirm } from '../ConfirmModal';
 // src/components/admin/SchedulingHub.jsx
 // Unified scheduling hub - consolidates all scheduling features into one page
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import AutoFillButton from './AutoFillButton';
+import DragDropScheduler from './DragDropScheduler';
+import { confirm } from '../ConfirmModal';
 
 function getWeekStart(date) {
   const d = new Date(date);
@@ -14,7 +15,7 @@ function getWeekStart(date) {
 
 const SchedulingHub = ({ token }) => {
   // ── Tab state ──
-  const [activeTab, setActiveTab] = useState('week');
+  const [activeTab, setActiveTab] = useState('dragdrop');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   // ── Shared data (loaded once, used by many tabs) ──
@@ -741,6 +742,7 @@ const SchedulingHub = ({ token }) => {
   if (loading) return <div className="loading"><div className="spinner"></div></div>;
 
   const tabs = [
+    { id: 'dragdrop', label: '🖱️ Drag & Drop', mLabel: '🖱️' },
     { id: 'week', label: '📅 Week View', mLabel: '📅' },
     { id: 'calendar', label: '📆 Calendar', mLabel: '📆' },
     { id: 'create', label: '➕ Create', mLabel: '➕' },
@@ -781,6 +783,19 @@ const SchedulingHub = ({ token }) => {
           </button>
         ))}
       </div>
+
+      {/* ══════════════════════════════════════════ */}
+      {/* DRAG & DROP SCHEDULER TAB                */}
+      {/* ══════════════════════════════════════════ */}
+      {activeTab === 'dragdrop' && (
+        <DragDropScheduler
+          token={token}
+          onScheduleChange={() => {
+            // Refresh other views if they're loaded
+            if (activeTab === 'week') loadWeekView();
+          }}
+        />
+      )}
 
       {/* ══════════════════════════════════════════ */}
       {/* WEEK VIEW TAB */}

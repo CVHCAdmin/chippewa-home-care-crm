@@ -1,45 +1,41 @@
 // src/services/encryptionService.js - AES-256-GCM encryption for PII fields
 const crypto = require('crypto');
 
-const ALGORITHM = 'aes-256-gcm';
+const ALGORITHM  = 'aes-256-gcm';
 const KEY_LENGTH = 32; // 256 bits
-const IV_LENGTH = 16;  // 128 bits
-const TAG_LENGTH = 16;
+const IV_LENGTH  = 16; // 128 bits
 
-// Derive a 32-byte key from the env variable
+// Configurable salt — override via ENCRYPTION_SALT env var per tenant
+const SALT = process.env.ENCRYPTION_SALT || 'homecare-crm-encryption-salt-v1';
+
+let _cachedKey = null;
 const getKey = () => {
+  if (_cachedKey) return _cachedKey;
+
   const envKey = process.env.ENCRYPTION_KEY;
   if (!envKey) {
-    // Development fallback — NEVER use in production
-    console.warn('[ENCRYPTION] No ENCRYPTION_KEY set — using insecure dev key. Set ENCRYPTION_KEY in production!');
-    return crypto.scryptSync('dev-fallback-key-change-in-prod', 'cvhc-salt', KEY_LENGTH);
+    throw new Error(
+      'ENCRYPTION_KEY environment variable is required. ' +
+      'Generate with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'
+    );
   }
-  // If it's a hex string, use it directly; otherwise derive
+
   if (envKey.length === 64 && /^[0-9a-f]+$/i.test(envKey)) {
-    return Buffer.from(envKey, 'hex');
+    _cachedKey = Buffer.from(envKey, 'hex');
+  } else {
+    _cachedKey = crypto.scryptSync(envKey, SALT, KEY_LENGTH);
   }
-  return crypto.scryptSync(envKey, 'cvhc-crm-salt', KEY_LENGTH);
+  return _cachedKey;
 };
 
-/**
- * Encrypt a string value for storage
- * Returns a base64-encoded string: iv:authTag:ciphertext
- */
 const encrypt = (plaintext) => {
-  if (!plaintext) return null;
+  if (plaintext === null || plaintext === undefined) return null;
   try {
-    const key = getKey();
-    const iv = crypto.randomBytes(IV_LENGTH);
+    const key    = getKey();
+    const iv     = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-    
-    const encrypted = Buffer.concat([
-      cipher.update(String(plaintext), 'utf8'),
-      cipher.final()
-    ]);
-    
+    const encrypted = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
     const authTag = cipher.getAuthTag();
-    
-    // Store as: base64(iv):base64(authTag):base64(ciphertext)
     return [iv.toString('base64'), authTag.toString('base64'), encrypted.toString('base64')].join(':');
   } catch (error) {
     console.error('[ENCRYPTION] Encrypt error:', error.message);
@@ -47,52 +43,26 @@ const encrypt = (plaintext) => {
   }
 };
 
-/**
- * Decrypt an encrypted string value
- */
 const decrypt = (encryptedValue) => {
   if (!encryptedValue) return null;
   try {
-    const key = getKey();
-    const parts = encryptedValue.split(':');
+    const key    = getKey();
+    const parts  = encryptedValue.split(':');
     if (parts.length !== 3) throw new Error('Invalid encrypted format');
-    
-    const iv = Buffer.from(parts[0], 'base64');
-    const authTag = Buffer.from(parts[1], 'base64');
+    const iv         = Buffer.from(parts[0], 'base64');
+    const authTag    = Buffer.from(parts[1], 'base64');
     const ciphertext = Buffer.from(parts[2], 'base64');
-    
     const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
     decipher.setAuthTag(authTag);
-    
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    return decrypted.toString('utf8');
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
   } catch (error) {
     console.error('[ENCRYPTION] Decrypt error:', error.message);
-    return null; // Don't throw — return null on failure
+    return null;
   }
 };
 
-/**
- * Mask a SSN for display — show only last 4 digits
- */
-const maskSSN = (ssn) => {
-  if (!ssn) return null;
-  const clean = ssn.replace(/\D/g, '');
-  if (clean.length < 4) return '***-**-' + clean;
-  return `***-**-${clean.slice(-4)}`;
-};
-
-/**
- * Validate SSN format (XXX-XX-XXXX or XXXXXXXXX)
- */
-const validateSSN = (ssn) => {
-  const clean = ssn.replace(/\D/g, '');
-  return clean.length === 9;
-};
-
-/**
- * Format SSN for storage (remove dashes)
- */
-const normalizeSSN = (ssn) => ssn.replace(/\D/g, '');
+const maskSSN     = (ssn) => { if (!ssn) return null; const c = ssn.replace(/\D/g,''); return `***-**-${c.slice(-4)}`; };
+const validateSSN = (ssn) => ssn.replace(/\D/g,'').length === 9;
+const normalizeSSN = (ssn) => ssn.replace(/\D/g,'');
 
 module.exports = { encrypt, decrypt, maskSSN, validateSSN, normalizeSSN };

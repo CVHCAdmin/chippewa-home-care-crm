@@ -8,12 +8,15 @@ import PaymentPage, { PaymentSuccess } from './components/PaymentPage';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
 import { setSessionExpiredCallback } from './config';
+import { OfflineBanner } from './hooks/useOfflineSync.jsx';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const App = () => {
   return (
     <BrowserRouter>
       <ToastContainer />
       <ConfirmModal />
+      <OfflineBanner />
       <Routes>
         {/* Public payment routes - no auth required */}
         <Route path="/pay/:invoiceId" element={<PaymentPage />} />
@@ -80,9 +83,9 @@ const MainApp = () => {
 
   // Route based on user role
   if (user.role === 'admin') {
-    return <AdminDashboard user={user} token={token} onLogout={handleLogout} />;
+    return <ErrorBoundary><AdminDashboard user={user} token={token} onLogout={handleLogout} /></ErrorBoundary>;
   } else {
-    return <CaregiverDashboard user={user} token={token} onLogout={handleLogout} />;
+    return <ErrorBoundary><CaregiverDashboard user={user} token={token} onLogout={handleLogout} /></ErrorBoundary>;
   }
 };
 
