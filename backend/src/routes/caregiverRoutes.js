@@ -109,12 +109,13 @@ router.get('/:id/summary', verifyToken, requireAdmin, async (req, res) => {
         c.first_name as client_first, c.last_name as client_last, c.address as client_address
         FROM time_entries te JOIN clients c ON te.client_id = c.id
         WHERE te.caregiver_id = $1 ORDER BY te.start_time DESC LIMIT 10`, [caregiverId]),
-      safeQuery(`SELECT s.id, s.caregiver_id, s.client_id, s.date, s.start_time, s.end_time, s.schedule_type, s.notes, s.frequency,
+      safeQuery(`SELECT s.id, s.caregiver_id, s.client_id, s.date, s.start_time, s.end_time, s.schedule_type, s.notes, s.frequency, s.day_of_week,
         c.first_name as client_first, c.last_name as client_last, c.address as client_address, c.city as client_city,
         ROUND(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600.0::numeric, 2) as shift_hours
         FROM schedules s LEFT JOIN clients c ON s.client_id = c.id
-        WHERE s.caregiver_id = $1 AND s.date >= CURRENT_DATE AND s.is_active = true
-        ORDER BY s.date, s.start_time LIMIT 14`, [caregiverId]),
+        WHERE s.caregiver_id = $1 AND s.is_active = true
+          AND (s.date >= CURRENT_DATE OR s.day_of_week IS NOT NULL)
+        ORDER BY s.day_of_week NULLS LAST, s.date, s.start_time LIMIT 30`, [caregiverId]),
       db.query(`SELECT default_pay_rate as rate, hire_date as effective_date, 'Current rate' as notes FROM users WHERE id = $1`, [caregiverId]).catch(() => ({ rows: [] })),
     ]);
 

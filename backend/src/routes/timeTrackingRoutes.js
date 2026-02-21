@@ -240,4 +240,47 @@ router.get('/:id/gps', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+
+// GET /api/time-entries/caregiver-gps/:caregiverId
+// Returns recent shifts with clock-in/out GPS + full GPS trail per shift
+router.get('/caregiver-gps/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId } = req.params;
+    const limit = parseInt(req.query.limit) || 20;
+
+    // Get recent time entries with clock in/out locations
+    const entries = await db.query(
+      `SELECT te.id, te.start_time, te.end_time, te.is_complete,
+              te.clock_in_location, te.clock_out_location,
+              ROUND(EXTRACT(EPOCH FROM (COALESCE(te.end_time, NOW()) - te.start_time))/3600.0::numeric, 2) as hours,
+              c.first_name as client_first, c.last_name as client_last,
+              c.address as client_address, c.city as client_city,
+              c.address as client_address
+       FROM time_entries te
+       LEFT JOIN clients c ON te.client_id = c.id
+       WHERE te.caregiver_id = $1
+       ORDER BY te.start_time DESC
+       LIMIT $2`,
+      [caregiverId, limit]
+    );
+
+    // For each entry, fetch GPS trail
+    const results = await Promise.all(entries.rows.map(async (entry) => {
+      const gps = await db.query(
+        `SELECT latitude, longitude, accuracy, speed, timestamp
+         FROM gps_tracking
+         WHERE time_entry_id = $1
+         ORDER BY timestamp ASC`,
+        [entry.id]
+      );
+      return { ...entry, gpsTrail: gps.rows };
+    }));
+
+    res.json(results);
+  } catch (err) {
+    console.error('caregiver-gps error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
