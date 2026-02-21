@@ -13,22 +13,17 @@ router.get('/summary', verifyToken, requireAdmin, async (req, res) => {
       db.query("SELECT COUNT(*) as count FROM users WHERE role = 'caregiver' AND is_active = true"),
       db.query("SELECT COUNT(*) as count, SUM(total) as amount FROM invoices WHERE payment_status = 'pending'"),
       db.query(`SELECT SUM(total) as amount FROM invoices WHERE billing_period_start >= date_trunc('month', CURRENT_DATE) AND payment_status = 'paid'`),
-      // Caregivers currently clocked in (have an open time entry with no end_time)
-      db.query(`SELECT COUNT(DISTINCT caregiver_id) as count FROM time_entries WHERE end_time IS NULL AND clock_in_time >= CURRENT_DATE`),
-      // Shifts scheduled for today (one-time or recurring on today's day of week)
-      db.query(`SELECT COUNT(*) as count FROM schedules WHERE 
-        (date = CURRENT_DATE) OR 
-        (day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::integer AND is_active = true AND
-         (effective_date IS NULL OR effective_date <= CURRENT_DATE))`),
-      // Shifts remaining today (scheduled but not yet clocked in)
-      db.query(`SELECT COUNT(*) as count FROM schedules s WHERE 
-        ((s.date = CURRENT_DATE) OR 
-         (s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::integer AND s.is_active = true AND
-          (s.effective_date IS NULL OR s.effective_date <= CURRENT_DATE)))
-        AND NOT EXISTS (
-          SELECT 1 FROM time_entries te WHERE te.caregiver_id = s.caregiver_id 
-          AND DATE(te.clock_in_time) = CURRENT_DATE AND te.end_time IS NULL
-        )`),
+      // Caregivers currently clocked in (open time entry today)
+      db.query(`SELECT COUNT(DISTINCT caregiver_id) as count FROM time_entries WHERE end_time IS NULL AND DATE(clock_in_time) = CURRENT_DATE`),
+      // Shifts today
+      db.query(`SELECT COUNT(*) as count FROM schedules WHERE is_active = true AND
+        (date = CURRENT_DATE OR 
+         (day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::integer AND
+          (effective_date IS NULL OR effective_date <= CURRENT_DATE)))`),
+      // Remaining shifts today (not yet clocked in)
+      db.query(`SELECT COUNT(*) as count FROM schedules s WHERE s.is_active = true AND
+        (s.date = CURRENT_DATE OR (s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::integer AND (s.effective_date IS NULL OR s.effective_date <= CURRENT_DATE)))
+        AND NOT EXISTS (SELECT 1 FROM time_entries te WHERE te.caregiver_id = s.caregiver_id AND DATE(te.clock_in_time) = CURRENT_DATE AND te.end_time IS NULL)`),
     ]);
     res.json({
       totalClients: parseInt(totalClients.rows[0].count),
