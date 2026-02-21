@@ -1,14 +1,5 @@
 // src/config.js - API utilities with token expiry handling
-// API URL resolution:
-// 1. VITE_API_URL env var (set in Netlify dashboard)
-// 2. Dev server
-// 3. __API_URL__ — baked in at build time by vite.config.js define
-// eslint-disable-next-line no-undef
-export const API_BASE_URL = import.meta.env.VITE_API_URL || (
-  import.meta.env.DEV
-    ? 'http://localhost:5000'
-    : (typeof __API_URL__ !== 'undefined' ? __API_URL__ : 'https://chippewa-home-care-api.onrender.com')
-);
+export const API_BASE_URL = 'https://chippewa-home-care-api.onrender.com';
 
 // Global logout callback — set by App on mount
 let _onSessionExpired = null;
