@@ -245,12 +245,23 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
         <div style={{ fontWeight: 800, marginBottom: '0.75rem', fontSize: '0.9rem' }}>📅 Upcoming Schedule ({schedule?.length || 0} shifts)</div>
         {schedule?.length > 0 ? (
           <div style={{ display: 'grid', gap: '0.4rem' }}>
-            {schedule.map(sc => (
-              <div key={sc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 0.75rem', background: '#F0FDFB', borderRadius: 8, border: '1px solid #A7F3D0' }}>
-                <div style={{ fontWeight: 700, fontSize: '0.82rem', minWidth: 80, color: '#065F46' }}>{fmtDate(sc.date)}</div>
-                <div style={{ fontSize: '0.82rem', color: '#374151' }}>{sc.start_time?.slice(0,5)} – {sc.end_time?.slice(0,5)}</div>
-                <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>{sc.client_first} {sc.client_last}</div>
-                {sc.care_type_name && <span style={{ fontSize: '0.72rem', color: '#6B7280' }}>{sc.care_type_name}</span>}
+            {[...schedule].sort((a,b) => {
+              // Sort recurring (day_of_week) first by day, then one-time by date
+              if (a.day_of_week != null && b.day_of_week != null) return a.day_of_week - b.day_of_week;
+              if (a.day_of_week != null) return -1;
+              if (b.day_of_week != null) return 1;
+              return new Date(a.date) - new Date(b.date);
+            }).map(sc => (
+              <div key={sc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 0.75rem', background: sc.day_of_week != null ? '#EFF6FF' : '#F0FDFB', borderRadius: 8, border: `1px solid ${sc.day_of_week != null ? '#BFDBFE' : '#A7F3D0'}` }}>
+                <div style={{ fontWeight: 700, fontSize: '0.82rem', minWidth: 80, color: sc.day_of_week != null ? '#1D4ED8' : '#065F46' }}>
+                  {sc.day_of_week != null
+                    ? <span style={{padding:'0.15rem 0.5rem', background:'#DBEAFE', borderRadius:5}}>{DAYS[sc.day_of_week]} (weekly)</span>
+                    : fmtDate(sc.date)
+                  }
+                </div>
+                <div style={{ fontSize: '0.82rem', color: '#374151', fontWeight:600 }}>{sc.start_time?.slice(0,5)} – {sc.end_time?.slice(0,5)}</div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700 }}>{sc.client_first} {sc.client_last}</div>
+                {sc.shift_hours && <span style={{ fontSize: '0.72rem', color: '#059669', marginLeft:'auto' }}>{sc.shift_hours}h</span>}
               </div>
             ))}
           </div>
