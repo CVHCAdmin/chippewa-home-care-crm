@@ -17,7 +17,9 @@ export const platform = Capacitor.getPlatform(); // 'ios' | 'android' | 'web'
 // ── useNetwork ────────────────────────────────────────────────────────────────
 // Returns { online, connectionType } and listens for changes
 export function useNetwork() {
-  const [status, setStatus] = useState({ online: navigator.onLine, connectionType: 'unknown' });
+  // Default to true — assume online until proven otherwise
+  // navigator.onLine is unreliable in Capacitor Android WebView
+  const [status, setStatus] = useState({ online: true, connectionType: 'unknown' });
 
   useEffect(() => {
     let cleanup = () => {};
