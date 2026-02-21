@@ -156,6 +156,8 @@ app.use('/api/authorizations',    verifyToken, require('./routes/authorizationRo
 app.use('/api/failsafe',          verifyToken, require('./routes/failsafeRoutes'));
 app.use('/api/edi',               verifyToken, require('./routes/ediRoutes'));
 app.use('/api/gusto',             verifyToken, require('./routes/gustoRoutes'));
+app.use('/api/optimizer',         verifyToken, require('./routes/optimizerRoutes'));
+app.use('/api/roster-optimizer',  verifyToken, require('./routes/rosterOptimizerRoutes'));
 app.use('/api/push',              verifyToken, require('./routes/pushNotificationRoutes').router);
 
 // ── EXPLICIT ROUTES (Express path-boundary workarounds) ──────────────────────
