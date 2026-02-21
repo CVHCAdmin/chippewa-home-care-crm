@@ -41,6 +41,8 @@ app.use(cors({
       process.env.FRONTEND_URL,
       'http://localhost:3000',
       'http://localhost:5173',
+      'https://localhost',      // Capacitor Android APK origin
+      'capacitor://localhost',   // Capacitor iOS origin
     ].filter(Boolean);
 
     const extraOrigins = (process.env.ALLOWED_ORIGINS || '')
