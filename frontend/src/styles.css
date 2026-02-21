@@ -1084,7 +1084,8 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
-    height: 64px;
+    height: calc(64px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     background: #fff;
     border-top: 1px solid #E5E7EB;
     z-index: 1100;
@@ -1225,7 +1226,7 @@ body {
 
   /* ── Padding for bottom nav ── */
   .main-content {
-    padding-bottom: 72px !important;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
   /* ── Header improvements ── */
