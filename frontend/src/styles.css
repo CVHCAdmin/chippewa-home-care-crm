@@ -1070,3 +1070,270 @@ body {
     .stat-value-large { font-size: 1.6rem; }
     .modal-header h2 { font-size: 1.1rem; }
 }
+
+/* ═══════════════════════════════════════════════════════
+   MOBILE REDESIGN — Bottom Nav + Polish
+   ═══════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+
+  /* ── Bottom Navigation Bar ── */
+  .mobile-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 64px;
+    background: #fff;
+    border-top: 1px solid #E5E7EB;
+    z-index: 1100;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.08);
+  }
+
+  .mobile-bottom-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    padding: 0.5rem 0;
+    color: #9CA3AF;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    transition: color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    position: relative;
+  }
+
+  .mobile-bottom-nav-item.active {
+    color: #2ABBA7;
+  }
+
+  .mobile-bottom-nav-item.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 32px;
+    height: 3px;
+    background: #2ABBA7;
+    border-radius: 0 0 3px 3px;
+  }
+
+  .mobile-bottom-nav-icon {
+    font-size: 1.3rem;
+    line-height: 1;
+  }
+
+  /* ── More Menu Drawer ── */
+  .mobile-more-drawer {
+    position: fixed;
+    bottom: 64px;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border-top: 1px solid #E5E7EB;
+    z-index: 1099;
+    max-height: 60vh;
+    overflow-y: auto;
+    transform: translateY(100%);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 -8px 32px rgba(0,0,0,0.12);
+    border-radius: 16px 16px 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .mobile-more-drawer.open {
+    transform: translateY(0);
+  }
+
+  .mobile-more-drawer-handle {
+    width: 36px;
+    height: 4px;
+    background: #E5E7EB;
+    border-radius: 2px;
+    margin: 12px auto 8px;
+  }
+
+  .mobile-more-drawer-section {
+    padding: 0.5rem 1rem;
+  }
+
+  .mobile-more-drawer-section-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #9CA3AF;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.5rem 0.25rem 0.35rem;
+  }
+
+  .mobile-more-drawer-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 0.5rem;
+    border-radius: 8px;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.95rem;
+    color: #374151;
+    font-weight: 500;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.1s;
+  }
+
+  .mobile-more-drawer-item:active,
+  .mobile-more-drawer-item.active {
+    background: #F0FDFB;
+    color: #2ABBA7;
+  }
+
+  .mobile-more-drawer-item-icon {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #F3F4F6;
+    border-radius: 8px;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .mobile-more-drawer-item.active .mobile-more-drawer-item-icon {
+    background: #CCFBF1;
+  }
+
+  .mobile-more-drawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 1098;
+  }
+
+  /* ── Padding for bottom nav ── */
+  .main-content {
+    padding-bottom: 72px !important;
+  }
+
+  /* ── Header improvements ── */
+  .header {
+    background: #fff !important;
+    border-bottom: 1px solid #E5E7EB;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    padding: 0.6rem 1rem !important;
+    min-height: 56px;
+  }
+
+  .header h1 {
+    font-size: 1rem !important;
+    font-weight: 700;
+    color: #111827;
+  }
+
+  /* Hide hamburger — replaced by bottom nav */
+  .hamburger-btn {
+    display: none !important;
+  }
+
+  /* ── Card improvements ── */
+  .card {
+    border-radius: 12px !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07) !important;
+    border: 1px solid #F3F4F6;
+  }
+
+  /* ── Stat cards ── */
+  .stat-card {
+    border-radius: 12px !important;
+    padding: 1rem !important;
+  }
+
+  .stat-card .value,
+  .stat-value-large {
+    font-size: 1.75rem !important;
+    font-weight: 800 !important;
+  }
+
+  /* ── Buttons — larger touch targets ── */
+  .btn {
+    min-height: 44px;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, #2ABBA7, #1E9A89) !important;
+    box-shadow: 0 2px 8px rgba(42, 187, 167, 0.3) !important;
+  }
+
+  /* ── Form inputs ── */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="tel"],
+  input[type="date"],
+  input[type="time"],
+  input[type="number"],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px !important; /* prevents iOS zoom */
+    border-radius: 10px !important;
+  }
+
+  /* ── Table improvements ── */
+  .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+    border: 1px solid #E5E7EB;
+  }
+
+  /* ── Login page ── */
+  .login-container {
+    padding: 1.5rem;
+    align-items: flex-start;
+    padding-top: 4rem;
+  }
+
+  .login-card {
+    border-radius: 16px !important;
+    padding: 2rem 1.5rem !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.12) !important;
+  }
+
+  /* ── Page header ── */
+  .page-header h2 {
+    font-size: 1.25rem !important;
+    font-weight: 800;
+  }
+
+  /* ── Container ── */
+  .container {
+    padding: 0.875rem !important;
+  }
+
+  /* ── Modal full-screen on mobile ── */
+  .modal-content {
+    border-radius: 20px 20px 0 0 !important;
+    max-height: 90vh !important;
+  }
+
+  .modal-header {
+    padding: 1rem 1.25rem 0.875rem !important;
+    border-radius: 20px 20px 0 0;
+  }
+}

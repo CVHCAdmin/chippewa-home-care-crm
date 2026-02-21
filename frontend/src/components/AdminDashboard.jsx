@@ -118,6 +118,8 @@ const AdminDashboard = ({ user, token, onLogout }) => {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 768);
+  const [moreDrawerOpen, setMoreDrawerOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [collapsedSections, setCollapsedSections] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -443,6 +445,63 @@ const AdminDashboard = ({ user, token, onLogout }) => {
           ) : renderPage()}
         </div>
       </div>
+
+      {/* ── MOBILE BOTTOM NAVIGATION ── */}
+      {window.innerWidth <= 768 && (
+        <>
+          {/* Overlay for more drawer */}
+          {moreDrawerOpen && (
+            <div className="mobile-more-drawer-overlay" onClick={() => setMoreDrawerOpen(false)} />
+          )}
+
+          {/* More Drawer */}
+          <div className={`mobile-more-drawer ${moreDrawerOpen ? 'open' : ''}`}>
+            <div className="mobile-more-drawer-handle" />
+            {NAV_SECTIONS.map(section => (
+              <div key={section.id} className="mobile-more-drawer-section">
+                <div className="mobile-more-drawer-section-title">{section.icon} {section.label}</div>
+                {section.items.map(item => (
+                  <button
+                    key={item.id}
+                    className={`mobile-more-drawer-item ${currentPage === item.id ? 'active' : ''}`}
+                    onClick={() => { handlePageClick(item.id); setMoreDrawerOpen(false); }}
+                  >
+                    <span className="mobile-more-drawer-item-icon">{item.icon}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+            <div style={{ height: '1rem' }} />
+          </div>
+
+          {/* Bottom Nav Bar */}
+          <nav className="mobile-bottom-nav">
+            {[
+              { id: 'dashboard', icon: '📊', label: 'Home' },
+              { id: 'clients', icon: '👤', label: 'Clients' },
+              { id: 'scheduling', icon: '📅', label: 'Schedule' },
+              { id: 'caregivers', icon: '👥', label: 'Staff' },
+            ].map(item => (
+              <button
+                key={item.id}
+                className={`mobile-bottom-nav-item ${currentPage === item.id ? 'active' : ''}`}
+                onClick={() => { handlePageClick(item.id); setMoreDrawerOpen(false); }}
+              >
+                <span className="mobile-bottom-nav-icon">{item.icon}</span>
+                {item.label}
+              </button>
+            ))}
+            <button
+              className={`mobile-bottom-nav-item ${moreDrawerOpen ? 'active' : ''}`}
+              onClick={() => setMoreDrawerOpen(!moreDrawerOpen)}
+            >
+              <span className="mobile-bottom-nav-icon">☰</span>
+              More
+            </button>
+          </nav>
+        </>
+      )}
     </div>
   );
 };
