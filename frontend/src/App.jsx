@@ -8,7 +8,7 @@ import PaymentPage, { PaymentSuccess } from './components/PaymentPage';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
 import { setSessionExpiredCallback } from './config';
-import OfflineBanner from './components/OfflineBanner';
+
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 const App = () => {
@@ -16,7 +16,7 @@ const App = () => {
     <BrowserRouter>
       <ToastContainer />
       <ConfirmModal />
-      <OfflineBanner />
+      
       <Routes>
         {/* Public payment routes - no auth required */}
         <Route path="/pay/:invoiceId" element={<PaymentPage />} />
