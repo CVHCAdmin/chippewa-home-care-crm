@@ -1534,7 +1534,7 @@ const SchedulingHub = ({ token }) => {
                       <div key={cg.id} style={{ padding: '0.6rem', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontWeight: '600', fontSize: '0.88rem' }}>{cg.name}</div>
-                          <div style={{ fontSize: '0.78rem', color: '#666' }}>{parseFloat(cg.scheduledHours || 0).toFixed(1)}h / {cg.maxHours}h</div>
+                          <div style={{ fontSize: '0.78rem', color: '#666' }}>{parseFloat(cg.scheduledHours || 0).toFixed(2)}h / {cg.maxHours}h</div>
                         </div>
                         <div style={{ width: '90px' }}>
                           <div style={{ height: '7px', background: '#E5E7EB', borderRadius: '4px', overflow: 'hidden' }}>

@@ -129,7 +129,7 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
                   <td>
                     {cg.avg_satisfaction ? (
                       <>
-                        <span className="star-icon">★</span> {parseFloat(cg.avg_satisfaction).toFixed(1)}
+                        <span className="star-icon">★</span> {parseFloat(cg.avg_satisfaction).toFixed(2)}
                       </>
                     ) : (
                       'N/A'

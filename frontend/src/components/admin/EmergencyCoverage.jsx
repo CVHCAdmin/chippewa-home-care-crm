@@ -240,7 +240,7 @@ const EmergencyCoverage = ({ token }) => {
                     </div>
                     <div style={{ fontSize: '0.82rem', color: '#6B7280', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                       {cg.phone && <span>📞 {cg.phone}</span>}
-                      <span>📊 {parseFloat(cg.scheduled_hours_this_week || 0).toFixed(1)}h this week</span>
+                      <span>📊 {parseFloat(cg.scheduled_hours_this_week || 0).toFixed(2)}h this week</span>
                       {parseFloat(cg.avg_rating) > 0 && <span>⭐ {cg.avg_rating} avg rating</span>}
                       {cg.certifications?.length > 0 && <span>🎓 {cg.certifications.join(', ')}</span>}
                     </div>

@@ -5,7 +5,7 @@ import { API_BASE_URL } from '../../config';
 import { toast } from '../Toast';
 
 const fmt$ = (n) => n != null ? `$${parseFloat(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}` : '—';
-const fmtHrs = (n) => n != null ? `${parseFloat(n||0).toFixed(1)}h` : '—';
+const fmtHrs = (n) => n != null ? `${parseFloat(n||0).toFixed(2)}h` : '—';
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
 const fmtDateTime = (d) => d ? new Date(d).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
