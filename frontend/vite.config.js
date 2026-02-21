@@ -44,6 +44,8 @@ export default defineConfig({
     },
   },
   define: {
-    'process.env': {},
+    // Don't wipe process.env — it prevents import.meta.env from working
+    // Explicitly define the API URL so it's always baked into the build
+    '__API_URL__': JSON.stringify('https://chippewa-home-care-api.onrender.com'),
   },
 });
