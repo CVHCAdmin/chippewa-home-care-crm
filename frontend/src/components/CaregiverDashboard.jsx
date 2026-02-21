@@ -8,7 +8,7 @@ import MileageTracker from './MileageTracker';
 import ShiftMissReport from './caregiver/ShiftMissReport';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
-import { useGeolocation, useHaptics, useOfflineSync, isNative } from '../hooks/useNative';
+import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, isNative, platform } from '../hooks/useNative';
 import OfflineBanner from './OfflineBanner';
 
 const subscribeToPush = async (token) => {
@@ -50,6 +50,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const { position: location, error: locationError, getPosition } = useGeolocation({ watch: true });
   const { impact, notification: hapticNotify } = useHaptics();
   const { online, queueCount } = useOfflineSync();
+  const { start: startBgGeo } = useBackgroundGeolocation();
 
   // Self-service state
   const [openShifts, setOpenShifts] = useState([]);
@@ -80,6 +81,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     loadData();
     // GPS tracking handled by useGeolocation hook (watch: true)
     subscribeToPush(token);
+    // Start background geolocation on Android so geofence works when screen is off
+    startBgGeo({
+      notificationTitle: 'CVHC HomeCare',
+      notificationText: 'Monitoring location for auto clock-in',
+      onLocation: (loc) => {
+        // Background location updates feed into the geofence check
+        // The geofence polling useEffect will pick up the latest position
+      }
+    });
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -1030,7 +1040,18 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       <div className="main-content">
         <div className="header">
           <div><h1>Chippewa Valley Home Care</h1><p>Caregiver Portal</p></div>
-          <button className="hamburger-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>Menu</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <button className="hamburger-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>Menu</button>
+            <button
+              onClick={onLogout}
+              style={{
+                padding: '0.4rem 0.85rem', borderRadius: '8px', border: 'none',
+                background: '#FEE2E2', color: '#DC2626', fontWeight: '700',
+                fontSize: '0.82rem', cursor: 'pointer', whiteSpace: 'nowrap'
+              }}>
+              ⏻ Logout
+            </button>
+          </div>
         </div>
         <div className="container">
           {currentPage === 'home' && renderHomePage()}
