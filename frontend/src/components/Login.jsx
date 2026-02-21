@@ -17,14 +17,15 @@ const Login = ({ onLogin }) => {
       const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password })
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error('Invalid credentials');
+        throw new Error(data.error || `Error ${response.status}`);
       }
 
-      const data = await response.json();
       onLogin(data.token, data.user);
     } catch (err) {
       setError(err.message);
