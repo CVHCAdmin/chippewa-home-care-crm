@@ -167,7 +167,7 @@ const CaregiverHistory = ({ caregiverId, caregiverName, token, onBack }) => {
       const clients = new Set(list.map(e => e.client_id).filter(Boolean));
       setStats({
         totalShifts: list.length,
-        totalHours: (totalMins / 60).toFixed(1),
+        totalHours: (totalMins / 60).toFixed(2),
         avgDuration: list.length ? Math.round(totalMins / list.length) : 0,
         clients,
       });

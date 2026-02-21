@@ -981,8 +981,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                       <td>{auth.authorization_number}</td>
                       <td>{auth.service_type}</td>
                       <td>{usage.authorized} {auth.unit_type}</td>
-                      <td>{usage.used.toFixed(1)} ({usage.percentage.toFixed(0)}%)</td>
-                      <td style={{ color: usage.remaining < 10 ? '#dc3545' : '#28a745', fontWeight: 'bold' }}>{usage.remaining.toFixed(1)}</td>
+                      <td>{usage.used.toFixed(2)} ({usage.percentage.toFixed(0)}%)</td>
+                      <td style={{ color: usage.remaining < 10 ? '#dc3545' : '#28a745', fontWeight: 'bold' }}>{usage.remaining.toFixed(2)}</td>
                       <td>{formatDate(auth.start_date)} - {formatDate(auth.end_date)}</td>
                       <td>{isExpired ? <span className="badge badge-danger">EXPIRED</span> : isLow ? <span className="badge badge-warning">LOW</span> : <span className="badge badge-success">ACTIVE</span>}</td>
                     </tr>

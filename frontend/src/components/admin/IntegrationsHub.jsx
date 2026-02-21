@@ -7,7 +7,7 @@ import { toast } from '../Toast';
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt$ = (n) => n != null ? `$${parseFloat(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}` : '—';
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
-const fmtNum = (n) => n != null ? parseFloat(n||0).toFixed(1) : '—';
+const fmtNum = (n) => n != null ? parseFloat(n||0).toFixed(2) : '—';
 
 const STATUS_COLORS = {
   accepted: ['#D1FAE5','#065F46'], submitted: ['#DBEAFE','#1E40AF'],

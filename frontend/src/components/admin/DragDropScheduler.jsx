@@ -49,6 +49,8 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   const [schedules, setSchedules]       = useState([]);
   const [loading, setLoading]           = useState(true);
   const [saving, setSaving]             = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [mobileDay, setMobileDay] = useState(new Date().getDay());
   const [toast, setToast]               = useState(null);
   const [newShift, setNewShift]         = useState(null);
   const [newShiftForm, setNewShiftForm] = useState({ clientId:'', startTime:'09:00', endTime:'13:00', notes:'' });
@@ -219,8 +221,77 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         <span style={{ fontSize:12, color:'#9CA3AF' }}>Click any cell to add a shift</span>
       </div>
 
-      {/* Grid */}
-      <div style={{ overflowX:'auto' }}>
+      {/* Mobile Day Picker */}
+      {isMobile && (
+        <div style={{ background:'#fff', borderBottom:'1px solid #E5E7EB', padding:'8px 12px', overflowX:'auto', display:'flex', gap:6 }}>
+          {weekDates.map((d, i) => (
+            <button key={i} onClick={() => setMobileDay(i)} style={{
+              flexShrink: 0,
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: 'none',
+              background: mobileDay === i ? '#2ABBA7' : i === todayIdx ? '#EFF6FF' : '#F3F4F6',
+              color: mobileDay === i ? '#fff' : i === todayIdx ? '#2563EB' : '#374151',
+              fontWeight: mobileDay === i ? 700 : 500,
+              fontSize: 13,
+              cursor: 'pointer',
+            }}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>{DAY_NAMES[i]}</div>
+              <div style={{ fontSize: 16, fontWeight: 800 }}>{d.getDate()}</div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Mobile Day View */}
+      {isMobile && (
+        <div style={{ padding: '0.75rem' }}>
+          {caregivers.length === 0 && (
+            <div style={{ textAlign:'center', padding:'40px 20px', color:'#9CA3AF' }}>No caregivers found.</div>
+          )}
+          {caregivers.map(cg => {
+            const shifts = getShiftsForCell(cg.id, mobileDay);
+            return (
+              <div key={cg.id} style={{ background:'#fff', borderRadius:12, border:'1px solid #E5E7EB', marginBottom:'0.75rem', overflow:'hidden' }}>
+                <div style={{ padding:'10px 14px', background:'#FAFAFA', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div>
+                    <div style={{ fontWeight:700, fontSize:14, color:'#111827' }}>{cg.first_name} {cg.last_name}</div>
+                    <div style={{ fontSize:11, color:'#6B7280' }}>{weeklyHours(cg.id).toFixed(2)}h this week</div>
+                  </div>
+                  <button onClick={() => handleCellClick(cg.id, mobileDay)} style={{
+                    padding:'6px 14px', borderRadius:8, border:'none',
+                    background:'#2ABBA7', color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer'
+                  }}>+ Shift</button>
+                </div>
+                {shifts.length === 0 ? (
+                  <div style={{ padding:'12px 14px', color:'#9CA3AF', fontSize:13 }}>No shifts</div>
+                ) : (
+                  shifts.map(s => {
+                    const cl = clientMap[s.client_id];
+                    const color = clientColor(s.client_id, clientMap);
+                    const durH = ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60).toFixed(2);
+                    return (
+                      <div key={s.id} onClick={() => setEditShift(s)} style={{
+                        padding:'10px 14px', borderLeft:`4px solid ${color}`,
+                        borderBottom:'1px solid #F9FAFB', cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center'
+                      }}>
+                        <div>
+                          <div style={{ fontWeight:600, fontSize:14 }}>{cl ? `${cl.first_name} ${cl.last_name}` : 'Unknown'}</div>
+                          <div style={{ fontSize:12, color:'#6B7280', marginTop:2 }}>{formatTime(s.start_time)} – {formatTime(s.end_time)} · {durH}h</div>
+                        </div>
+                        <span style={{ fontSize:12, color:'#9CA3AF' }}>✏️</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Desktop Grid */}
+      {!isMobile && <div style={{ overflowX:'auto' }}>
         <div style={{ minWidth:860 }}>
 
           {/* Day headers */}
@@ -250,7 +321,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           )}
 
           {caregivers.map(cg => {
-            const hrs    = weeklyHours(cg.id).toFixed(1);
+            const hrs    = weeklyHours(cg.id).toFixed(2);
             const isOver = parseFloat(hrs) > 40;
             return (
               <div key={cg.id} style={{ display:'grid', gridTemplateColumns:'160px repeat(7, 1fr)', borderBottom:'1px solid #F3F4F6', background:'#fff', minHeight:72 }}>
@@ -287,7 +358,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                       {shifts.map(s => {
                         const client = clientMap[s.client_id];
                         const color  = clientColor(s.client_id, clientMap);
-                        const durH   = ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60).toFixed(1);
+                        const durH   = ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60).toFixed(2);
                         return (
                           <div
                             key={s.id}
@@ -322,7 +393,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             );
           })}
         </div>
-      </div>
+      </div>}
 
       {/* Client legend */}
       {clients.length > 0 && (
@@ -373,7 +444,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       {editShift && (() => {
         const client = clientMap[editShift.client_id];
         const color  = clientColor(editShift.client_id, clientMap);
-        const durH   = ((timeToMinutes(editShift.end_time) - timeToMinutes(editShift.start_time)) / 60).toFixed(1);
+        const durH   = ((timeToMinutes(editShift.end_time) - timeToMinutes(editShift.start_time)) / 60).toFixed(2);
         return (
           <Modal title="Shift Details" onClose={() => setEditShift(null)}>
             <div style={{ background:color, borderRadius:8, padding:'12px 16px', color:'#fff', marginBottom:16 }}>
