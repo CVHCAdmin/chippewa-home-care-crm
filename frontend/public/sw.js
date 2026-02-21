@@ -43,6 +43,11 @@ self.addEventListener('fetch', event => {
     return;
   }
 
+  // Auth calls: never intercept, always pass through directly
+  if (url.pathname.startsWith('/api/auth/')) {
+    return; // Let browser handle it natively
+  }
+
   // API calls: network first, no cache fallback
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
