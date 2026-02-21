@@ -4,6 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import AutoFillButton from './AutoFillButton';
 import DragDropScheduler from './DragDropScheduler';
+import ScheduleOptimizer from './ScheduleOptimizer';
+import RosterOptimizer from './RosterOptimizer';
 import { confirm } from '../ConfirmModal';
 
 function getWeekStart(date) {
@@ -746,6 +748,8 @@ const SchedulingHub = ({ token }) => {
     { id: 'week', label: '📅 Week View', mLabel: '📅' },
     { id: 'calendar', label: '📆 Calendar', mLabel: '📆' },
     { id: 'create', label: '➕ Create', mLabel: '➕' },
+    { id: 'optimizer', label: '🧠 Optimizer', mLabel: '🧠' },
+    { id: 'roster-optimizer', label: '📊 Roster Optimizer', mLabel: '📊' },
     { id: 'coverage', label: '📈 Coverage', mLabel: '📈' },
     { id: 'open-shifts', label: '🚨 Open Shifts', mLabel: '🚨' },
     { id: 'staffing', label: '🔄 Swaps & Absences', mLabel: '🔄' },
@@ -1491,6 +1495,24 @@ const SchedulingHub = ({ token }) => {
         </div>
         );
       })()}
+
+      {/* ══════════════════════════════════════════ */}
+      {/* OPTIMIZER TAB                            */}
+      {/* ══════════════════════════════════════════ */}
+      {activeTab === 'optimizer' && (
+        <ScheduleOptimizer
+          token={token}
+          caregivers={caregivers}
+          clients={clients}
+        />
+      )}
+
+      {/* ══════════════════════════════════════════ */}
+      {/* ROSTER OPTIMIZER TAB                      */}
+      {/* ══════════════════════════════════════════ */}
+      {activeTab === 'roster-optimizer' && (
+        <RosterOptimizer token={token} />
+      )}
 
       {/* ══════════════════════════════════════════ */}
       {/* COVERAGE TAB */}
