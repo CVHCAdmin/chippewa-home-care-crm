@@ -280,6 +280,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return interval;
   };
   const gpsIntervalRef = React.useRef(null);
+  const geofenceIntervalRef = React.useRef(null);
+  const geofenceTriggeredRef = React.useRef(new Set()); // track which clients we've already auto-clocked for
 
   const _startGPSTracking_REMOVED = () => {
     if ("geolocation" in navigator) {
@@ -295,6 +297,93 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       setLocationError('Geolocation not supported');
     }
   };
+
+  // ── GEOFENCE AUTO CLOCK-IN/OUT ────────────────────────────────────────────
+  const runGeofenceCheck = async (currentLocation, currentSession, currentClients, currentSchedules) => {
+    if (!currentLocation?.lat && !currentLocation?.latitude) return;
+    const lat = currentLocation.lat || currentLocation.latitude;
+    const lng = currentLocation.lng || currentLocation.longitude;
+
+    // Get today's day of week
+    const todayDay = new Date().getDay();
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+
+    // Find clients scheduled for today (from recurring schedules)
+    const todayClients = (currentSchedules || [])
+      .filter(s => s.day_of_week === todayDay || 
+        (s.date && new Date(s.date).toDateString() === now.toDateString()))
+      .map(s => s.client_id)
+      .filter(Boolean);
+
+    if (!todayClients.length) return;
+
+    for (const clientId of todayClients) {
+      const alreadyTriggered = geofenceTriggeredRef.current.has(clientId);
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/route-optimizer/geofence/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ clientId, latitude: lat, longitude: lng })
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+
+        // AUTO CLOCK-IN: within geofence, not clocked in, not already triggered
+        if (data.withinGeofence && data.autoClockIn && !currentSession && !alreadyTriggered) {
+          geofenceTriggeredRef.current.add(clientId);
+          toast(`📍 You've arrived at ${data.clientName} — clocking you in automatically`, 'success');
+          // Auto clock in
+          const clockRes = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ clientId, latitude: lat, longitude: lng, autoClockIn: true })
+          });
+          if (clockRes.ok) {
+            const clockData = await clockRes.json();
+            setActiveSession(clockData);
+            setSelectedClient(clientId);
+            gpsIntervalRef.current = startGPSBreadcrumbs(clockData.id);
+          }
+          break; // only clock into one client at a time
+        }
+
+        // AUTO CLOCK-OUT: was within geofence but now left, currently clocked into this client
+        if (!data.withinGeofence && data.autoClockOut && currentSession?.client_id === clientId && alreadyTriggered) {
+          // Only auto clock-out if they've been there at least 10 minutes
+          const sessionStart = new Date(currentSession.start_time);
+          const minsElapsed = (now - sessionStart) / 60000;
+          if (minsElapsed >= 10) {
+            toast(`📍 You've left ${data.clientName}'s location — clocking you out automatically`, 'success');
+            geofenceTriggeredRef.current.delete(clientId);
+            setShowNoteModal(true); // prompt for visit note before clocking out
+          }
+        }
+      } catch(e) {
+        // Silently fail — don't interrupt the caregiver
+      }
+    }
+  };
+
+  // Start geofence polling when location is available
+  useEffect(() => {
+    if (!location) return;
+    // Run immediately on location change
+    runGeofenceCheck(location, activeSession, clients, schedules);
+    // Also run on interval every 30 seconds
+    if (!geofenceIntervalRef.current) {
+      geofenceIntervalRef.current = setInterval(() => {
+        runGeofenceCheck(location, activeSession, clients, schedules);
+      }, 30000);
+    }
+    return () => {
+      if (geofenceIntervalRef.current) {
+        clearInterval(geofenceIntervalRef.current);
+        geofenceIntervalRef.current = null;
+      }
+    };
+  }, [location, activeSession, clients, schedules]);
 
   const handleClockIn = async () => {
     if (!selectedClient) return toast('Please select a client.');
