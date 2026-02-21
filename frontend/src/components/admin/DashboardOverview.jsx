@@ -148,7 +148,7 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem' }}>
           {[
             { label: 'Shifts Today', value: summary?.todayShifts || 0, icon: '📋', color: '#2563EB' },
-            { label: 'Clocked In Now', value: summary?.activeCaregivers || 0, icon: '✅', color: '#16A34A' },
+            { label: 'Clocked In Now', value: summary?.clockedInNow || 0, icon: '✅', color: '#16A34A' },
             { label: 'Shifts Remaining', value: summary?.remainingShifts || 0, icon: '⏰', color: '#D97706' },
             { label: 'Coverage Gaps', value: summary?.coverageGaps || 0, icon: '🚨', color: summary?.coverageGaps > 0 ? '#DC2626' : '#16A34A' },
           ].map(s => (
