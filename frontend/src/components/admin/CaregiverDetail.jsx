@@ -29,6 +29,7 @@ const TABS = [
   { id: 'personal', label: '👤 Personal Info' },
   { id: 'schedule', label: '📅 Schedule' },
   { id: 'shifts', label: '🕐 Shifts' },
+  { id: 'gpsmap', label: '🗺️ GPS Map' },
   { id: 'background', label: '🔍 Background Check' },
   { id: 'evv', label: '📍 EVV / Geofence' },
 ];
@@ -49,6 +50,9 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   const [geocoding, setGeocoding] = useState(false);
   const [shiftFilter, setShiftFilter] = useState({ start: '', end: '' });
   const [allShifts, setAllShifts] = useState(null);
+  const [gpsData, setGpsData] = useState(null);
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const [selectedShift, setSelectedShift] = useState(null);
 
   const hdr = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
@@ -361,28 +365,59 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   );
 
   // ── SCHEDULE TAB ──────────────────────────────────────────────────────────────
-  const renderSchedule = () => (
-    <div style={s.card}>
-      <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: '1rem' }}>📅 Upcoming Schedule</div>
-      {schedule?.length > 0 ? (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-          <thead><tr style={{background:'#F9FAFB'}}>{['Date','Day','Time','Client','Type','Notes'].map(h=><th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontWeight:700,color:'#374151',borderBottom:'1px solid #E5E7EB'}}>{h}</th>)}</tr></thead>
-          <tbody>
-            {schedule.map(sc => (
-              <tr key={sc.id} style={{borderBottom:'1px solid #F3F4F6'}}>
-                <td style={{padding:'0.5rem 0.75rem',fontWeight:600}}>{fmtDate(sc.date)}</td>
-                <td style={{padding:'0.5rem 0.75rem',color:'#6B7280'}}>{sc.date ? DAYS[new Date(sc.date).getDay()] : '—'}</td>
-                <td style={{padding:'0.5rem 0.75rem'}}>{sc.start_time?.slice(0,5)} – {sc.end_time?.slice(0,5)}</td>
-                <td style={{padding:'0.5rem 0.75rem',fontWeight:600}}>{sc.client_first} {sc.client_last}</td>
-                <td style={{padding:'0.5rem 0.75rem',color:'#6B7280'}}>{sc.care_type_name||'—'}</td>
-                <td style={{padding:'0.5rem 0.75rem',color:'#374151'}}>{sc.notes||'—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : <p style={{color:'#9CA3AF',fontSize:'0.875rem'}}>No upcoming shifts scheduled.</p>}
-    </div>
-  );
+  const renderSchedule = () => {
+    const recurring = schedule?.filter(sc => sc.day_of_week != null) || [];
+    const oneTime   = schedule?.filter(sc => sc.day_of_week == null && sc.date) || [];
+    return (
+      <div>
+        {/* Recurring schedules */}
+        <div style={s.card}>
+          <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: '1rem' }}>🔁 Recurring Weekly Schedule ({recurring.length} shifts)</div>
+          {recurring.length > 0 ? (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+              <thead><tr style={{background:'#F9FAFB'}}>{['Day','Time','Hours','Client','Location','Notes'].map(h=><th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontWeight:700,color:'#374151',borderBottom:'1px solid #E5E7EB'}}>{h}</th>)}</tr></thead>
+              <tbody>
+                {recurring.sort((a,b) => a.day_of_week - b.day_of_week).map(sc => (
+                  <tr key={sc.id} style={{borderBottom:'1px solid #F3F4F6'}}>
+                    <td style={{padding:'0.5rem 0.75rem'}}>
+                      <span style={{padding:'0.2rem 0.6rem',borderRadius:6,background:'#DBEAFE',color:'#1E40AF',fontWeight:700,fontSize:'0.82rem'}}>
+                        {DAYS[sc.day_of_week]}
+                      </span>
+                    </td>
+                    <td style={{padding:'0.5rem 0.75rem',fontWeight:600}}>{sc.start_time?.slice(0,5)} – {sc.end_time?.slice(0,5)}</td>
+                    <td style={{padding:'0.5rem 0.75rem',color:'#059669',fontWeight:700}}>{sc.shift_hours ? `${sc.shift_hours}h` : '—'}</td>
+                    <td style={{padding:'0.5rem 0.75rem',fontWeight:600}}>{sc.client_first} {sc.client_last}</td>
+                    <td style={{padding:'0.5rem 0.75rem',color:'#6B7280',fontSize:'0.78rem'}}>{sc.client_address ? `${sc.client_address}, ${sc.client_city||''}` : '—'}</td>
+                    <td style={{padding:'0.5rem 0.75rem',color:'#374151'}}>{sc.notes||'—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p style={{color:'#9CA3AF',fontSize:'0.875rem'}}>No recurring schedule assigned yet.</p>}
+        </div>
+        {/* One-time upcoming */}
+        <div style={s.card}>
+          <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: '1rem' }}>📅 Upcoming One-Time Shifts ({oneTime.length})</div>
+          {oneTime.length > 0 ? (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+              <thead><tr style={{background:'#F9FAFB'}}>{['Date','Day','Time','Client','Notes'].map(h=><th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontWeight:700,color:'#374151',borderBottom:'1px solid #E5E7EB'}}>{h}</th>)}</tr></thead>
+              <tbody>
+                {oneTime.map(sc => (
+                  <tr key={sc.id} style={{borderBottom:'1px solid #F3F4F6'}}>
+                    <td style={{padding:'0.5rem 0.75rem',fontWeight:600}}>{fmtDate(sc.date)}</td>
+                    <td style={{padding:'0.5rem 0.75rem',color:'#6B7280'}}>{sc.date ? DAYS[new Date(sc.date+'T12:00:00').getDay()] : '—'}</td>
+                    <td style={{padding:'0.5rem 0.75rem'}}>{sc.start_time?.slice(0,5)} – {sc.end_time?.slice(0,5)}</td>
+                    <td style={{padding:'0.5rem 0.75rem',fontWeight:600}}>{sc.client_first} {sc.client_last}</td>
+                    <td style={{padding:'0.5rem 0.75rem',color:'#374151'}}>{sc.notes||'—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p style={{color:'#9CA3AF',fontSize:'0.875rem'}}>No upcoming one-time shifts.</p>}
+        </div>
+      </div>
+    );
+  };
 
   // ── SHIFTS TAB ─────────────────────────────────────────────────────────────────
   const loadShifts = async () => {
@@ -433,6 +468,182 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
             </tbody>
           </table>
         </div>
+      </div>
+    );
+  };
+
+  // ── GPS MAP TAB ───────────────────────────────────────────────────────────────
+  const loadGpsData = async () => {
+    setGpsLoading(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/time-entries/caregiver-gps/${caregiverId}?limit=30`, { headers: hdr });
+      if (r.ok) { const d = await r.json(); setGpsData(d); if (d.length > 0) setSelectedShift(d[0]); }
+    } catch(e) { console.error(e); }
+    setGpsLoading(false);
+  };
+
+  const renderGpsMap = () => {
+    // Load data on first open
+    if (!gpsData && !gpsLoading) loadGpsData();
+
+    const shift = selectedShift;
+    const fmtTs = (ts) => ts ? new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+    const fmtCoord = (n) => n != null ? parseFloat(n).toFixed(5) : '—';
+
+    return (
+      <div>
+        {gpsLoading && <div style={{textAlign:'center',padding:'2rem',color:'#6B7280'}}>⏳ Loading GPS data...</div>}
+
+        {gpsData && gpsData.length === 0 && (
+          <div style={{...s.card, textAlign:'center', padding:'2rem', color:'#9CA3AF'}}>
+            No GPS data recorded yet for this caregiver.
+          </div>
+        )}
+
+        {gpsData && gpsData.length > 0 && (
+          <div style={{display:'grid', gridTemplateColumns:'280px 1fr', gap:'1rem', alignItems:'start'}}>
+
+            {/* Shift list */}
+            <div style={{...s.card, padding:'0.75rem', maxHeight:600, overflowY:'auto'}}>
+              <div style={{fontWeight:800, fontSize:'0.85rem', marginBottom:'0.75rem', color:'#374151'}}>
+                📋 Recent Shifts ({gpsData.length})
+              </div>
+              {gpsData.map(sh => (
+                <div key={sh.id}
+                  onClick={() => setSelectedShift(sh)}
+                  style={{
+                    padding:'0.6rem 0.75rem', borderRadius:8, marginBottom:'0.4rem', cursor:'pointer',
+                    background: selectedShift?.id === sh.id ? '#DBEAFE' : '#F9FAFB',
+                    border: `1.5px solid ${selectedShift?.id === sh.id ? '#3B82F6' : '#E5E7EB'}`,
+                  }}>
+                  <div style={{fontWeight:700, fontSize:'0.82rem'}}>{sh.client_first} {sh.client_last}</div>
+                  <div style={{fontSize:'0.72rem', color:'#6B7280'}}>{fmtTs(sh.start_time)}</div>
+                  <div style={{display:'flex', gap:'0.4rem', marginTop:'0.2rem', flexWrap:'wrap'}}>
+                    <span style={{fontSize:'0.68rem', padding:'0.1rem 0.35rem', borderRadius:4,
+                      background: sh.is_complete ? '#D1FAE5' : '#FEF3C7',
+                      color: sh.is_complete ? '#065F46' : '#92400E', fontWeight:700}}>
+                      {sh.is_complete ? '✓ Complete' : '● Active'}
+                    </span>
+                    <span style={{fontSize:'0.68rem', color:'#6B7280'}}>
+                      {sh.hours ? `${sh.hours}h` : '—'}
+                    </span>
+                    {sh.gpsTrail?.length > 0 && (
+                      <span style={{fontSize:'0.68rem', color:'#2563EB'}}>📍 {sh.gpsTrail.length} pts</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Shift detail panel */}
+            {shift && (
+              <div>
+                {/* Clock in/out header */}
+                <div style={{...s.card, marginBottom:'0.75rem'}}>
+                  <div style={{fontWeight:800, fontSize:'0.95rem', marginBottom:'0.75rem'}}>
+                    🕐 {shift.client_first} {shift.client_last} — {fmtTs(shift.start_time)}
+                  </div>
+                  <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0.75rem'}}>
+                    {/* Clock In */}
+                    <div style={{padding:'0.75rem', background:'#F0FDF4', borderRadius:10, border:'1px solid #A7F3D0'}}>
+                      <div style={{fontWeight:700, color:'#059669', marginBottom:'0.4rem', fontSize:'0.85rem'}}>🟢 Clock In</div>
+                      <div style={{fontSize:'0.82rem', marginBottom:'0.25rem'}}><strong>Time:</strong> {fmtTs(shift.start_time)}</div>
+                      {shift.clock_in_location?.lat != null ? (
+                        <>
+                          <div style={{fontSize:'0.8rem', color:'#374151', marginBottom:'0.15rem'}}>
+                            <strong>GPS:</strong> {fmtCoord(shift.clock_in_location.lat)}, {fmtCoord(shift.clock_in_location.lng)}
+                          </div>
+                          <div style={{fontSize:'0.75rem', color:'#6B7280'}}>
+                            Accuracy: ±{shift.clock_in_location.accuracy || '?'}m
+                          </div>
+                          <a href={`https://www.google.com/maps?q=${shift.clock_in_location.lat},${shift.clock_in_location.lng}`}
+                            target="_blank" rel="noreferrer"
+                            style={{fontSize:'0.75rem', color:'#2563EB', textDecoration:'none', display:'inline-block', marginTop:'0.3rem'}}>
+                            📍 View on Google Maps ↗
+                          </a>
+                        </>
+                      ) : (
+                        <div style={{fontSize:'0.78rem', color:'#9CA3AF'}}>No GPS stamp recorded</div>
+                      )}
+                    </div>
+                    {/* Clock Out */}
+                    <div style={{padding:'0.75rem', background: shift.is_complete ? '#EFF6FF' : '#FFFBEB', borderRadius:10, border:`1px solid ${shift.is_complete ? '#BFDBFE' : '#FDE68A'}`}}>
+                      <div style={{fontWeight:700, color: shift.is_complete ? '#1D4ED8' : '#D97706', marginBottom:'0.4rem', fontSize:'0.85rem'}}>
+                        {shift.is_complete ? '🔵 Clock Out' : '🟡 Still Active'}
+                      </div>
+                      {shift.end_time ? (
+                        <>
+                          <div style={{fontSize:'0.82rem', marginBottom:'0.25rem'}}><strong>Time:</strong> {fmtTs(shift.end_time)}</div>
+                          {shift.clock_out_location?.lat != null ? (
+                            <>
+                              <div style={{fontSize:'0.8rem', color:'#374151', marginBottom:'0.15rem'}}>
+                                <strong>GPS:</strong> {fmtCoord(shift.clock_out_location.lat)}, {fmtCoord(shift.clock_out_location.lng)}
+                              </div>
+                              <div style={{fontSize:'0.75rem', color:'#6B7280'}}>
+                                Accuracy: ±{shift.clock_out_location.accuracy || '?'}m
+                              </div>
+                              <a href={`https://www.google.com/maps?q=${shift.clock_out_location.lat},${shift.clock_out_location.lng}`}
+                                target="_blank" rel="noreferrer"
+                                style={{fontSize:'0.75rem', color:'#2563EB', textDecoration:'none', display:'inline-block', marginTop:'0.3rem'}}>
+                                📍 View on Google Maps ↗
+                              </a>
+                            </>
+                          ) : (
+                            <div style={{fontSize:'0.78rem', color:'#9CA3AF'}}>No GPS stamp recorded</div>
+                          )}
+                        </>
+                      ) : (
+                        <div style={{fontSize:'0.78rem', color:'#D97706'}}>Still clocked in</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* GPS Trail */}
+                <div style={s.card}>
+                  <div style={{fontWeight:800, fontSize:'0.9rem', marginBottom:'0.75rem'}}>
+                    📍 GPS Trail ({shift.gpsTrail?.length || 0} points)
+                    {shift.gpsTrail?.length > 0 && (
+                      <a href={`https://www.google.com/maps/dir/${shift.gpsTrail.map(p=>`${p.latitude},${p.longitude}`).join('/')}`}
+                        target="_blank" rel="noreferrer"
+                        style={{marginLeft:'0.75rem', fontSize:'0.75rem', color:'#2563EB', fontWeight:400, textDecoration:'none'}}>
+                        🗺️ View Full Route in Google Maps ↗
+                      </a>
+                    )}
+                  </div>
+                  {shift.gpsTrail?.length > 0 ? (
+                    <div style={{maxHeight:300, overflowY:'auto'}}>
+                      <table style={{width:'100%', borderCollapse:'collapse', fontSize:'0.78rem'}}>
+                        <thead><tr style={{background:'#F9FAFB'}}>
+                          {['#','Time','Latitude','Longitude','Accuracy','Speed'].map(h=>(
+                            <th key={h} style={{padding:'0.4rem 0.6rem',textAlign:'left',fontWeight:700,color:'#6B7280',borderBottom:'1px solid #E5E7EB'}}>{h}</th>
+                          ))}
+                        </tr></thead>
+                        <tbody>
+                          {shift.gpsTrail.map((pt, i) => (
+                            <tr key={i} style={{borderBottom:'1px solid #F3F4F6'}}>
+                              <td style={{padding:'0.35rem 0.6rem',color:'#9CA3AF'}}>{i+1}</td>
+                              <td style={{padding:'0.35rem 0.6rem',fontWeight:600}}>{fmtTs(pt.timestamp)}</td>
+                              <td style={{padding:'0.35rem 0.6rem'}}>{fmtCoord(pt.latitude)}</td>
+                              <td style={{padding:'0.35rem 0.6rem'}}>{fmtCoord(pt.longitude)}</td>
+                              <td style={{padding:'0.35rem 0.6rem',color:'#6B7280'}}>±{pt.accuracy||'?'}m</td>
+                              <td style={{padding:'0.35rem 0.6rem',color:'#6B7280'}}>{pt.speed != null ? `${pt.speed} mph` : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{color:'#9CA3AF', fontSize:'0.85rem', textAlign:'center', padding:'1rem'}}>
+                      No continuous GPS trail recorded for this shift.<br/>
+                      <span style={{fontSize:'0.78rem'}}>Clock in/out stamps above show start and end locations.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -589,6 +800,7 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
       {tab === 'personal' && renderPersonal()}
       {tab === 'schedule' && renderSchedule()}
       {tab === 'shifts' && renderShifts()}
+      {tab === 'gpsmap' && renderGpsMap()}
       {tab === 'background' && renderBackground()}
       {tab === 'evv' && renderEVV()}
     </div>
