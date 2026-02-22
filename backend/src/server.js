@@ -144,6 +144,13 @@ app.use('/api/family-portal', (req, res, next) => {
   if (req.path.startsWith('/admin')) return verifyToken(req, res, next);
   next();
 }, require('./routes/familyPortalRoutes'));
+app.use('/api/client-portal', (req, res, next) => {
+  // Public routes: /login, /set-password — no token needed
+  // Portal routes: /portal/* — clientAuth middleware inside the router handles it
+  // Admin routes: /admin/* — require valid admin token here as belt-and-suspenders
+  if (req.path.startsWith('/admin')) return verifyToken(req, res, next);
+  next();
+}, require('./routes/clientPortalRoutes'));
 app.use('/api/shift-swaps',       verifyToken, require('./routes/shiftSwapsRoutes'));
 app.use('/api/alerts',            verifyToken, require('./routes/alertsRoutes'));
 app.use('/api/route-optimizer',   verifyToken, require('./routes/routeOptimizerRoutes'));
