@@ -15,6 +15,13 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
   const [message, setMessage] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
+  // ── Portal state ──────────────────────────────────────────────────────────
+  const [portalStatus, setPortalStatus]   = useState(null);
+  const [portalEmail, setPortalEmail]     = useState('');
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalMessage, setPortalMessage] = useState({ text: '', type: '' });
+  const [inviteUrl, setInviteUrl]         = useState('');
+
   useEffect(() => {
     if (client && isOpen) {
       setFormData({
@@ -62,6 +69,26 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
       setActiveTab('basic');
       setDeleteConfirm(false);
       setMessage('');
+
+      // Load portal status for this client
+      setPortalStatus(null);
+      setPortalEmail(client.email || '');
+      setInviteUrl('');
+      setPortalMessage({ text: '', type: '' });
+      fetch(`${API_BASE_URL}/api/client-portal/admin/clients`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(data => {
+          const found = Array.isArray(data) ? data.find(c => c.id === client.id) : null;
+          if (found) {
+            setPortalStatus(found.portal_status);
+            if (found.portal_email) setPortalEmail(found.portal_email);
+          } else {
+            setPortalStatus('not_invited');
+          }
+        })
+        .catch(() => setPortalStatus('not_invited'));
     }
   }, [client, isOpen]);
 
@@ -161,11 +188,82 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
   if (!isOpen || !client) return null;
 
   const tabs = [
-    { id: 'basic', label: '📋 Basic Info' },
-    { id: 'billing', label: '💰 Billing' },
-    { id: 'medical', label: '🏥 Medical' },
-    { id: 'caregivers', label: '👤 Caregivers' }
+    { id: 'basic',     label: '📋 Basic Info' },
+    { id: 'billing',   label: '💰 Billing'    },
+    { id: 'medical',   label: '🏥 Medical'    },
+    { id: 'caregivers',label: '👤 Caregivers' },
+    { id: 'portal',    label: '🌐 Portal'     },
   ];
+
+  // ── Portal handlers ───────────────────────────────────────────────────────
+  const handleSendInvite = async () => {
+    if (!portalEmail.trim()) {
+      return setPortalMessage({ text: 'Enter an email address first.', type: 'error' });
+    }
+    setPortalLoading(true);
+    setPortalMessage({ text: '', type: '' });
+    setInviteUrl('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/client-portal/admin/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ clientId: client.id, email: portalEmail.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create invite');
+      setInviteUrl(data.inviteUrl);
+      setPortalStatus('invite_pending');
+      setPortalMessage({ text: `Invite created for ${portalEmail}. Copy the link below and send it to the client.`, type: 'success' });
+    } catch (err) {
+      setPortalMessage({ text: err.message, type: 'error' });
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  const handleTogglePortal = async (enable) => {
+    setPortalLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/client-portal/admin/clients/${client.id}/toggle`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ enabled: enable }),
+      });
+      if (!res.ok) throw new Error('Failed to update portal access');
+      setPortalStatus(enable ? 'active' : 'disabled');
+      setPortalMessage({ text: `Portal access ${enable ? 'enabled' : 'disabled'}.`, type: enable ? 'success' : 'warning' });
+    } catch (err) {
+      setPortalMessage({ text: err.message, type: 'error' });
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  const copyInviteUrl = () => {
+    navigator.clipboard.writeText(inviteUrl).then(() => {
+      setPortalMessage({ text: 'Invite link copied to clipboard!', type: 'success' });
+    });
+  };
+
+  const portalStatusDisplay = () => {
+    const map = {
+      not_invited:    { bg: '#f5f5f5', color: '#666',    icon: '○', label: 'Not Invited'    },
+      invite_pending: { bg: '#fef9e7', color: '#d68910', icon: '⏳', label: 'Invite Sent'    },
+      invite_expired: { bg: '#fdf2f2', color: '#c0392b', icon: '⚠️', label: 'Invite Expired' },
+      active:         { bg: '#eafaf1', color: '#1e8449', icon: '✓', label: 'Active'          },
+      disabled:       { bg: '#f0f0f0', color: '#888',    icon: '✕', label: 'Disabled'        },
+    };
+    const s = map[portalStatus] || map.not_invited;
+    return (
+      <span style={{
+        background: s.bg, color: s.color,
+        padding: '4px 12px', borderRadius: '12px',
+        fontSize: '0.82rem', fontWeight: 700,
+      }}>
+        {s.icon} {s.label}
+      </span>
+    );
+  };
 
   return (
     <div className="modal active">
@@ -587,6 +685,137 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
               <div className="alert alert-info">
                 <strong>Note:</strong> Caregiver pay rates are set by care type in Caregiver Management. 
                 When a caregiver works with this client, they'll be paid based on the client's care type.
+              </div>
+            </div>
+          )}
+
+          {/* Portal Tab */}
+          {activeTab === 'portal' && (
+            <div style={{ padding: '0.5rem 0' }}>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginBottom: '1.5rem' }}>
+                🌐 Client Portal Access
+              </h4>
+
+              {/* Status row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '1.5rem' }}>
+                <span style={{ fontWeight: 600, color: '#444' }}>Status:</span>
+                {portalStatus ? portalStatusDisplay() : (
+                  <span style={{ color: '#aaa', fontSize: '0.85rem' }}>Loading...</span>
+                )}
+              </div>
+
+              {/* Portal message */}
+              {portalMessage.text && (
+                <div className={`alert ${portalMessage.type === 'error' ? 'alert-error' : portalMessage.type === 'warning' ? 'alert-warning' : 'alert-success'}`}
+                  style={{ marginBottom: '1.5rem' }}>
+                  {portalMessage.text}
+                </div>
+              )}
+
+              {/* Invite link display */}
+              {inviteUrl && (
+                <div style={{
+                  background: '#f8f9fa', border: '1px solid #dee2e6',
+                  borderRadius: '8px', padding: '14px 16px', marginBottom: '1.5rem',
+                }}>
+                  <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '6px', fontWeight: 600 }}>
+                    INVITE LINK (expires in 48 hours)
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      readOnly
+                      value={inviteUrl}
+                      style={{ flex: 1, fontSize: '0.8rem', background: '#fff', color: '#333' }}
+                      onClick={e => e.target.select()}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={copyInviteUrl}
+                      style={{ flexShrink: 0 }}
+                    >
+                      📋 Copy
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Invite form — shown when not yet invited or expired */}
+              {(portalStatus === 'not_invited' || portalStatus === 'invite_expired' || portalStatus === 'invite_pending') && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h5 style={{ marginBottom: '0.75rem', color: '#333' }}>
+                    {portalStatus === 'invite_pending' ? 'Resend Invite' : 'Invite Client to Portal'}
+                  </h5>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                      <input
+                        type="email"
+                        value={portalEmail}
+                        onChange={e => setPortalEmail(e.target.value)}
+                        placeholder="client@email.com"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleSendInvite}
+                      disabled={portalLoading}
+                      style={{ flexShrink: 0 }}
+                    >
+                      {portalLoading ? 'Creating...' : '✉️ Create Invite'}
+                    </button>
+                  </div>
+                  <small style={{ color: '#666', marginTop: '6px', display: 'block' }}>
+                    An invite link will be generated. Copy it and send it to the client — they'll set their own password.
+                  </small>
+                </div>
+              )}
+
+              {/* Enable/Disable toggle — shown when portal account exists */}
+              {(portalStatus === 'active' || portalStatus === 'disabled') && (
+                <div style={{
+                  background: '#f8f9fa', borderRadius: '8px',
+                  padding: '16px', marginBottom: '1.5rem',
+                }}>
+                  <div style={{ fontWeight: 600, marginBottom: '8px', color: '#333' }}>
+                    Portal Access Control
+                  </div>
+                  {portalStatus === 'active' ? (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => handleTogglePortal(false)}
+                      disabled={portalLoading}
+                    >
+                      {portalLoading ? 'Updating...' : '🚫 Disable Portal Access'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => handleTogglePortal(true)}
+                      disabled={portalLoading}
+                    >
+                      {portalLoading ? 'Updating...' : '✓ Re-enable Portal Access'}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* What the client can see */}
+              <div style={{
+                background: '#eaf4fd', borderRadius: '8px',
+                padding: '14px 16px', fontSize: '0.85rem', color: '#1a5276',
+              }}>
+                <div style={{ fontWeight: 700, marginBottom: '8px' }}>What clients see in their portal:</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                  {['📅 Upcoming scheduled visits', '🕐 Visit history', '👤 Assigned caregivers', '📄 Invoices & billing', '🔔 Notifications & alerts', '📞 Caregiver contact info'].map(item => (
+                    <div key={item} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {item}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
