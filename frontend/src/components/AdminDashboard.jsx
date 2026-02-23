@@ -27,6 +27,7 @@ import ComplianceTracking from './admin/ComplianceTracking';
 import ReportsAnalytics from './admin/ReportsAnalytics';
 import PayrollProcessing from './admin/PayrollProcessing';
 import AuditLogs from './admin/AuditLogs';
+import LoginActivity from './admin/LoginActivity';
 import ClaimsManagement from './admin/ClaimsManagement';
 import MedicationsManagement from './admin/MedicationsManagement';
 import DocumentsManagement from './admin/DocumentsManagement';
@@ -93,6 +94,7 @@ const NAV_SECTIONS = [
       { id: 'background-checks', label: 'Background Checks', icon: '🔍' },
       { id: 'documents', label: 'Documents', icon: '📁' },
       { id: 'audit-logs', label: 'Audit Logs', icon: '📜' },
+      { id: 'login-activity', label: 'Login Activity', icon: '🔑' },
     ]
   },
   {
@@ -245,6 +247,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'payroll': return <PayrollProcessing token={token} />;
       case 'expenses': return <ExpenseManagement token={token} />;
       case 'audit-logs': return <AuditLogs token={token} />;
+      case 'login-activity': return <LoginActivity token={token} />;
       case 'caregiver-profile': return selectedCaregiverId ? (
         <CaregiverProfile caregiverId={selectedCaregiverId} token={token}
           onBack={() => { setSelectedCaregiverId(null); setCurrentPage('caregivers'); }} />

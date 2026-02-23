@@ -76,6 +76,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [showHelp, setShowHelp] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [showMoreDrawer, setShowMoreDrawer] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -1096,6 +1097,74 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           </div>
         </div>
       )}
+
+      {/* ── Mobile Bottom Navigation ── */}
+      {showMoreDrawer && <div className="mobile-more-drawer-overlay" onClick={() => setShowMoreDrawer(false)} />}
+
+      <div className={`mobile-more-drawer ${showMoreDrawer ? 'open' : ''}`}>
+        <div className="mobile-more-drawer-handle" />
+        <div className="mobile-more-drawer-section">
+          <div className="mobile-more-drawer-section-title">Self Service</div>
+          {[
+            { page: 'open-shifts',   icon: '📋', label: 'Open Shifts' },
+            { page: 'availability',  icon: '⏰', label: 'Availability' },
+            { page: 'miss-report',   icon: '🚨', label: 'Report Miss' },
+            { page: 'time-off',      icon: '🏖️', label: 'Time Off' },
+          ].map(({ page, icon, label }) => (
+            <button
+              key={page}
+              className={`mobile-more-drawer-item ${currentPage === page ? 'active' : ''}`}
+              onClick={() => { setCurrentPage(page); setShowMoreDrawer(false); }}
+            >
+              <span className="mobile-more-drawer-item-icon">{icon}</span>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="mobile-more-drawer-section">
+          <div className="mobile-more-drawer-section-title">Account</div>
+          <button
+            className={`mobile-more-drawer-item ${currentPage === 'settings' ? 'active' : ''}`}
+            onClick={() => { setCurrentPage('settings'); setShowMoreDrawer(false); }}
+          >
+            <span className="mobile-more-drawer-item-icon">⚙️</span>
+            Settings
+          </button>
+          <button
+            className="mobile-more-drawer-item"
+            onClick={onLogout}
+            style={{ color: '#DC2626' }}
+          >
+            <span className="mobile-more-drawer-item-icon" style={{ background: '#FEE2E2' }}>⏻</span>
+            Log Out
+          </button>
+        </div>
+      </div>
+
+      <nav className="mobile-bottom-nav">
+        {[
+          { page: 'home',     icon: '🏠', label: 'Home' },
+          { page: 'schedule', icon: '📅', label: 'Schedule' },
+          { page: 'clients',  icon: '👥', label: 'Clients' },
+          { page: 'history',  icon: '📜', label: 'History' },
+        ].map(({ page, icon, label }) => (
+          <button
+            key={page}
+            className={`mobile-bottom-nav-item ${currentPage === page ? 'active' : ''}`}
+            onClick={() => { setCurrentPage(page); setShowMoreDrawer(false); }}
+          >
+            <span className="mobile-bottom-nav-icon">{icon}</span>
+            {label}
+          </button>
+        ))}
+        <button
+          className={`mobile-bottom-nav-item ${showMoreDrawer ? 'active' : ''}`}
+          onClick={() => setShowMoreDrawer(v => !v)}
+        >
+          <span className="mobile-bottom-nav-icon">⋯</span>
+          More
+        </button>
+      </nav>
     </div>
   );
 };
