@@ -669,7 +669,7 @@ const SchedulingHub = ({ token }) => {
       <>
         {createPanelOpen && <div onClick={closeCreatePanel} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1500 }} />}
         <div style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: isMobile ? '100%' : '480px',
+          position: 'fixed', top: 0, right: 0, bottom: 0, width: '100%',
           background: '#fff', zIndex: 1600, boxShadow: '-8px 0 32px rgba(0,0,0,0.15)',
           transform: createPanelOpen ? 'translateX(0)' : 'translateX(100%)',
           transition: 'transform 0.3s ease', display: 'flex', flexDirection: 'column', overflowY: 'auto'
@@ -678,7 +678,8 @@ const SchedulingHub = ({ token }) => {
             <h3 style={{ margin: 0, fontSize: '1rem', color: '#1E40AF' }}>➕ New Schedule</h3>
             <button onClick={closeCreatePanel} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#9CA3AF', lineHeight: 1 }}>×</button>
           </div>
-          <div style={{ padding: '1rem 1.25rem', flex: 1 }}>
+          <div style={{ padding: '1rem 1.25rem', flex: 1, maxWidth: '1200px', margin: '0 auto', width: '100%', display: 'flex', gap: '2rem' }}>
+            <div style={{ flex: '0 0 480px', minWidth: 0 }}>
             {/* Caregiver selector */}
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Caregiver *</label>
@@ -801,9 +802,11 @@ const SchedulingHub = ({ token }) => {
               </form>
             )}
 
-            {/* Existing schedules */}
-            {selectedCaregiverId && caregiverSchedules.length > 0 && (
-              <div style={{ marginTop: '1.5rem', borderTop: '1px solid #E5E7EB', paddingTop: '1rem' }}>
+            {/* Existing schedules — right column on desktop */}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+          {selectedCaregiverId && caregiverSchedules.length > 0 && (
+              <div style={{ position: 'sticky', top: '1rem' }}>
                 <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', color: '#374151' }}>
                   Existing Schedules <span style={{ fontSize: '0.8rem', color: '#6B7280', fontWeight: '400' }}>({calculateTotalHours(caregiverSchedules.filter(s => s.day_of_week !== null && s.day_of_week !== undefined))} hrs/wk)</span>
                 </h4>
@@ -837,8 +840,8 @@ const SchedulingHub = ({ token }) => {
                 ))}
               </div>
             )}
+            </div>
           </div>
-        </div>
       </>
     );
   };
