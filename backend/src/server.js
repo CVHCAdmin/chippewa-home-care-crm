@@ -171,6 +171,10 @@ app.use('/api/gusto',             verifyToken, require('./routes/gustoRoutes'));
 app.use('/api/optimizer',         verifyToken, require('./routes/optimizerRoutes'));
 app.use('/api/roster-optimizer',  verifyToken, require('./routes/rosterOptimizerRoutes'));
 app.use('/api/push',              verifyToken, require('./routes/pushNotificationRoutes').router);
+app.use('/api/communication-log', verifyToken, require('./routes/communicationRoutes'));
+app.use('/api/no-show',           verifyToken, require('./routes/noShowRoutes'));
+app.use('/api/forms',             verifyToken, require('./routes/formBuilderRoutes'));
+app.use('/api/forecast',          verifyToken, require('./routes/forecastRoutes'));
 
 // ── EXPLICIT ROUTES (Express path-boundary workarounds) ──────────────────────
 
