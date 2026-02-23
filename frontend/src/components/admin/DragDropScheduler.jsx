@@ -54,8 +54,10 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   const [toast, setToast]               = useState(null);
   const [newShift, setNewShift]         = useState(null);
   const [newShiftForm, setNewShiftForm] = useState({ clientId:'', startTime:'09:00', endTime:'13:00', notes:'' });
-  const [editShift, setEditShift]       = useState(null);
+  const [editShift, setEditShift]         = useState(null);
   const [editShiftForm, setEditShiftForm] = useState({ clientId:'', startTime:'', endTime:'', notes:'' });
+  const [editScope, setEditScope]         = useState('all'); // 'all' | 'once'
+  const [editDate, setEditDate]           = useState('');
 
   const clientMap = Object.fromEntries(clients.map(c => [c.id, c]));
 
@@ -183,8 +185,10 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     }
   }
 
-  function openEditShift(s) {
+  function openEditShift(s, cellDate) {
     setEditShift(s);
+    setEditDate(cellDate || '');
+    setEditScope('all');
     setEditShiftForm({
       clientId:  s.client_id || '',
       startTime: s.start_time ? s.start_time.slice(0,5) : '09:00',
@@ -198,22 +202,42 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     if (editShiftForm.startTime >= editShiftForm.endTime) return showToast('End time must be after start', 'error');
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/schedules-all/${editShift.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-        body: JSON.stringify({
-          clientId:   editShiftForm.clientId,
-          startTime:  editShiftForm.startTime,
-          endTime:    editShiftForm.endTime,
-          notes:      editShiftForm.notes,
-          dayOfWeek:  editShift.day_of_week,
-          date:       editShift.date ? editShift.date.slice(0,10) : null,
-          frequency:  editShift.frequency || 'weekly',
-          anchorDate: editShift.anchor_date || null,
-        }),
-      });
-      if (!res.ok) throw new Error('Failed to save');
-      showToast('Shift updated ✓');
+      if (editScope === 'once') {
+        // Create a one-time override for just this date
+        const res = await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+          body: JSON.stringify({
+            caregiverId:  editShift.caregiver_id,
+            clientId:     editShiftForm.clientId,
+            scheduleType: 'one-time',
+            date:         editDate,
+            startTime:    editShiftForm.startTime,
+            endTime:      editShiftForm.endTime,
+            notes:        editShiftForm.notes,
+          }),
+        });
+        if (!res.ok) throw new Error('Failed to create one-time shift');
+        showToast(`One-time shift created for ${new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })} ✓`);
+      } else {
+        // Update the recurring schedule itself
+        const res = await fetch(`${API_BASE_URL}/api/schedules-all/${editShift.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+          body: JSON.stringify({
+            clientId:   editShiftForm.clientId,
+            startTime:  editShiftForm.startTime,
+            endTime:    editShiftForm.endTime,
+            notes:      editShiftForm.notes,
+            dayOfWeek:  editShift.day_of_week,
+            date:       editShift.date ? editShift.date.slice(0,10) : null,
+            frequency:  editShift.frequency || 'weekly',
+            anchorDate: editShift.anchor_date || null,
+          }),
+        });
+        if (!res.ok) throw new Error('Failed to save');
+        showToast('Shift updated ✓');
+      }
       setEditShift(null);
       await loadAll();
       onScheduleChange && onScheduleChange();
@@ -313,7 +337,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                     const color = clientColor(s.client_id, clientMap);
                     const durH = ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60).toFixed(2);
                     return (
-                      <div key={s.id} onClick={() => openEditShift(s)} style={{
+                      <div key={s.id} onClick={() => openEditShift(s, weekDateStrs[mobileDay])} style={{
                         padding:'10px 14px', borderLeft:`4px solid ${color}`,
                         borderBottom:'1px solid #F9FAFB', cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center'
                       }}>
@@ -404,7 +428,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                         return (
                           <div
                             key={s.id}
-                            onClick={e => { e.stopPropagation(); setEditShift(s); }}
+                            onClick={e => { e.stopPropagation(); openEditShift(s, weekDateStrs[dayIndex]); }}
                             style={{
                               background: color,
                               color:'#fff',
@@ -492,8 +516,32 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         return (
           <Modal title="Edit Shift" onClose={() => setEditShift(null)}>
             {isRecurring && (
-              <div style={{ background:'#FFFBEB', border:'1px solid #FDE68A', borderRadius:6, padding:'8px 12px', fontSize:12, color:'#92400E', marginBottom:12 }}>
-                ↻ Recurring every {DAY_FULL[editShift.day_of_week]} — changes apply to all future instances
+              <div style={{ marginBottom:12 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:6 }}>Apply changes to:</div>
+                <div style={{ display:'flex', gap:8 }}>
+                  <button type="button" onClick={() => setEditScope('all')} style={{
+                    flex:1, padding:'8px 0', borderRadius:8, border:'2px solid', cursor:'pointer', fontWeight:600, fontSize:13,
+                    borderColor: editScope === 'all' ? '#F59E0B' : '#E5E7EB',
+                    background: editScope === 'all' ? '#FFFBEB' : '#fff',
+                    color: editScope === 'all' ? '#92400E' : '#6B7280',
+                  }}>↻ All future occurrences</button>
+                  <button type="button" onClick={() => setEditScope('once')} style={{
+                    flex:1, padding:'8px 0', borderRadius:8, border:'2px solid', cursor:'pointer', fontWeight:600, fontSize:13,
+                    borderColor: editScope === 'once' ? '#3B82F6' : '#E5E7EB',
+                    background: editScope === 'once' ? '#EFF6FF' : '#fff',
+                    color: editScope === 'once' ? '#1D4ED8' : '#6B7280',
+                  }}>📅 This date only{editDate ? ` (${new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric' })})` : ''}</button>
+                </div>
+                {editScope === 'once' && (
+                  <div style={{ marginTop:6, fontSize:12, color:'#2563EB', background:'#EFF6FF', padding:'6px 10px', borderRadius:6 }}>
+                    A one-time shift will be created for this date. The recurring schedule stays unchanged.
+                  </div>
+                )}
+                {editScope === 'all' && (
+                  <div style={{ marginTop:6, fontSize:12, color:'#92400E', background:'#FFFBEB', padding:'6px 10px', borderRadius:6 }}>
+                    Changes will apply to all future instances of this recurring shift.
+                  </div>
+                )}
               </div>
             )}
             <Field label="Client">
