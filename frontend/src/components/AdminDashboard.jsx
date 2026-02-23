@@ -4,6 +4,7 @@ import { API_BASE_URL } from '../config';
 import { getDashboardSummary } from '../config';
 import { toast } from './Toast';
 import HelpPanel from './HelpPanel';
+import ImpersonationModal from './ImpersonationModal';
 import MessageBoard from './admin/MessageBoard';
 import IntegrationsHub from './admin/IntegrationsHub';
 
@@ -110,9 +111,10 @@ const NAV_SECTIONS = [
 // All searchable items flattened
 const ALL_ITEMS = NAV_SECTIONS.flatMap(s => s.items);
 
-const AdminDashboard = ({ user, token, onLogout }) => {
+const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [showHelp, setShowHelp] = useState(false);
+  const [showImpersonation, setShowImpersonation] = useState(false);
   const [selectedCaregiverId, setSelectedCaregiverId] = useState(null);
   const [selectedCaregiverName, setSelectedCaregiverName] = useState('');
   const [summary, setSummary] = useState(null);
@@ -421,6 +423,17 @@ const AdminDashboard = ({ user, token, onLogout }) => {
               )}
             </button>
 
+            {/* View As (impersonation) button — only when onImpersonate is available */}
+            {onImpersonate && (
+              <button
+                onClick={() => setShowImpersonation(true)}
+                style={{ background: '#7c3aed', border: 'none', borderRadius: '8px', padding: '0.4rem 0.75rem', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '700', color: '#fff', whiteSpace: 'nowrap' }}
+                title="View app as another user"
+              >
+                👁️ View As
+              </button>
+            )}
+
             {/* Help button */}
             <button
               onClick={() => setShowHelp(true)}
@@ -442,6 +455,18 @@ const AdminDashboard = ({ user, token, onLogout }) => {
         </div>
 
         <HelpPanel isOpen={showHelp} onClose={() => setShowHelp(false)} currentPage={currentPage} />
+
+        {/* Impersonation modal */}
+        {showImpersonation && (
+          <ImpersonationModal
+            token={token}
+            onImpersonate={(impToken, impUser) => {
+              setShowImpersonation(false);
+              onImpersonate(impToken, impUser);
+            }}
+            onClose={() => setShowImpersonation(false)}
+          />
+        )}
 
         <div className="container">
           {loading ? (

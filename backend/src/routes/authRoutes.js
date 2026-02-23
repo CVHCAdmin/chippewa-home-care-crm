@@ -75,4 +75,64 @@ router.post('/register-admin', verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/auth/impersonate/:userId
+// Admin only — generates a short-lived token to view the app as another user
+router.post('/impersonate/:userId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const result = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
+    const targetUser = result.rows[0];
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    // Log the impersonation action
+    await auditLog(req.user.id, 'ADMIN_IMPERSONATE', 'users', userId, null, {
+      impersonating: targetUser.email,
+      impersonatedBy: req.user.email
+    });
+
+    const token = jwt.sign(
+      {
+        id: targetUser.id,
+        email: targetUser.email,
+        role: targetUser.role,
+        name: `${targetUser.first_name} ${targetUser.last_name}`,
+        impersonatedBy: req.user.email,
+        impersonation: true
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '2h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: targetUser.id,
+        email: targetUser.email,
+        name: `${targetUser.first_name} ${targetUser.last_name}`,
+        role: targetUser.role,
+        impersonatedBy: req.user.email
+      }
+    });
+  } catch (error) {
+    console.error('Impersonation error:', error);
+    res.status(500).json({ error: 'Impersonation failed' });
+  }
+});
+
+// GET /api/auth/users — admin only, returns list of users to impersonate
+router.get('/users', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT id, email, first_name, last_name, role, is_active
+       FROM users
+       ORDER BY role, last_name, first_name`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
 module.exports = router;
