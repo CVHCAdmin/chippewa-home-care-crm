@@ -55,6 +55,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   const [newShift, setNewShift]         = useState(null);
   const [newShiftForm, setNewShiftForm] = useState({ clientId:'', startTime:'09:00', endTime:'13:00', notes:'' });
   const [editShift, setEditShift]       = useState(null);
+  const [editShiftForm, setEditShiftForm] = useState({ clientId:'', startTime:'', endTime:'', notes:'' });
 
   const clientMap = Object.fromEntries(clients.map(c => [c.id, c]));
 
@@ -182,6 +183,47 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     }
   }
 
+  function openEditShift(s) {
+    setEditShift(s);
+    setEditShiftForm({
+      clientId:  s.client_id || '',
+      startTime: s.start_time ? s.start_time.slice(0,5) : '09:00',
+      endTime:   s.end_time   ? s.end_time.slice(0,5)   : '13:00',
+      notes:     s.notes || '',
+    });
+  }
+
+  async function handleSaveShift() {
+    if (!editShiftForm.clientId) return showToast('Select a client', 'error');
+    if (editShiftForm.startTime >= editShiftForm.endTime) return showToast('End time must be after start', 'error');
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/schedules-all/${editShift.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+        body: JSON.stringify({
+          clientId:   editShiftForm.clientId,
+          startTime:  editShiftForm.startTime,
+          endTime:    editShiftForm.endTime,
+          notes:      editShiftForm.notes,
+          dayOfWeek:  editShift.day_of_week,
+          date:       editShift.date ? editShift.date.slice(0,10) : null,
+          frequency:  editShift.frequency || 'weekly',
+          anchorDate: editShift.anchor_date || null,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      showToast('Shift updated ✓');
+      setEditShift(null);
+      await loadAll();
+      onScheduleChange && onScheduleChange();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:300, color:'#6B7280' }}>
       <div style={{ textAlign:'center' }}>
@@ -271,7 +313,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                     const color = clientColor(s.client_id, clientMap);
                     const durH = ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60).toFixed(2);
                     return (
-                      <div key={s.id} onClick={() => setEditShift(s)} style={{
+                      <div key={s.id} onClick={() => openEditShift(s)} style={{
                         padding:'10px 14px', borderLeft:`4px solid ${color}`,
                         borderBottom:'1px solid #F9FAFB', cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center'
                       }}>
@@ -442,30 +484,50 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
       {/* Edit/delete shift modal */}
       {editShift && (() => {
-        const client = clientMap[editShift.client_id];
-        const color  = clientColor(editShift.client_id, clientMap);
-        const durH   = ((timeToMinutes(editShift.end_time) - timeToMinutes(editShift.start_time)) / 60).toFixed(2);
+        const color = clientColor(editShiftForm.clientId || editShift.client_id, clientMap);
+        const durH  = editShiftForm.startTime && editShiftForm.endTime
+          ? ((timeToMinutes(editShiftForm.endTime) - timeToMinutes(editShiftForm.startTime)) / 60).toFixed(2)
+          : '0';
+        const isRecurring = editShift.day_of_week !== null && editShift.day_of_week !== undefined;
         return (
-          <Modal title="Shift Details" onClose={() => setEditShift(null)}>
-            <div style={{ background:color, borderRadius:8, padding:'12px 16px', color:'#fff', marginBottom:16 }}>
-              <div style={{ fontWeight:800, fontSize:16 }}>{client ? `${client.first_name} ${client.last_name}` : 'Unknown'}</div>
-              <div style={{ opacity:0.9, marginTop:2 }}>
-                {formatTime(editShift.start_time)} – {formatTime(editShift.end_time)} · {durH}h
-              </div>
-              {!editShift.date && (
-                <div style={{ opacity:0.75, fontSize:12, marginTop:4 }}>↻ Recurring every {DAY_FULL[editShift.day_of_week]}</div>
-              )}
-            </div>
-            {editShift.notes && (
-              <div style={{ background:'#F9FAFB', padding:'10px 14px', borderRadius:6, fontSize:13, color:'#374151', marginBottom:16 }}>
-                📝 {editShift.notes}
+          <Modal title="Edit Shift" onClose={() => setEditShift(null)}>
+            {isRecurring && (
+              <div style={{ background:'#FFFBEB', border:'1px solid #FDE68A', borderRadius:6, padding:'8px 12px', fontSize:12, color:'#92400E', marginBottom:12 }}>
+                ↻ Recurring every {DAY_FULL[editShift.day_of_week]} — changes apply to all future instances
               </div>
             )}
-            <div style={{ display:'flex', justifyContent:'space-between' }}>
+            <Field label="Client">
+              <select value={editShiftForm.clientId} onChange={e => setEditShiftForm(f => ({ ...f, clientId: e.target.value }))} style={inputStyle}>
+                <option value=''>Select client...</option>
+                {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
+              </select>
+            </Field>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:10 }}>
+              <Field label="Start Time">
+                <input type="time" value={editShiftForm.startTime} onChange={e => setEditShiftForm(f => ({ ...f, startTime: e.target.value }))} style={inputStyle} />
+              </Field>
+              <Field label="End Time">
+                <input type="time" value={editShiftForm.endTime} onChange={e => setEditShiftForm(f => ({ ...f, endTime: e.target.value }))} style={inputStyle} />
+              </Field>
+            </div>
+            {editShiftForm.startTime && editShiftForm.endTime && (
+              <div style={{ textAlign:'center', fontSize:12, color:'#6B7280', margin:'6px 0 2px', background:'#F3F4F6', borderRadius:6, padding:'4px 0' }}>
+                {formatTime(editShiftForm.startTime)} – {formatTime(editShiftForm.endTime)} · <strong>{durH}h</strong>
+              </div>
+            )}
+            <Field label="Notes (optional)" style={{ marginTop:10 }}>
+              <input type="text" value={editShiftForm.notes} onChange={e => setEditShiftForm(f => ({ ...f, notes: e.target.value }))} style={inputStyle} placeholder="Any notes..." />
+            </Field>
+            <div style={{ display:'flex', justifyContent:'space-between', marginTop:16 }}>
               <button onClick={() => handleDeleteShift(editShift.id)} disabled={saving} style={{ ...cancelBtn, color:'#EF4444', borderColor:'#FECACA' }}>
                 {saving ? '...' : 'Delete Shift'}
               </button>
-              <button onClick={() => setEditShift(null)} style={primaryBtn}>Close</button>
+              <div style={{ display:'flex', gap:8 }}>
+                <button onClick={() => setEditShift(null)} style={cancelBtn}>Cancel</button>
+                <button onClick={handleSaveShift} disabled={saving} style={primaryBtn}>
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
             </div>
           </Modal>
         );
