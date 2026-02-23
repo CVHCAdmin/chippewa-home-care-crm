@@ -31,7 +31,6 @@ export default defineConfig({
           'admin-scheduling': [
             './src/components/admin/SchedulingHub',
             './src/components/admin/DragDropScheduler',
-            './src/components/admin/SmartScheduling',
             './src/components/admin/ScheduleCalendar',
           ],
           'admin-billing': [

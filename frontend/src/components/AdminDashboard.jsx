@@ -429,6 +429,15 @@ const AdminDashboard = ({ user, token, onLogout }) => {
             >
               ❓ Help
             </button>
+
+            {/* Logout button */}
+            <button
+              onClick={onLogout}
+              style={{ padding: '0.4rem 0.85rem', borderRadius: '8px', border: 'none', background: '#FEE2E2', color: '#DC2626', fontWeight: '700', fontSize: '0.82rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              title="Logout"
+            >
+              ⏻ Logout
+            </button>
           </div>
         </div>
 
