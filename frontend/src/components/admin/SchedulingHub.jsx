@@ -1344,13 +1344,202 @@ const SchedulingHub = ({ token }) => {
 
   if (loading) return <div className='loading'><div className='spinner'></div></div>;
 
+  // ── When createPanelOpen: replace entire page with the create form ──
+  if (createPanelOpen) {
+    const { recurringByDay, oneTimeByDate } = groupSchedules();
+    return (
+      <>
+        {message.text && (
+          <div style={{ position: 'fixed', top: '1rem', right: '1rem', padding: '0.75rem 1.25rem', borderRadius: '8px', zIndex: 2000, background: message.type === 'error' ? '#FEE2E2' : '#D1FAE5', color: message.type === 'error' ? '#DC2626' : '#059669', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', fontWeight: '600' }}>{message.text}</div>
+        )}
+
+        {/* Back button + page title */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '2px solid #E5E7EB' }}>
+          <button onClick={closeCreatePanel} style={{ background: '#F3F4F6', border: 'none', borderRadius: '8px', padding: '0.5rem 0.85rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', color: '#374151' }}>← Back</button>
+          <h2 style={{ margin: 0 }}>➕ New Schedule</h2>
+        </div>
+
+        {/* Two-column body */}
+        <div style={{ display: 'flex', gap: '2.5rem', alignItems: 'flex-start' }}>
+
+          {/* LEFT — form (fixed 480px) */}
+          <div style={{ flex: '0 0 480px', minWidth: 0 }}>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Caregiver *</label>
+              <select value={selectedCaregiverId} onChange={(e) => handleCaregiverSelectCreate(e.target.value)}
+                style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }}>
+                <option value=''>Choose a caregiver...</option>
+                {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
+              </select>
+            </div>
+
+            {conflicts.length > 0 && (
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px' }}>
+                <div style={{ fontWeight: '700', color: '#991B1B', marginBottom: '0.35rem' }}>⚠️ Existing Conflicts</div>
+                {conflicts.map((c, i) => <div key={i} style={{ fontSize: '0.82rem', color: '#B91C1C' }}>{getDayName(c.day)}: overlapping shifts</div>)}
+              </div>
+            )}
+
+            {selectedCaregiverId && (
+              <form onSubmit={handleCreateSubmit}>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Type</label>
+                  <div style={{ display: 'flex', borderRadius: '8px', overflow: 'hidden', border: '2px solid #E5E7EB' }}>
+                    {[{ type: 'one-time', icon: '📅', label: 'One-Time' }, { type: 'multi-day', icon: '📆', label: 'Multi-Day' }, { type: 'recurring', icon: '🔄', label: 'Recurring' }, { type: 'bi-weekly', icon: '📊', label: 'Bi-Weekly' }].map((opt, i) => (
+                      <button key={opt.type} type='button' onClick={() => { setFormData(prev => ({ ...prev, scheduleType: opt.type, dayOfWeek: '' })); setSelectedDays([]); }}
+                        style={{ flex: 1, padding: '0.6rem 0.2rem', border: 'none', borderLeft: i > 0 ? '2px solid #E5E7EB' : 'none',
+                          background: formData.scheduleType === opt.type ? '#3B82F6' : '#fff',
+                          color: formData.scheduleType === opt.type ? '#fff' : '#374151', cursor: 'pointer', fontSize: '0.78rem' }}>
+                        {opt.icon} {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {formData.scheduleType === 'one-time' && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Date *</label>
+                    <input type='date' value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))} min={new Date().toISOString().split('T')[0]} required style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }} />
+                  </div>
+                )}
+
+                {(formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') && (
+                  <div style={{ marginBottom: '1rem', background: formData.scheduleType === 'bi-weekly' ? '#FFF7ED' : '#EFF6FF', padding: '0.85rem', borderRadius: '8px', border: `1px solid ${formData.scheduleType === 'bi-weekly' ? '#FED7AA' : '#BFDBFE'}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <label style={{ fontWeight: '600', margin: 0, fontSize: '0.9rem' }}>{formData.scheduleType === 'bi-weekly' ? 'Days (Every Other Week) *' : 'Select Days *'}</label>
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <button type='button' onClick={selectWeekdays} style={{ padding: '0.25rem 0.6rem', borderRadius: '4px', border: 'none', background: formData.scheduleType === 'bi-weekly' ? '#F97316' : '#3B82F6', color: '#fff', cursor: 'pointer', fontSize: '0.72rem' }}>Mon–Fri</button>
+                        <button type='button' onClick={clearDays} style={{ padding: '0.25rem 0.6rem', borderRadius: '4px', border: '1px solid #D1D5DB', background: '#fff', color: '#6B7280', cursor: 'pointer', fontSize: '0.72rem' }}>Clear</button>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.35rem', marginBottom: '0.5rem' }}>
+                      {['Su','Mo','Tu','We','Th','Fr','Sa'].map((day, idx) => (
+                        <button key={day} type='button' onClick={() => toggleDaySelection(idx)}
+                          style={{ padding: '0.5rem 0.1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem',
+                            border: selectedDays.includes(idx) ? `2px solid ${formData.scheduleType === 'bi-weekly' ? '#F97316' : '#3B82F6'}` : '2px solid #E5E7EB',
+                            background: selectedDays.includes(idx) ? (formData.scheduleType === 'bi-weekly' ? '#F97316' : '#3B82F6') : '#fff',
+                            color: selectedDays.includes(idx) ? '#fff' : '#374151' }}>{day}</button>
+                      ))}
+                    </div>
+                    {formData.scheduleType === 'bi-weekly' && (
+                      <div style={{ padding: '0.6rem', background: '#fff', borderRadius: '6px', border: '1px solid #FED7AA' }}>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.3rem' }}>📅 "ON" Week Start *</label>
+                        <input type='date' value={biWeeklyAnchorDate} onChange={e => setBiWeeklyAnchorDate(e.target.value)} style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '6px', fontSize: '0.88rem' }} />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {formData.scheduleType === 'recurring' && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Day of Week *</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.35rem' }}>
+                      {['Su','Mo','Tu','We','Th','Fr','Sa'].map((day, idx) => (
+                        <button key={day} type='button' onClick={() => setFormData(prev => ({ ...prev, dayOfWeek: idx.toString() }))}
+                          style={{ padding: '0.5rem 0.1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem',
+                            border: formData.dayOfWeek === idx.toString() ? '2px solid #3B82F6' : '2px solid #E5E7EB',
+                            background: formData.dayOfWeek === idx.toString() ? '#EFF6FF' : '#fff',
+                            color: formData.dayOfWeek === idx.toString() ? '#1D4ED8' : '#374151' }}>{day}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Client *</label>
+                  <select value={formData.clientId} onChange={(e) => setFormData(prev => ({ ...prev, clientId: e.target.value }))} required
+                    style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }}>
+                    <option value=''>Select client...</option>
+                    {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}{c.service_type ? ` (${c.service_type.replace(/_/g, ' ')})` : ''}</option>)}
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Quick Presets</label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    {shiftPresets.map((p, i) => (
+                      <button key={i} type='button' onClick={() => applyPreset(p)}
+                        style={{ padding: '0.35rem 0.65rem', borderRadius: '16px', border: '1px solid #E5E7EB', cursor: 'pointer', fontSize: '0.78rem',
+                          background: formData.startTime === p.start && formData.endTime === p.end ? '#DBEAFE' : '#fff', color: '#374151' }}>{p.label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                  <div><label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Start *</label><input type='time' value={formData.startTime} onChange={(e) => setFormData(prev => ({ ...prev, startTime: e.target.value }))} required style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }} /></div>
+                  <div><label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>End *</label><input type='time' value={formData.endTime} onChange={(e) => setFormData(prev => ({ ...prev, endTime: e.target.value }))} required style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }} /></div>
+                </div>
+                <div style={{ marginBottom: '1rem', padding: '0.6rem', background: '#F3F4F6', borderRadius: '8px', textAlign: 'center', fontSize: '0.88rem' }}>
+                  <span style={{ fontWeight: '600' }}>{formatTime(formData.startTime)} – {formatTime(formData.endTime)}</span>
+                  <span style={{ color: '#6B7280', marginLeft: '0.75rem' }}>({calculateHours(formData.startTime, formData.endTime)}h)</span>
+                </div>
+
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Notes</label>
+                  <textarea value={formData.notes} onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))} placeholder='Special instructions...' rows={2} style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem', resize: 'vertical' }} />
+                </div>
+                <button type='submit' className='btn btn-primary' disabled={saving || ((formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') && selectedDays.length === 0)} style={{ width: '100%', padding: '0.85rem', fontSize: '1rem' }}>
+                  {saving ? 'Saving...' : formData.scheduleType === 'multi-day' ? `✓ Create ${selectedDays.length} Weekly Schedule${selectedDays.length !== 1 ? 's' : ''}` : formData.scheduleType === 'bi-weekly' ? `✓ Create ${selectedDays.length} Bi-Weekly Schedule${selectedDays.length !== 1 ? 's' : ''}` : '✓ Create Schedule'}
+                </button>
+              </form>
+            )}
+          </div>
+
+          {/* RIGHT — existing schedules (fills remaining space) */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {selectedCaregiverId && caregiverSchedules.length > 0 && (
+              <div style={{ position: 'sticky', top: '1rem' }}>
+                <h4 style={{ margin: '0 0 0.75rem', fontSize: '1rem', color: '#374151', fontWeight: '700' }}>
+                  Current Schedule <span style={{ fontSize: '0.85rem', color: '#6B7280', fontWeight: '400' }}>— {calculateTotalHours(caregiverSchedules.filter(s => s.day_of_week !== null && s.day_of_week !== undefined))} hrs/wk</span>
+                </h4>
+                {Object.entries(recurringByDay).map(([dayNum, scheds]) => (
+                  <div key={dayNum} style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: '700', color: '#1E40AF', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{getDayName(parseInt(dayNum))}</div>
+                    {scheds.map(s => (
+                      <div key={s.id} onClick={() => openEditModal(s)}
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 0.85rem', background: '#F8FAFC', border: '1px solid #E5E7EB', borderRadius: '8px', marginBottom: '0.4rem', fontSize: '0.88rem', cursor: 'pointer' }}>
+                        <div>
+                          <span style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</span>
+                          <span style={{ color: '#6B7280', marginLeft: '0.75rem' }}>{formatTime(s.start_time)} – {formatTime(s.end_time)}</span>
+                          {s.frequency === 'biweekly' && <span style={{ marginLeft: '0.5rem', padding: '0.15rem 0.4rem', background: '#FFEDD5', color: '#C2410C', borderRadius: '4px', fontSize: '0.72rem' }}>Bi-Wk</span>}
+                        </div>
+                        <button onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(s.id); }} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem' }}>🗑</button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {Object.entries(oneTimeByDate).sort().map(([dateKey, scheds]) => (
+                  <div key={dateKey} style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: '700', color: '#1E40AF', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                    {scheds.map(s => (
+                      <div key={s.id} onClick={() => openEditModal(s)}
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 0.85rem', background: '#F8FAFC', border: '1px solid #E5E7EB', borderRadius: '8px', marginBottom: '0.4rem', fontSize: '0.88rem', cursor: 'pointer' }}>
+                        <div><span style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</span><span style={{ color: '#6B7280', marginLeft: '0.75rem' }}>{formatTime(s.start_time)} – {formatTime(s.end_time)}</span></div>
+                        <button onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(s.id); }} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem' }}>🗑</button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+            {selectedCaregiverId && caregiverSchedules.length === 0 && (
+              <div style={{ padding: '3rem', textAlign: 'center', color: '#9CA3AF', background: '#F9FAFB', borderRadius: '12px', border: '2px dashed #E5E7EB' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📭</div>
+                No existing schedules for this caregiver
+              </div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       {message.text && (
         <div style={{ position: 'fixed', top: '1rem', right: '1rem', padding: '0.75rem 1.25rem', borderRadius: '8px', zIndex: 2000, background: message.type === 'error' ? '#FEE2E2' : '#D1FAE5', color: message.type === 'error' ? '#DC2626' : '#059669', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', fontWeight: '600' }}>{message.text}</div>
       )}
-
-      {renderCreatePanel()}
 
       <div style={{ marginBottom: '1rem' }}><h2 style={{ margin: 0 }}>📅 Scheduling</h2></div>
 
