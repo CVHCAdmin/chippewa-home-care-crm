@@ -235,6 +235,104 @@ app.use((err, req, res, next) => {
   });
 });
 
+// ============ ONE-TIME MIGRATION ENDPOINT ============
+// Hit GET /api/run-migration-v7 once to create new tables, then this can be removed
+app.get('/api/run-migration-v7', async (req, res) => {
+  const db = require('./db');
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS communication_log (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        entity_type VARCHAR(20) NOT NULL CHECK (entity_type IN ('client','caregiver')),
+        entity_id UUID NOT NULL,
+        log_type VARCHAR(30) NOT NULL DEFAULT 'note' CHECK (log_type IN ('note','call','email','text','visit','incident','complaint','compliment','other')),
+        direction VARCHAR(10) CHECK (direction IN ('inbound','outbound','internal')),
+        subject VARCHAR(255),
+        body TEXT NOT NULL,
+        logged_by UUID REFERENCES users(id),
+        logged_by_name VARCHAR(100),
+        follow_up_date DATE,
+        follow_up_done BOOLEAN DEFAULT FALSE,
+        is_pinned BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_comm_log_entity ON communication_log(entity_type, entity_id);
+      CREATE INDEX IF NOT EXISTS idx_comm_log_created ON communication_log(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_comm_log_followup ON communication_log(follow_up_date) WHERE follow_up_done = FALSE;
+
+      CREATE TABLE IF NOT EXISTS noshow_alert_config (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        grace_minutes INT NOT NULL DEFAULT 15,
+        notify_admin BOOLEAN DEFAULT TRUE,
+        notify_caregiver BOOLEAN DEFAULT TRUE,
+        notify_client_family BOOLEAN DEFAULT FALSE,
+        admin_phone VARCHAR(20),
+        admin_email VARCHAR(255),
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      INSERT INTO noshow_alert_config (grace_minutes, notify_admin, notify_caregiver, is_active)
+      SELECT 15, TRUE, TRUE, TRUE WHERE NOT EXISTS (SELECT 1 FROM noshow_alert_config);
+
+      CREATE TABLE IF NOT EXISTS noshow_alerts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        schedule_id UUID,
+        caregiver_id UUID REFERENCES users(id),
+        client_id UUID REFERENCES clients(id),
+        shift_date DATE NOT NULL,
+        expected_start TIME NOT NULL,
+        alerted_at TIMESTAMPTZ DEFAULT NOW(),
+        resolved_at TIMESTAMPTZ,
+        resolved_by UUID REFERENCES users(id),
+        resolution_note TEXT,
+        status VARCHAR(20) DEFAULT 'open' CHECK (status IN ('open','resolved','false_alarm')),
+        sms_sent BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_noshow_status ON noshow_alerts(status, shift_date);
+      CREATE INDEX IF NOT EXISTS idx_noshow_caregiver ON noshow_alerts(caregiver_id);
+
+      CREATE TABLE IF NOT EXISTS form_templates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        category VARCHAR(50) DEFAULT 'general' CHECK (category IN ('assessment','incident','physician_order','consent','intake','hr','general')),
+        fields JSONB NOT NULL DEFAULT '[]',
+        is_active BOOLEAN DEFAULT TRUE,
+        requires_signature BOOLEAN DEFAULT FALSE,
+        auto_attach_to VARCHAR(20) CHECK (auto_attach_to IN ('client','caregiver','both')),
+        created_by UUID REFERENCES users(id),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_form_templates_category ON form_templates(category, is_active);
+
+      CREATE TABLE IF NOT EXISTS form_submissions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        template_id UUID REFERENCES form_templates(id),
+        template_name VARCHAR(255),
+        entity_type VARCHAR(20) CHECK (entity_type IN ('client','caregiver')),
+        entity_id UUID,
+        submitted_by UUID REFERENCES users(id),
+        submitted_by_name VARCHAR(100),
+        data JSONB NOT NULL DEFAULT '{}',
+        signature TEXT,
+        signed_at TIMESTAMPTZ,
+        status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft','submitted','signed','archived')),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_form_submissions_entity ON form_submissions(entity_type, entity_id);
+      CREATE INDEX IF NOT EXISTS idx_form_submissions_template ON form_submissions(template_id);
+    `);
+    res.json({ success: true, message: 'Migration v7 complete — all tables created.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ============ START SERVER ============
 const agencyName = process.env.AGENCY_NAME || 'HomeCare CRM';
 app.listen(port, () => {
