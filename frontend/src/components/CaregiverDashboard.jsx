@@ -76,6 +76,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [showHelp, setShowHelp] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [showMoreDrawer, setShowMoreDrawer] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -293,6 +294,16 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const geofenceIntervalRef = React.useRef(null);
   const geofenceTriggeredRef = React.useRef(new Set()); // track which clients we've already auto-clocked for
 
+  // Refs to hold latest state for use inside intervals (avoids stale closures)
+  const locationRef = React.useRef(null);
+  const activeSessionRef = React.useRef(null);
+  const clientsRef = React.useRef([]);
+  const schedulesRef = React.useRef([]);
+  useEffect(() => { locationRef.current = location; }, [location]);
+  useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
+  useEffect(() => { clientsRef.current = clients; }, [clients]);
+  useEffect(() => { schedulesRef.current = schedules; }, [schedules]);
+
   const _startGPSTracking_REMOVED = () => {
     if ("geolocation" in navigator) {
       navigator.geolocation.watchPosition(
@@ -314,21 +325,23 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     const lat = currentLocation.lat || currentLocation.latitude;
     const lng = currentLocation.lng || currentLocation.longitude;
 
-    // Get today's day of week
-    const todayDay = new Date().getDay();
     const now = new Date();
-    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const todayDay = new Date().getDay();
 
-    // Find clients scheduled for today (from recurring schedules)
-    const todayClients = (currentSchedules || [])
-      .filter(s => s.day_of_week === todayDay || 
+    // Prefer clients scheduled for today; fall back to ALL assigned clients
+    // so geofence works even when no schedule entry exists yet
+    const scheduledToday = (currentSchedules || [])
+      .filter(s => s.day_of_week === todayDay ||
         (s.date && new Date(s.date).toDateString() === now.toDateString()))
       .map(s => s.client_id)
       .filter(Boolean);
 
-    if (!todayClients.length) return;
+    const allClientIds = (currentClients || []).map(c => c.id).filter(Boolean);
+    const clientsToCheck = scheduledToday.length ? scheduledToday : allClientIds;
 
-    for (const clientId of todayClients) {
+    if (!clientsToCheck.length) return;
+
+    for (const clientId of clientsToCheck) {
       const alreadyTriggered = geofenceTriggeredRef.current.has(clientId);
 
       try {
@@ -381,10 +394,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     if (!location) return;
     // Run immediately on location change
     runGeofenceCheck(location, activeSession, clients, schedules);
-    // Also run on interval every 30 seconds
+    // Set up interval using refs so it always reads the latest state (no stale closure)
     if (!geofenceIntervalRef.current) {
       geofenceIntervalRef.current = setInterval(() => {
-        runGeofenceCheck(location, activeSession, clients, schedules);
+        runGeofenceCheck(
+          locationRef.current,
+          activeSessionRef.current,
+          clientsRef.current,
+          schedulesRef.current
+        );
       }, 30000);
     }
     return () => {
@@ -393,7 +411,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         geofenceIntervalRef.current = null;
       }
     };
-  }, [location, activeSession, clients, schedules]);
+  }, [location]); // only restart interval when location first becomes available
 
   const handleClockIn = async () => {
     if (!selectedClient) return toast('Please select a client.');
@@ -1096,6 +1114,74 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           </div>
         </div>
       )}
+
+      {/* ── Mobile Bottom Navigation ── */}
+      {showMoreDrawer && <div className="mobile-more-drawer-overlay" onClick={() => setShowMoreDrawer(false)} />}
+
+      <div className={`mobile-more-drawer ${showMoreDrawer ? 'open' : ''}`}>
+        <div className="mobile-more-drawer-handle" />
+        <div className="mobile-more-drawer-section">
+          <div className="mobile-more-drawer-section-title">Self Service</div>
+          {[
+            { page: 'open-shifts',   icon: '📋', label: 'Open Shifts' },
+            { page: 'availability',  icon: '⏰', label: 'Availability' },
+            { page: 'miss-report',   icon: '🚨', label: 'Report Miss' },
+            { page: 'time-off',      icon: '🏖️', label: 'Time Off' },
+          ].map(({ page, icon, label }) => (
+            <button
+              key={page}
+              className={`mobile-more-drawer-item ${currentPage === page ? 'active' : ''}`}
+              onClick={() => { setCurrentPage(page); setShowMoreDrawer(false); }}
+            >
+              <span className="mobile-more-drawer-item-icon">{icon}</span>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="mobile-more-drawer-section">
+          <div className="mobile-more-drawer-section-title">Account</div>
+          <button
+            className={`mobile-more-drawer-item ${currentPage === 'settings' ? 'active' : ''}`}
+            onClick={() => { setCurrentPage('settings'); setShowMoreDrawer(false); }}
+          >
+            <span className="mobile-more-drawer-item-icon">⚙️</span>
+            Settings
+          </button>
+          <button
+            className="mobile-more-drawer-item"
+            onClick={onLogout}
+            style={{ color: '#DC2626' }}
+          >
+            <span className="mobile-more-drawer-item-icon" style={{ background: '#FEE2E2' }}>⏻</span>
+            Log Out
+          </button>
+        </div>
+      </div>
+
+      <nav className="mobile-bottom-nav">
+        {[
+          { page: 'home',     icon: '🏠', label: 'Home' },
+          { page: 'schedule', icon: '📅', label: 'Schedule' },
+          { page: 'clients',  icon: '👥', label: 'Clients' },
+          { page: 'history',  icon: '📜', label: 'History' },
+        ].map(({ page, icon, label }) => (
+          <button
+            key={page}
+            className={`mobile-bottom-nav-item ${currentPage === page ? 'active' : ''}`}
+            onClick={() => { setCurrentPage(page); setShowMoreDrawer(false); }}
+          >
+            <span className="mobile-bottom-nav-icon">{icon}</span>
+            {label}
+          </button>
+        ))}
+        <button
+          className={`mobile-bottom-nav-item ${showMoreDrawer ? 'active' : ''}`}
+          onClick={() => setShowMoreDrawer(v => !v)}
+        >
+          <span className="mobile-bottom-nav-icon">⋯</span>
+          More
+        </button>
+      </nav>
     </div>
   );
 };
