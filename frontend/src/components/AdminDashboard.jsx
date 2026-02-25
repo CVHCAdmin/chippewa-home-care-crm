@@ -27,6 +27,7 @@ import ComplianceTracking from './admin/ComplianceTracking';
 import ReportsAnalytics from './admin/ReportsAnalytics';
 import PayrollProcessing from './admin/PayrollProcessing';
 import AuditLogs from './admin/AuditLogs';
+import LoginActivity from './admin/LoginActivity';
 import ClaimsManagement from './admin/ClaimsManagement';
 import MedicationsManagement from './admin/MedicationsManagement';
 import DocumentsManagement from './admin/DocumentsManagement';
@@ -39,6 +40,10 @@ import SchedulingHub from './admin/SchedulingHub';
 import RouteOptimizer from './admin/RouteOptimizer';
 import CompanyOptimizer from './admin/CompanyOptimizer';
 import EmergencyCoverage from './admin/EmergencyCoverage';
+import CommunicationLog from './admin/CommunicationLog';
+import NoShowAlerts from './admin/NoShowAlerts';
+import FormBuilder from './admin/FormBuilder';
+import RevenueForecast from './admin/RevenueForecast';
 
 const NAV_SECTIONS = [
   {
@@ -56,6 +61,7 @@ const NAV_SECTIONS = [
     items: [
       { id: 'scheduling', label: 'Schedule Hub', icon: '📅' },
       { id: 'emergency-coverage', label: 'Emergency Coverage', icon: '🚨' },
+      { id: 'no-show-alerts', label: 'No-Show Alerts', icon: '⏰' },
       { id: 'route-optimizer', label: 'Route Optimizer', icon: '🗺️' },
       { id: 'company-optimizer', label: 'Company Optimizer', icon: '⚙️' },
     ]
@@ -66,6 +72,7 @@ const NAV_SECTIONS = [
       { id: 'adl', label: 'ADL Tracking', icon: '🩺' },
       { id: 'medications', label: 'Medications', icon: '💊' },
       { id: 'incidents', label: 'Incidents', icon: '⚠️' },
+      { id: 'form-builder', label: 'Form Builder', icon: '📝' },
     ]
   },
   {
@@ -84,6 +91,7 @@ const NAV_SECTIONS = [
       { id: 'payroll', label: 'Payroll', icon: '💵' },
       { id: 'expenses', label: 'Expenses', icon: '💳' },
       { id: 'reports', label: 'Reports & Analytics', icon: '📊' },
+      { id: 'revenue-forecast', label: 'Revenue Forecast', icon: '📈' },
     ]
   },
   {
@@ -93,11 +101,13 @@ const NAV_SECTIONS = [
       { id: 'background-checks', label: 'Background Checks', icon: '🔍' },
       { id: 'documents', label: 'Documents', icon: '📁' },
       { id: 'audit-logs', label: 'Audit Logs', icon: '📜' },
+      { id: 'login-activity', label: 'Login Activity', icon: '🔑' },
     ]
   },
   {
     id: 'comms', label: 'Communication', icon: '💬',
     items: [
+      { id: 'communication-log', label: 'Communication Log', icon: '📋' },
       { id: 'sms', label: 'SMS', icon: '📱' },
       { id: 'family-portal', label: 'Family Portal', icon: '🏠' },
       { id: 'alerts', label: 'Alerts', icon: '🔔' },
@@ -245,6 +255,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'payroll': return <PayrollProcessing token={token} />;
       case 'expenses': return <ExpenseManagement token={token} />;
       case 'audit-logs': return <AuditLogs token={token} />;
+      case 'login-activity': return <LoginActivity token={token} />;
       case 'caregiver-profile': return selectedCaregiverId ? (
         <CaregiverProfile caregiverId={selectedCaregiverId} token={token}
           onBack={() => { setSelectedCaregiverId(null); setCurrentPage('caregivers'); }} />
@@ -261,6 +272,10 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'sms': return <SMSManagement token={token} />;
       case 'family-portal': return <FamilyPortalAdmin token={token} />;
       case 'alerts': return <AlertsManagement token={token} />;
+      case 'communication-log': return <CommunicationLog token={token} entityType='client' entityId={null} entityName='All Entries' />;
+      case 'no-show-alerts': return <NoShowAlerts token={token} />;
+      case 'form-builder': return <FormBuilder token={token} />;
+      case 'revenue-forecast': return <RevenueForecast token={token} />;
       default: return <DashboardOverview summary={summary} token={token} onNavigate={handlePageClick} />;
     }
   };

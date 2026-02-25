@@ -7,22 +7,51 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 
+// Helper: log a login attempt (fire-and-forget, never blocks the response)
+async function logLoginAttempt({ email, userId, success, failReason, req }) {
+  try {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const userAgent = req.headers['user-agent'] || null;
+    await db.query(
+      `INSERT INTO login_activity (email, user_id, success, ip_address, user_agent, fail_reason)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [email, userId || null, success, ip, userAgent, failReason || null]
+    );
+  } catch (err) {
+    console.error('Failed to log login activity:', err.message);
+  }
+}
+
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+    if (!user) {
+      logLoginAttempt({ email, userId: null, success: false, failReason: 'user_not_found', req });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
-    if (!passwordMatch) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!passwordMatch) {
+      logLoginAttempt({ email, userId: user.id, success: false, failReason: 'invalid_password', req });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    if (user.is_active === false) {
+      logLoginAttempt({ email, userId: user.id, success: false, failReason: 'account_inactive', req });
+      return res.status(401).json({ error: 'Account is inactive' });
+    }
+
+    logLoginAttempt({ email, userId: user.id, success: true, failReason: null, req });
 
     const token = jwt.sign(
-  { id: user.id, email: user.email, role: user.role, name: `${user.first_name} ${user.last_name}` },
-  process.env.JWT_SECRET,
-  { expiresIn: '8h' }
-);
+      { id: user.id, email: user.email, role: user.role, name: `${user.first_name} ${user.last_name}` },
+      process.env.JWT_SECRET,
+      { expiresIn: '8h' }
+    );
     res.json({
       token,
       user: { id: user.id, email: user.email, name: `${user.first_name} ${user.last_name}`, role: user.role }
@@ -132,6 +161,67 @@ router.get('/users', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// GET /api/auth/login-activity — admin only
+router.get('/login-activity', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, email, success } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const conditions = [];
+    const params = [];
+
+    if (email) {
+      params.push(`%${email.toLowerCase()}%`);
+      conditions.push(`la.email ILIKE $${params.length}`);
+    }
+    if (success !== undefined && success !== '') {
+      params.push(success === 'true');
+      conditions.push(`la.success = $${params.length}`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const dataParams = [...params, parseInt(limit), offset];
+    const rows = await db.query(
+      `SELECT
+         la.id,
+         la.email,
+         la.success,
+         la.ip_address,
+         la.user_agent,
+         la.fail_reason,
+         la.created_at,
+         u.first_name,
+         u.last_name,
+         u.role
+       FROM login_activity la
+       LEFT JOIN users u ON u.id = la.user_id
+       ${where}
+       ORDER BY la.created_at DESC
+       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
+    );
+
+    const countResult = await db.query(
+      `SELECT COUNT(*) FROM login_activity la ${where}`,
+      params
+    );
+
+    res.json({
+      success: true,
+      activity: rows.rows,
+      pagination: {
+        total: parseInt(countResult.rows[0].count),
+        page: parseInt(page),
+        pages: Math.ceil(parseInt(countResult.rows[0].count) / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Login activity fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch login activity' });
   }
 });
 
