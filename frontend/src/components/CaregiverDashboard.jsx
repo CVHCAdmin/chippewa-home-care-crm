@@ -77,6 +77,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [showMessages, setShowMessages] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [showMoreDrawer, setShowMoreDrawer] = useState(false);
+  const [showAllClients, setShowAllClients] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -736,8 +737,27 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 style={{ width: '100%', padding: '0.875rem', fontSize: '1rem', border: '2px solid #D1D5DB', borderRadius: '10px', background: '#fff', boxSizing: 'border-box' }}
               >
                 <option value="">Choose client...</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
+                {(() => {
+                  const todayClientIds = getTodaysAppointments().map(a => a.client_id);
+                  const todayClients = clients.filter(c => todayClientIds.includes(c.id));
+                  const displayClients = showAllClients ? clients : (todayClients.length > 0 ? todayClients : clients);
+                  return displayClients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>);
+                })()}
               </select>
+              {(() => {
+                const todayClientIds = getTodaysAppointments().map(a => a.client_id);
+                const hasTodayClients = clients.some(c => todayClientIds.includes(c.id));
+                if (!hasTodayClients) return null;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllClients(!showAllClients)}
+                    style={{ background: 'none', border: 'none', color: '#6B7280', fontSize: '0.8rem', cursor: 'pointer', marginTop: '0.4rem', textDecoration: 'underline' }}
+                  >
+                    {showAllClients ? "Show today's clients only" : 'Show all clients'}
+                  </button>
+                );
+              })()}
             </div>
             <div style={{ padding: '0.6rem 0.875rem', background: location ? '#F0FDF4' : '#F9FAFB', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.85rem', color: location ? '#166534' : '#6B7280', border: `1px solid ${location ? '#BBF7D0' : '#E5E7EB'}` }}>
               {location ? `✅ GPS Active (±${location.accuracy?.toFixed(0)}m)` : locationError ? '⚠️ Location unavailable — you can still clock in' : '📍 Getting your location...'}
