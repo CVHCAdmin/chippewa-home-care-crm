@@ -44,6 +44,22 @@ CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_users_is_active ON users(is_active);
 
+-- Login Activity Tracking
+CREATE TABLE login_activity (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255),
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  success BOOLEAN NOT NULL DEFAULT false,
+  ip_address VARCHAR(45),
+  user_agent TEXT,
+  fail_reason VARCHAR(100),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_login_activity_user_id ON login_activity(user_id);
+CREATE INDEX idx_login_activity_created_at ON login_activity(created_at);
+CREATE INDEX idx_login_activity_email ON login_activity(email);
+
 -- Caregiver Availability/Schedule
 CREATE TABLE caregiver_schedules (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
