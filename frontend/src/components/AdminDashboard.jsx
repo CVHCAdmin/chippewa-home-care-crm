@@ -521,6 +521,17 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
                 ))}
               </div>
             ))}
+            <div className="mobile-more-drawer-section">
+              <div className="mobile-more-drawer-section-title">⚙️ Account</div>
+              <button
+                className="mobile-more-drawer-item"
+                onClick={() => { setMoreDrawerOpen(false); onLogout(); }}
+                style={{ color: '#DC2626' }}
+              >
+                <span className="mobile-more-drawer-item-icon" style={{ background: '#FEE2E2' }}>⏻</span>
+                Log Out
+              </button>
+            </div>
             <div style={{ height: '1rem' }} />
           </div>
 
