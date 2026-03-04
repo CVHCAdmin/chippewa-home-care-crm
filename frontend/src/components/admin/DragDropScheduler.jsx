@@ -322,7 +322,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                 <div style={{ padding:'10px 14px', background:'#FAFAFA', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <div>
                     <div style={{ fontWeight:700, fontSize:14, color:'#111827' }}>{cg.first_name} {cg.last_name}</div>
-                    <div style={{ fontSize:11, color:'#6B7280' }}>{weeklyHours(cg.id).toFixed(2)}h this week</div>
+                    <div style={{ fontSize:11, color:'#6B7280' }}>{Number(parseFloat(weeklyHours(cg.id) || 0)).toFixed(2)}h this week</div>
                   </div>
                   <button onClick={() => handleCellClick(cg.id, mobileDay)} style={{
                     padding:'6px 14px', borderRadius:8, border:'none',
@@ -335,7 +335,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                   shifts.map(s => {
                     const cl = clientMap[s.client_id];
                     const color = clientColor(s.client_id, clientMap);
-                    const durH = ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60).toFixed(2);
+                    const durH = Number(parseFloat((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60 || 0)).toFixed(2);
                     return (
                       <div key={s.id} onClick={() => openEditShift(s, weekDateStrs[mobileDay])} style={{
                         padding:'10px 14px', borderLeft:`4px solid ${color}`,
@@ -387,7 +387,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           )}
 
           {caregivers.map(cg => {
-            const hrs    = weeklyHours(cg.id).toFixed(2);
+            const hrs    = Number(parseFloat(weeklyHours(cg.id) || 0)).toFixed(2);
             const isOver = parseFloat(hrs) > 40;
             return (
               <div key={cg.id} style={{ display:'grid', gridTemplateColumns:'160px repeat(7, 1fr)', borderBottom:'1px solid #F3F4F6', background:'#fff', minHeight:72 }}>
@@ -424,7 +424,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                       {shifts.map(s => {
                         const client = clientMap[s.client_id];
                         const color  = clientColor(s.client_id, clientMap);
-                        const durH   = ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60).toFixed(2);
+                        const durH   = Number(parseFloat((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60 || 0)).toFixed(2);
                         return (
                           <div
                             key={s.id}
@@ -510,7 +510,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       {editShift && (() => {
         const color = clientColor(editShiftForm.clientId || editShift.client_id, clientMap);
         const durH  = editShiftForm.startTime && editShiftForm.endTime
-          ? ((timeToMinutes(editShiftForm.endTime) - timeToMinutes(editShiftForm.startTime)) / 60).toFixed(2)
+          ? Number(parseFloat((timeToMinutes(editShiftForm.endTime) - timeToMinutes(editShiftForm.startTime)) / 60 || 0)).toFixed(2)
           : '0';
         const isRecurring = editShift.day_of_week !== null && editShift.day_of_week !== undefined;
         return (

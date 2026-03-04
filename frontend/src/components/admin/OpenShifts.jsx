@@ -274,7 +274,7 @@ const OpenShifts = ({ token }) => {
                   <td>{shift.start_time?.slice(0,5)} - {shift.end_time?.slice(0,5)}</td>
                   <td>{shift.client_first_name} {shift.client_last_name}</td>
                   <td>{shift.care_type_name || '-'}</td>
-                  <td>${(parseFloat(shift.hourly_rate) || 0).toFixed(2)}/hr</td>
+                  <td>${Number(parseFloat(shift.hourly_rate || 0)).toFixed(2)}/hr</td>
                   <td>
                     {parseFloat(shift.bonus_amount) > 0 ? (
                       <span style={{ color: '#4caf50', fontWeight: 'bold' }}>+${shift.bonus_amount}</span>
@@ -363,7 +363,7 @@ const OpenShifts = ({ token }) => {
               <p><strong>Client:</strong> {currentShift.client_first_name} {currentShift.client_last_name}</p>
               <p><strong>Date:</strong> {new Date(currentShift.shift_date).toLocaleDateString()}</p>
               <p><strong>Time:</strong> {currentShift.start_time?.slice(0,5)} - {currentShift.end_time?.slice(0,5)}</p>
-              <p><strong>Rate:</strong> ${(parseFloat(currentShift.hourly_rate) || 0).toFixed(2)}/hr</p>
+              <p><strong>Rate:</strong> ${Number(parseFloat(currentShift.hourly_rate || 0)).toFixed(2)}/hr</p>
               {parseFloat(currentShift.bonus_amount) > 0 && (
                 <p><strong>Bonus:</strong> <span style={{ color: '#4caf50' }}>+${currentShift.bonus_amount}</span></p>
               )}

@@ -295,7 +295,7 @@ const ClaimsManagement = ({ token }) => {
                   <td>{claim.client_first_name} {claim.client_last_name}</td>
                   <td>{claim.payer_name}</td>
                   <td>{claim.service_date_from ? new Date(claim.service_date_from).toLocaleDateString() : '-'}</td>
-                  <td><strong>${(parseFloat(claim.charge_amount) || 0).toFixed(2)}</strong></td>
+                  <td><strong>${Number(parseFloat(claim.charge_amount || 0)).toFixed(2)}</strong></td>
                   <td>{getStatusBadge(claim.status)}</td>
                   <td>
                     <button 
@@ -380,7 +380,7 @@ const CreateClaimForm = ({ invoices, onSubmit, onCancel }) => {
           <option value="">Select Invoice</option>
           {invoices.map(inv => (
             <option key={inv.id} value={inv.id}>
-              {inv.invoice_number} - {inv.client_first_name} {inv.client_last_name} - ${(parseFloat(inv.total) || 0).toFixed(2)}
+              {inv.invoice_number} - {inv.client_first_name} {inv.client_last_name} - ${Number(parseFloat(inv.total || 0)).toFixed(2)}
             </option>
           ))}
         </select>
@@ -450,7 +450,7 @@ const UpdateStatusForm = ({ claim, onSubmit, onCancel }) => {
   return (
     <form onSubmit={handleSubmit}>
       <p><strong>Claim:</strong> {claim.claim_number}</p>
-      <p><strong>Amount:</strong> ${(parseFloat(claim.charge_amount) || 0).toFixed(2)}</p>
+      <p><strong>Amount:</strong> ${Number(parseFloat(claim.charge_amount || 0)).toFixed(2)}</p>
       
       <div className="form-group">
         <label>New Status</label>

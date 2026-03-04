@@ -167,7 +167,7 @@ const CaregiverHistory = ({ caregiverId, caregiverName, token, onBack }) => {
       const clients = new Set(list.map(e => e.client_id).filter(Boolean));
       setStats({
         totalShifts: list.length,
-        totalHours: (totalMins / 60).toFixed(2),
+        totalHours: Number(parseFloat(totalMins / 60 || 0)).toFixed(2),
         avgDuration: list.length ? Math.round(totalMins / list.length) : 0,
         clients,
       });
@@ -307,7 +307,7 @@ const CaregiverHistory = ({ caregiverId, caregiverName, token, onBack }) => {
                       <div>
                         <div style={{ fontSize: '0.72rem', color: '#9CA3AF', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Duration</div>
                         <div style={{ fontSize: '0.9rem', fontWeight: '600', color: '#374151' }}>
-                          {entry.duration_minutes ? `${formatDuration(entry.duration_minutes)} (${(entry.duration_minutes / 60).toFixed(2)}h)` : '—'}
+                          {entry.duration_minutes ? `${formatDuration(entry.duration_minutes)} (${Number(parseFloat(entry.duration_minutes / 60 || 0)).toFixed(2)}h)` : '—'}
                         </div>
                       </div>
                       <div>

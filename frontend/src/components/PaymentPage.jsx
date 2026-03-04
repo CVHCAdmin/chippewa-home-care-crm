@@ -120,17 +120,17 @@ const PaymentPage = () => {
           </div>
           <div style={styles.detailRow}>
             <span>Invoice Total:</span>
-            <span>${parseFloat(invoice?.total || 0).toFixed(2)}</span>
+            <span>${Number(parseFloat(invoice?.total || 0)).toFixed(2)}</span>
           </div>
           {parseFloat(invoice?.amountPaid || 0) > 0 && (
             <div style={styles.detailRow}>
               <span>Already Paid:</span>
-              <span style={{ color: '#27ae60' }}>-${parseFloat(invoice.amountPaid).toFixed(2)}</span>
+              <span style={{ color: '#27ae60' }}>-${Number(parseFloat(invoice.amountPaid || 0)).toFixed(2)}</span>
             </div>
           )}
           <div style={{ ...styles.detailRow, ...styles.totalRow }}>
             <span><strong>Amount Due:</strong></span>
-            <span style={styles.amountDue}>${parseFloat(invoice?.amountDue || 0).toFixed(2)}</span>
+            <span style={styles.amountDue}>${Number(parseFloat(invoice?.amountDue || 0)).toFixed(2)}</span>
           </div>
         </div>
 
@@ -148,7 +148,7 @@ const PaymentPage = () => {
             ...(processing ? styles.payButtonDisabled : {})
           }}
         >
-          {processing ? 'Processing...' : `Pay $${parseFloat(invoice?.amountDue || 0).toFixed(2)}`}
+          {processing ? 'Processing...' : `Pay $${Number(parseFloat(invoice?.amountDue || 0)).toFixed(2)}`}
         </button>
 
         <div style={styles.secureNotice}>
@@ -210,7 +210,7 @@ export const PaymentSuccess = () => {
         
         {payment?.success && (
           <div style={styles.details}>
-            <p>Amount Paid: <strong>${payment.amount?.toFixed(2)}</strong></p>
+            <p>Amount Paid: <strong>${Number(parseFloat(payment.amount || 0)).toFixed(2)}</strong></p>
             <p>A confirmation email has been sent to {payment.customerEmail}</p>
           </div>
         )}

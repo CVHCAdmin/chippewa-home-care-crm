@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 const API = import.meta.env.VITE_API_URL || '';
 
 const fmt$ = (n) => '$' + parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-const fmtH = (n) => parseFloat(n || 0).toFixed(1) + 'h';
+const fmtH = (n) => Number(parseFloat(n || 0)).toFixed(1) + 'h';
 
 export default function RevenueForecast({ token }) {
   const [data, setData] = useState(null);

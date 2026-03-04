@@ -31,7 +31,7 @@ const formatDate = (dateStr) => {
 
 const formatMoney = (amount) => {
   if (amount == null) return '—';
-  return `$${parseFloat(amount).toFixed(2)}`;
+  return `$${Number(parseFloat(amount || 0)).toFixed(2)}`;
 };
 
 const PortalInvoices = ({ token }) => {

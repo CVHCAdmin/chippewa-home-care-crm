@@ -304,7 +304,7 @@ const ExpenseManagement = ({ token }) => {
                         transition: 'width 0.3s'
                       }} />
                     </div>
-                    <small className="text-muted">{budget.percentage.toFixed(0)}% of {formatCurrency(budgets[category.id])} budget</small>
+                    <small className="text-muted">{Number(parseFloat(budget.percentage || 0)).toFixed(0)}% of {formatCurrency(budgets[category.id])} budget</small>
                   </div>
                 )}
               </div>
@@ -526,7 +526,7 @@ const ExpenseManagement = ({ token }) => {
                           }} />
                         </div>
                         <small style={{ color: status.status === 'over' ? '#dc3545' : '#666' }}>
-                          {status.percentage.toFixed(0)}% used ({formatCurrency(budget - spent)} remaining)
+                          {Number(parseFloat(status.percentage || 0)).toFixed(0)}% used ({formatCurrency(budget - spent)} remaining)
                         </small>
                       </div>
                     )}

@@ -29,7 +29,7 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
   // Helper to safely format currency (handles strings from PostgreSQL)
   const formatCurrency = (value) => {
     const num = parseFloat(value) || 0;
-    return num.toFixed(2);
+    return Number(parseFloat(num || 0)).toFixed(2);
   };
 
   if (loading) return (
@@ -129,7 +129,7 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
                   <td>
                     {cg.avg_satisfaction ? (
                       <>
-                        <span className="star-icon">★</span> {parseFloat(cg.avg_satisfaction).toFixed(2)}
+                        <span className="star-icon">★</span> {Number(parseFloat(cg.avg_satisfaction || 0)).toFixed(2)}
                       </>
                     ) : (
                       'N/A'

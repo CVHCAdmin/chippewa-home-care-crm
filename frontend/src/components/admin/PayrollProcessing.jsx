@@ -266,9 +266,9 @@ const PayrollProcessing = ({ token }) => {
   const filteredPayroll = payrollData.filter(p => filter === 'all' || p.status === filter);
 
   const totals = {
-    totalHours: payrollData.reduce((sum, p) => sum + (p.total_hours || 0), 0),
-    totalOvertimeHours: payrollData.reduce((sum, p) => sum + (p.overtime_hours || 0), 0),
-    totalMiles: payrollData.reduce((sum, p) => sum + parseFloat(p.total_miles || 0), 0),
+    totalHours: payrollData.reduce((sum, p) => sum + Number(parseFloat(p.total_hours || 0)), 0),
+    totalOvertimeHours: payrollData.reduce((sum, p) => sum + Number(parseFloat(p.overtime_hours || 0)), 0),
+    totalMiles: payrollData.reduce((sum, p) => sum + Number(parseFloat(p.total_miles || 0)), 0),
     totalGrossPay: payrollData.reduce((sum, p) => sum + (p.gross_pay || 0), 0),
     totalDeductions: payrollData.reduce((sum, p) => sum + (p.total_deductions || 0), 0),
     totalNetPay: payrollData.reduce((sum, p) => sum + (p.net_pay || 0), 0),
@@ -359,7 +359,7 @@ const PayrollProcessing = ({ token }) => {
                   { label:'Shifts with Discrepancies', val: discrepancies.totals.totalShifts, color:'#6366F1' },
                   { label:'Over Allotted', val: discrepancies.totals.overageCount + ' shifts', color:'#EF4444' },
                   { label:'Under Allotted', val: discrepancies.totals.underageCount + ' shifts', color:'#F59E0B' },
-                  { label:'Total Overage Cost', val: '$' + parseFloat(discrepancies.totals.totalOverageCost||0).toFixed(2), color:'#DC2626' },
+                  { label:'Total Overage Cost', val: '$' + Number(parseFloat(discrepancies.totals.totalOverageCost||0)).toFixed(2), color:'#DC2626' },
                 ].map(s => (
                   <div key={s.label} style={{ flex:1, minWidth:140, padding:'1rem', background:'#F9FAFB', borderRadius:12, borderLeft:`4px solid ${s.color}` }}>
                     <div style={{ fontSize:'1.25rem', fontWeight:800, color:s.color }}>{s.val}</div>
@@ -421,8 +421,8 @@ const PayrollProcessing = ({ token }) => {
       <div className="grid">
         <div className="stat-card">
           <h3>Total Hours</h3>
-          <div className="value">{totals.totalHours.toFixed(2)}</div>
-          <div className="stat-subtext">{totals.totalOvertimeHours.toFixed(2)} overtime</div>
+          <div className="value">{Number(parseFloat(totals.totalHours || 0)).toFixed(2)}</div>
+          <div className="stat-subtext">{Number(parseFloat(totals.totalOvertimeHours || 0)).toFixed(2)} overtime</div>
         </div>
         <div className="stat-card">
           <h3>Gross Pay</h3>
@@ -438,7 +438,7 @@ const PayrollProcessing = ({ token }) => {
         </div>
         <div className="stat-card">
           <h3>Mileage</h3>
-          <div className="value">{totals.totalMiles.toFixed(2)} mi</div>
+          <div className="value">{Number(parseFloat(totals.totalMiles || 0)).toFixed(2)} mi</div>
           <div className="stat-subtext">{formatCurrency(totals.totalMileageReimbursement)} reimbursement</div>
         </div>
       </div>
@@ -498,11 +498,11 @@ const PayrollProcessing = ({ token }) => {
             {filteredPayroll.map(payroll => (
               <tr key={payroll.caregiver_id}>
                 <td><strong>{payroll.first_name} {payroll.last_name}</strong></td>
-                <td>{payroll.regular_hours?.toFixed(2)}</td>
-                <td style={{ color: payroll.overtime_hours > 0 ? '#fd7e14' : undefined }}>{payroll.overtime_hours?.toFixed(2)}</td>
-                <td>{payroll.pto_hours?.toFixed(2) || '0.0'}</td>
-                <td>{parseFloat(payroll.total_miles || 0).toFixed(2)}</td>
-                <td>${payroll.hourly_rate?.toFixed(2)}</td>
+                <td>{Number(parseFloat(payroll.regular_hours || 0)).toFixed(2)}</td>
+                <td style={{ color: payroll.overtime_hours > 0 ? '#fd7e14' : undefined }}>{Number(parseFloat(payroll.overtime_hours || 0)).toFixed(2)}</td>
+                <td>{Number(parseFloat(payroll.pto_hours || 0)).toFixed(2)}</td>
+                <td>{Number(parseFloat(payroll.total_miles || 0)).toFixed(2)}</td>
+                <td>${Number(parseFloat(payroll.hourly_rate || 0)).toFixed(2)}</td>
                 <td style={{ color: '#28a745' }}>{formatCurrency(payroll.gross_pay)}</td>
                 <td style={{ color: '#dc3545' }}>{formatCurrency(payroll.total_deductions)}</td>
                 <td><strong style={{ color: '#2196f3' }}>{formatCurrency(payroll.net_pay)}</strong></td>
@@ -524,8 +524,8 @@ const PayrollProcessing = ({ token }) => {
       {filteredPayroll.length > 0 && (
         <div className="card" style={{ marginTop: '1rem', background: '#f5f5f5' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
-            <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Total Hours</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.3rem', fontWeight: 'bold' }}>{totals.totalHours.toFixed(2)}</p></div>
-            <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Overtime</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.3rem', fontWeight: 'bold', color: '#fd7e14' }}>{totals.totalOvertimeHours.toFixed(2)}</p></div>
+            <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Total Hours</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.3rem', fontWeight: 'bold' }}>{Number(parseFloat(totals.totalHours || 0)).toFixed(2)}</p></div>
+            <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Overtime</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.3rem', fontWeight: 'bold', color: '#fd7e14' }}>{Number(parseFloat(totals.totalOvertimeHours || 0)).toFixed(2)}</p></div>
             <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Gross Pay</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.3rem', fontWeight: 'bold', color: '#28a745' }}>{formatCurrency(totals.totalGrossPay)}</p></div>
             <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Deductions</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.3rem', fontWeight: 'bold', color: '#dc3545' }}>{formatCurrency(totals.totalDeductions)}</p></div>
             <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Net Pay</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.3rem', fontWeight: 'bold', color: '#2196f3' }}>{formatCurrency(totals.totalNetPay)}</p></div>
@@ -577,30 +577,30 @@ const PayrollProcessing = ({ token }) => {
                   <tbody>
                     <tr>
                       <td style={{ padding: '0.5rem', border: '1px solid #ddd' }}>Regular Hours</td>
-                      <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{selectedPayroll.regular_hours?.toFixed(2)}</td>
-                      <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>${selectedPayroll.hourly_rate?.toFixed(2)}</td>
+                      <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{Number(parseFloat(selectedPayroll.regular_hours || 0)).toFixed(2)}</td>
+                      <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>${Number(parseFloat(selectedPayroll.hourly_rate || 0)).toFixed(2)}</td>
                       <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{formatCurrency(selectedPayroll.regular_pay)}</td>
                     </tr>
                     {selectedPayroll.overtime_hours > 0 && (
                       <tr>
                         <td style={{ padding: '0.5rem', border: '1px solid #ddd' }}>Overtime (1.5x)</td>
-                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{selectedPayroll.overtime_hours?.toFixed(2)}</td>
-                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>${(selectedPayroll.hourly_rate * settings.overtimeRate).toFixed(2)}</td>
+                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{Number(parseFloat(selectedPayroll.overtime_hours || 0)).toFixed(2)}</td>
+                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>${Number(parseFloat(selectedPayroll.hourly_rate || 0) * parseFloat(settings.overtimeRate || 1.5)).toFixed(2)}</td>
                         <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{formatCurrency(selectedPayroll.overtime_pay)}</td>
                       </tr>
                     )}
                     {selectedPayroll.pto_hours > 0 && (
                       <tr>
                         <td style={{ padding: '0.5rem', border: '1px solid #ddd' }}>PTO</td>
-                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{selectedPayroll.pto_hours?.toFixed(2)}</td>
-                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>${selectedPayroll.hourly_rate?.toFixed(2)}</td>
+                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{Number(parseFloat(selectedPayroll.pto_hours || 0)).toFixed(2)}</td>
+                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>${Number(parseFloat(selectedPayroll.hourly_rate || 0)).toFixed(2)}</td>
                         <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{formatCurrency(selectedPayroll.pto_pay)}</td>
                       </tr>
                     )}
                     {selectedPayroll.mileage_reimbursement > 0 && (
                       <tr>
                         <td style={{ padding: '0.5rem', border: '1px solid #ddd' }}>Mileage Reimbursement</td>
-                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{parseFloat(selectedPayroll.total_miles || 0).toFixed(2)} mi</td>
+                        <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{Number(parseFloat(selectedPayroll.total_miles || 0)).toFixed(2)} mi</td>
                         <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>${settings.mileageRate}/mi</td>
                         <td style={{ padding: '0.5rem', textAlign: 'right', border: '1px solid #ddd' }}>{formatCurrency(selectedPayroll.mileage_reimbursement)}</td>
                       </tr>

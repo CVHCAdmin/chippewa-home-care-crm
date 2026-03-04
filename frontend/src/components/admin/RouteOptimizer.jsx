@@ -445,7 +445,7 @@ const RouteOptimizer = ({ token }) => {
   // Helper components & computed values
   // ════════════════════════════════════════════════════════════
   const totalUnits = routeStops.reduce((sum, s) => sum + s.serviceUnits, 0);
-  const totalHours = (totalUnits * 0.25).toFixed(2);
+  const totalHours = Number(parseFloat(totalUnits * 0.25 || 0)).toFixed(2);
   const cg = caregivers.find(c => c.id === selectedCaregiver);
   const cgHasCoords = cg && cg.latitude && cg.longitude;
 
@@ -675,7 +675,7 @@ const RouteOptimizer = ({ token }) => {
                           onChange={e => updateStop(idx, 'serviceUnits', e.target.value)} />
                       </div>
                       <div style={{ fontSize: '0.72rem', color: '#666', whiteSpace: 'nowrap' }}>
-                        {(stop.serviceUnits * 0.25).toFixed(2)}h
+                        {Number(parseFloat(stop.serviceUnits * 0.25 || 0)).toFixed(2)}h
                       </div>
                     </div>
                     {/* Remove */}
@@ -720,7 +720,7 @@ const RouteOptimizer = ({ token }) => {
                   ✅ Optimization saves {optimizedRoute.summary.milesSaved} mi &amp; {optimizedRoute.summary.drivingMinutesSaved} min driving
                 </span>
                 <span style={{ fontSize: '0.78rem', color: '#15803d' }}>
-                  💰 ${(optimizedRoute.summary.milesSaved * mileageRate).toFixed(2)} less in mileage
+                  💰 ${Number(parseFloat(optimizedRoute.summary.milesSaved * mileageRate || 0)).toFixed(2)} less in mileage
                 </span>
               </div>
             )}
@@ -877,9 +877,9 @@ const RouteOptimizer = ({ token }) => {
             {[
               { val: dailyRoutes.length, lbl: 'Caregivers', color: '#2563eb' },
               { val: dailyRoutes.reduce((s, r) => s + r.visits.length, 0), lbl: 'Visits', color: '#7c3aed' },
-              { val: `${dailyRoutes.reduce((s, r) => s + r.totalMiles, 0).toFixed(2)}`, lbl: 'Total Miles', color: '#ea580c' },
-              { val: `${(dailyRoutes.reduce((s, r) => s + r.totalServiceMinutes, 0) / 60).toFixed(2)}h`, lbl: 'Service', color: '#16a34a' },
-              { val: `$${(dailyRoutes.reduce((s, r) => s + r.totalMiles, 0) * mileageRate).toFixed(2)}`, lbl: 'Mileage $', color: '#0891b2' }
+              { val: `${Number(parseFloat(dailyRoutes.reduce((s, r) => s + r.totalMiles, 0) || 0)).toFixed(2)}`, lbl: 'Total Miles', color: '#ea580c' },
+              { val: `${Number(parseFloat(dailyRoutes.reduce((s, r) => s + r.totalServiceMinutes, 0) / 60 || 0)).toFixed(2)}h`, lbl: 'Service', color: '#16a34a' },
+              { val: `$${Number(parseFloat(dailyRoutes.reduce((s, r) => s + r.totalMiles, 0) * mileageRate || 0)).toFixed(2)}`, lbl: 'Mileage $', color: '#0891b2' }
             ].map((st, i) => <div key={i} style={s.stat(st.color)}><div style={s.statVal(st.color)}>{st.val}</div><div style={s.statLbl}>{st.lbl}</div></div>)}
           </div>
 
@@ -893,7 +893,7 @@ const RouteOptimizer = ({ token }) => {
                 <div style={{ display: 'flex', gap: '1rem' }}>
                   {[
                     { v: `${route.totalMiles} mi`, c: '#ea580c' },
-                    { v: `${(route.totalServiceMinutes / 60).toFixed(2)}h`, c: '#16a34a' },
+                    { v: `${Number(parseFloat(route.totalServiceMinutes / 60 || 0)).toFixed(2)}h`, c: '#16a34a' },
                     { v: `~${route.totalDriveMinutes}m`, c: '#2563eb' }
                   ].map((m, i) => <div key={i} style={{ textAlign: 'center' }}><div style={{ fontWeight: '800', fontSize: '1.05rem', color: m.c }}>{m.v}</div></div>)}
                 </div>
@@ -945,9 +945,9 @@ const RouteOptimizer = ({ token }) => {
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.85rem' }}>
             {[
               { val: hoursData.totals.totalCaregivers, lbl: 'Caregivers', color: '#2563eb' },
-              { val: hoursData.totals.totalScheduledHours.toFixed(2), lbl: 'Scheduled', color: '#7c3aed' },
-              { val: hoursData.totals.totalClockedHours.toFixed(2), lbl: 'Clocked', color: '#16a34a' },
-              { val: hoursData.totals.totalMiles.toFixed(0), lbl: 'Miles', color: '#ea580c' },
+              { val: Number(parseFloat(hoursData.totals.totalScheduledHours || 0)).toFixed(2), lbl: 'Scheduled', color: '#7c3aed' },
+              { val: Number(parseFloat(hoursData.totals.totalClockedHours || 0)).toFixed(2), lbl: 'Clocked', color: '#16a34a' },
+              { val: Number(parseFloat(hoursData.totals.totalMiles || 0)).toFixed(0), lbl: 'Miles', color: '#ea580c' },
               { val: `${hoursData.totals.totalCompletedVisits}/${hoursData.totals.totalScheduledVisits}`, lbl: 'Visits', color: '#0891b2' },
               { val: hoursData.totals.activeCaregivers, lbl: 'Active Now', color: '#16a34a' }
             ].map((st, i) => <div key={i} style={s.stat(st.color)}><div style={s.statVal(st.color)}>{st.val}</div><div style={s.statLbl}>{st.lbl}</div></div>)}
@@ -1055,8 +1055,8 @@ const RouteOptimizer = ({ token }) => {
                     <td style={{ ...s.td, fontWeight: '600' }}>{r.route_date}</td>
                     <td style={{ ...s.td, fontWeight: '600' }}>{r.caregiverName}</td>
                     <td style={s.td}>{r.stop_count || r.actual_stop_count}</td>
-                    <td style={{ ...s.td, fontWeight: '700', color: '#ea580c' }}>{parseFloat(r.total_miles || 0).toFixed(2)} mi</td>
-                    <td style={s.td}>{r.total_service_minutes ? `${(r.total_service_minutes / 60).toFixed(2)}h` : '—'}</td>
+                    <td style={{ ...s.td, fontWeight: '700', color: '#ea580c' }}>{Number(parseFloat(r.total_miles || 0)).toFixed(2)} mi</td>
+                    <td style={s.td}>{r.total_service_minutes ? `${Number(parseFloat(r.total_service_minutes / 60 || 0)).toFixed(2)}h` : '—'}</td>
                     <td style={s.td}>{r.total_drive_minutes ? `${r.total_drive_minutes}m` : '—'}</td>
                     <td style={s.td}>
                       <span style={s.badge(r.status === 'published' ? '#16a34a' : '#d97706')}>

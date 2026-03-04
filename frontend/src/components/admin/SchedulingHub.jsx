@@ -248,13 +248,16 @@ const SchedulingHub = ({ token }) => {
   ];
   const calculateHours = (start, end) => {
     if (!start || !end) return 0;
-    return ((new Date(`2000-01-01T${end}`) - new Date(`2000-01-01T${start}`)) / 3600000).toFixed(2);
+    return Number(parseFloat((new Date(`2000-01-01T${end}`) - new Date(`2000-01-01T${start}`)) / 3600000 || 0)).toFixed(2);
   };
   const getDayName = (dow) => ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dow] || 'Unknown';
-  const calculateTotalHours = (list) => list.reduce((t, s) => {
-    const hrs = parseFloat(calculateHours(s.start_time, s.end_time));
-    return t + (s.frequency === 'biweekly' ? hrs / 2 : hrs);
-  }, 0).toFixed(2);
+  const calculateTotalHours = (list) => {
+    const total = list.reduce((t, s) => {
+      const hrs = parseFloat(calculateHours(s.start_time, s.end_time));
+      return t + (s.frequency === 'biweekly' ? hrs / 2 : hrs);
+    }, 0);
+    return Number(parseFloat(total || 0)).toFixed(2);
+  };
   const groupSchedules = () => {
     const recurringByDay = {}, oneTimeByDate = {};
     caregiverSchedules.forEach(s => {
@@ -894,7 +897,7 @@ const SchedulingHub = ({ token }) => {
                   <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
                     {coverageData.caregivers.map(cg => (
                       <div key={cg.id} style={{ padding: '0.6rem', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <div style={{ flex: 1 }}><div style={{ fontWeight: '600', fontSize: '0.88rem' }}>{cg.name}</div><div style={{ fontSize: '0.78rem', color: '#666' }}>{parseFloat(cg.scheduledHours || 0).toFixed(2)}h / {cg.maxHours}h</div></div>
+                        <div style={{ flex: 1 }}><div style={{ fontWeight: '600', fontSize: '0.88rem' }}>{cg.name}</div><div style={{ fontSize: '0.78rem', color: '#666' }}>{Number(parseFloat(cg.scheduledHours || 0)).toFixed(2)}h / {cg.maxHours}h</div></div>
                         <div style={{ width: '90px' }}><div style={{ height: '7px', background: '#E5E7EB', borderRadius: '4px', overflow: 'hidden' }}><div style={{ width: `${Math.min(cg.utilizationPercent, 100)}%`, height: '100%', background: cg.utilizationPercent > 100 ? '#DC2626' : cg.utilizationPercent > 80 ? '#F59E0B' : '#10B981' }} /></div></div>
                         <div style={{ minWidth: '40px', textAlign: 'right', fontWeight: '600', fontSize: '0.82rem', color: cg.utilizationPercent > 100 ? '#DC2626' : cg.utilizationPercent > 80 ? '#F59E0B' : '#10B981' }}>{cg.utilizationPercent}%</div>
                       </div>
