@@ -6,6 +6,26 @@ const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
 
+// GET follow-ups due (must be before /:entityType/:entityId to avoid route conflict)
+router.get('/follow-ups/pending', auth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT cl.*,
+        CASE WHEN cl.entity_type = 'client'
+          THEN (SELECT first_name || ' ' || last_name FROM clients WHERE id = cl.entity_id)
+          ELSE (SELECT first_name || ' ' || last_name FROM users WHERE id = cl.entity_id)
+        END AS entity_name
+      FROM communication_log cl
+      WHERE cl.follow_up_done = FALSE
+        AND cl.follow_up_date IS NOT NULL
+        AND cl.follow_up_date <= CURRENT_DATE + INTERVAL '3 days'
+      ORDER BY cl.follow_up_date ASC
+      LIMIT 50
+    `);
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET logs for an entity
 router.get('/:entityType/:entityId', auth, async (req, res) => {
   const { entityType, entityId } = req.params;
@@ -23,26 +43,6 @@ router.get('/:entityType/:entityId', auth, async (req, res) => {
     q += ` ORDER BY cl.is_pinned DESC, cl.created_at DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`;
     params.push(parseInt(limit), parseInt(offset));
     const result = await db.query(q, params);
-    res.json(result.rows);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// GET follow-ups due
-router.get('/follow-ups/pending', auth, async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT cl.*,
-        CASE WHEN cl.entity_type = 'client'
-          THEN (SELECT first_name || ' ' || last_name FROM clients WHERE id = cl.entity_id)
-          ELSE (SELECT first_name || ' ' || last_name FROM users WHERE id = cl.entity_id)
-        END AS entity_name
-      FROM communication_log cl
-      WHERE cl.follow_up_done = FALSE
-        AND cl.follow_up_date IS NOT NULL
-        AND cl.follow_up_date <= CURRENT_DATE + INTERVAL '3 days'
-      ORDER BY cl.follow_up_date ASC
-      LIMIT 50
-    `);
     res.json(result.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
