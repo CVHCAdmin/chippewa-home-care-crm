@@ -291,7 +291,7 @@ const BillingDashboard = ({ token }) => {
         // Round to nearest 0.25 (15 minutes)
         hours = Math.round(hours * 4) / 4;
         
-        updated[index].hours = Number(parseFloat(hours || 0)).toFixed(2);
+        updated[index].hours = parseFloat(Number(parseFloat(hours || 0)).toFixed(2));
       }
     }
     

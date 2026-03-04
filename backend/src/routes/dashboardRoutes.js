@@ -45,7 +45,7 @@ router.get('/referrals', verifyToken, requireAdmin, async (req, res) => {
       `SELECT rs.name, rs.type, COUNT(c.id) as referral_count,
         SUM(CASE WHEN i.payment_status = 'paid' THEN i.total ELSE 0 END) as total_revenue
        FROM referral_sources rs
-       LEFT JOIN clients c ON rs.id = c.referred_by
+       LEFT JOIN clients c ON rs.id = c.referral_source_id
        LEFT JOIN invoices i ON c.id = i.client_id
        WHERE rs.is_active = true
        GROUP BY rs.id, rs.name, rs.type ORDER BY referral_count DESC`

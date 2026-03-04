@@ -15,7 +15,7 @@ router.get('/referral-sources', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT rs.*, COUNT(c.id) as referral_count FROM referral_sources rs
-       LEFT JOIN clients c ON rs.id = c.referred_by AND c.is_active = true
+       LEFT JOIN clients c ON rs.id = c.referral_source_id AND c.is_active = true
        WHERE rs.is_active = true GROUP BY rs.id ORDER BY referral_count DESC`
     );
     res.json(result.rows);

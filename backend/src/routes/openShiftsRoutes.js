@@ -117,7 +117,7 @@ router.post('/from-schedule/:scheduleId', auth, async (req, res) => {
       INSERT INTO open_shifts (client_id, schedule_id, shift_date, start_time, end_time, care_type_id, hourly_rate, bonus_amount, urgency, created_by)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
-    `, [s.client_id, scheduleId, s.scheduled_date, s.start_time, s.end_time, s.care_type_id, rate.rows[0]?.rate_amount || 20, bonusAmount || 0, urgency || 'normal', req.user.id]);
+    `, [s.client_id, scheduleId, s.date, s.start_time, s.end_time, s.care_type_id, rate.rows[0]?.rate_amount || 20, bonusAmount || 0, urgency || 'normal', req.user.id]);
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -141,7 +141,7 @@ router.post('/:id/claim', auth, async (req, res) => {
     const conflicts = await db.query(`
       SELECT id FROM schedules 
       WHERE caregiver_id = $1 
-      AND scheduled_date = $2
+      AND date = $2
       AND ((start_time, end_time) OVERLAPS ($3::time, $4::time))
       AND status != 'cancelled'
     `, [caregiverId, shift.rows[0].shift_date, shift.rows[0].start_time, shift.rows[0].end_time]);
@@ -190,7 +190,7 @@ router.post('/:id/approve', auth, async (req, res) => {
       `, [s.claimed_by, s.schedule_id]);
     } else {
       await db.query(`
-        INSERT INTO schedules (client_id, caregiver_id, scheduled_date, start_time, end_time, care_type_id, status)
+        INSERT INTO schedules (client_id, caregiver_id, date, start_time, end_time, care_type_id, status)
         VALUES ($1, $2, $3, $4, $5, $6, 'scheduled')
       `, [s.client_id, s.claimed_by, s.shift_date, s.start_time, s.end_time, s.care_type_id]);
     }

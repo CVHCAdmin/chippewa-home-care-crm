@@ -21,12 +21,13 @@ const PortalLogin = ({ onLogin }) => {
         body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
         if (response.status === 423) throw new Error('Account temporarily locked. Please try again in 15 minutes.');
         throw new Error(data.error || `Error ${response.status}`);
       }
+
+      const data = await response.json();
 
       onLogin(data.token, data.client);
     } catch (err) {

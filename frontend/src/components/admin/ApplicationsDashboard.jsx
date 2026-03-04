@@ -70,9 +70,9 @@ const ApplicationsDashboard = ({ token }) => {
       if (searchTerm) {
         const term = searchTerm.toLowerCase();
         return (
-          app.first_name.toLowerCase().includes(term) ||
-          app.last_name.toLowerCase().includes(term) ||
-          app.email.toLowerCase().includes(term)
+          (app.first_name || '').toLowerCase().includes(term) ||
+          (app.last_name || '').toLowerCase().includes(term) ||
+          (app.email || '').toLowerCase().includes(term)
         );
       }
       return true;

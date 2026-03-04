@@ -37,8 +37,11 @@ const PortalSetup = () => {
         body: JSON.stringify({ token, password }),
       });
 
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Setup failed');
+      }
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Setup failed');
 
       setSuccess(true);
     } catch (err) {

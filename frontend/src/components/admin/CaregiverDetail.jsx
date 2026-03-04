@@ -158,7 +158,7 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   };
 
   const resetPassword = async () => {
-    const newPwd = `CVHC${form.lastName.charAt(0).toUpperCase()}${Math.random().toString(36).slice(-6)}`;
+    const newPwd = `CVHC${(form.lastName || 'X').charAt(0).toUpperCase()}${Math.random().toString(36).slice(-6)}`;
     const r = await fetch(`${API_BASE_URL}/api/users/${caregiverId}/reset-password`, {
       method: 'POST', headers: hdr, body: JSON.stringify({ newPassword: newPwd })
     });

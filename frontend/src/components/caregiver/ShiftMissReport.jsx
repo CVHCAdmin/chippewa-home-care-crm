@@ -24,9 +24,10 @@ const ShiftMissReport = ({ token, userId, onClose }) => {
       const res = await fetch(`${API_BASE_URL}/api/emergency/my-shifts`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load shifts');
       const data = await res.json();
       setUpcomingShifts(Array.isArray(data) ? data : []);
-    } catch {}
+    } catch(e) { console.error('[ShiftMissReport]', e.message); }
     finally { setLoading(false); }
   };
 

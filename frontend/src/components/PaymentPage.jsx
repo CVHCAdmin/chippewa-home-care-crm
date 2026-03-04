@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+import { API_BASE_URL } from '../config';
 
 const PaymentPage = () => {
   const { invoiceId } = useParams();
@@ -182,7 +182,8 @@ export const PaymentSuccess = () => {
 
   const verifyPayment = async () => {
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5000'}/api/stripe/verify-payment/${sessionId}`);
+      const response = await fetch(`${API_BASE_URL}/api/stripe/verify-payment/${sessionId}`);
+      if (!response.ok) throw new Error('Payment verification failed');
       const data = await response.json();
       setPayment(data);
     } catch (err) {
