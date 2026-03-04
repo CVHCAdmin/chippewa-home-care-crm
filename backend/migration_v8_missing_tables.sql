@@ -313,6 +313,18 @@ CREATE TABLE IF NOT EXISTS training_records (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- If training_records already existed, ensure all expected columns are present
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS training_type VARCHAR(255);
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS completion_date DATE;
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS expiration_date DATE;
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS certification_number VARCHAR(100);
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS provider VARCHAR(255);
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'completed';
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS recorded_by UUID REFERENCES users(id);
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE training_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_training_records_caregiver ON training_records(caregiver_id);
 CREATE INDEX IF NOT EXISTS idx_training_records_expiry ON training_records(expiration_date);
 
