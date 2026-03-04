@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS login_activity (
   created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_login_activity_email      ON login_activity(email);
-CREATE INDEX idx_login_activity_user_id    ON login_activity(user_id);
-CREATE INDEX idx_login_activity_created_at ON login_activity(created_at DESC);
-CREATE INDEX idx_login_activity_success    ON login_activity(success);
+CREATE INDEX IF NOT EXISTS idx_login_activity_email      ON login_activity(email);
+CREATE INDEX IF NOT EXISTS idx_login_activity_user_id    ON login_activity(user_id);
+CREATE INDEX IF NOT EXISTS idx_login_activity_created_at ON login_activity(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_login_activity_success    ON login_activity(success);

@@ -283,7 +283,7 @@ CREATE TABLE performance_ratings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   caregiver_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  rating_date DATE DEFAULT TODAY(),
+  rating_date DATE DEFAULT CURRENT_DATE,
   satisfaction_score INTEGER CHECK (satisfaction_score >= 1 AND satisfaction_score <= 5),
   punctuality_score INTEGER CHECK (punctuality_score >= 1 AND punctuality_score <= 5),
   professionalism_score INTEGER CHECK (professionalism_score >= 1 AND professionalism_score <= 5),
