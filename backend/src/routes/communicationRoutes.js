@@ -29,6 +29,9 @@ router.get('/follow-ups/pending', auth, async (req, res) => {
 // GET logs for an entity
 router.get('/:entityType/:entityId', auth, async (req, res) => {
   const { entityType, entityId } = req.params;
+  if (!entityId || entityId === 'null' || entityId === 'undefined') {
+    return res.json([]);
+  }
   const { type, limit = 50, offset = 0 } = req.query;
   try {
     let q = `

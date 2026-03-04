@@ -217,6 +217,13 @@ router.post('/validate-claims', auth, requireAdmin, async (req, res) => {
 // ─── GET OPEN VALIDATION ISSUES ───────────────────────────────────────────────
 router.get('/issues', auth, requireAdmin, async (req, res) => {
   try {
+    // Check if validation_log table exists before querying
+    const tableCheck = await db.query(`
+      SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'validation_log')
+    `);
+    if (!tableCheck.rows[0].exists) {
+      return res.json([]);
+    }
     const result = await db.query(`
       SELECT vl.*
       FROM validation_log vl

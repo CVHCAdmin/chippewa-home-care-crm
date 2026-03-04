@@ -34,12 +34,14 @@ export default function CommunicationLog({ token, entityType, entityId, entityNa
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
   const load = async () => {
+    if (!entityId) { setLogs([]); setLoading(false); return; }
     setLoading(true);
     try {
       const params = new URLSearchParams({ limit: 100 });
       if (filterType) params.set('type', filterType);
       const r = await fetch(`${API}/api/communication-log/${entityType}/${entityId}?${params}`, { headers });
-      setLogs(await r.json());
+      const data = await r.json();
+      setLogs(Array.isArray(data) ? data : []);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
@@ -48,7 +50,7 @@ export default function CommunicationLog({ token, entityType, entityId, entityNa
     try {
       const r = await fetch(`${API}/api/communication-log/follow-ups/pending`, { headers });
       const data = await r.json();
-      setFollowUps(data.filter(f => f.entity_id === entityId));
+      setFollowUps(Array.isArray(data) ? data.filter(f => f.entity_id === entityId) : []);
     } catch (e) {}
   };
 

@@ -1552,9 +1552,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                             {item.time_range && ` ${item.time_range}`}
                           </div>
                         </td>
-                        <td>{parseFloat(item.hours).toFixed(2)}</td>
-                        <td>{parseFloat(item.rate).toFixed(2)}</td>
-                        <td>{parseFloat(item.amount).toFixed(2)}</td>
+                        <td>{parseFloat(item.hours || 0).toFixed(2)}</td>
+                        <td>{parseFloat(item.rate || 0).toFixed(2)}</td>
+                        <td>{parseFloat(item.amount || 0).toFixed(2)}</td>
                       </tr>
                     ))
                   ) : (
@@ -1566,9 +1566,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                           {formatDate(selectedInvoice.billing_period_start)} - {formatDate(selectedInvoice.billing_period_end)}
                         </div>
                       </td>
-                      <td>{selectedInvoice.total_hours?.toFixed(2) || '0.00'}</td>
-                      <td>{selectedInvoice.line_items?.[0]?.rate?.toFixed(2) || '33.00'}</td>
-                      <td>{parseFloat(selectedInvoice.total).toFixed(2)}</td>
+                      <td>{parseFloat(selectedInvoice.total_hours || 0).toFixed(2)}</td>
+                      <td>{parseFloat(selectedInvoice.line_items?.[0]?.rate || 33).toFixed(2)}</td>
+                      <td>{parseFloat(selectedInvoice.total || 0).toFixed(2)}</td>
                     </tr>
                   )}
                 </tbody>
@@ -1579,16 +1579,16 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <div className="invoice-totals-box">
                   <div className="invoice-total-row">
                     <span className="invoice-total-label">Sub Total</span>
-                    <span className="invoice-total-value">{parseFloat(selectedInvoice.subtotal || selectedInvoice.total).toFixed(2)}</span>
+                    <span className="invoice-total-value">{parseFloat(selectedInvoice.subtotal || selectedInvoice.total || 0).toFixed(2)}</span>
                   </div>
                   <div className="invoice-total-row">
                     <span className="invoice-total-label">Total</span>
-                    <span className="invoice-total-value"><strong>${parseFloat(selectedInvoice.total).toFixed(2)}</strong></span>
+                    <span className="invoice-total-value"><strong>${parseFloat(selectedInvoice.total || 0).toFixed(2)}</strong></span>
                   </div>
                   {parseFloat(selectedInvoice.amount_paid || 0) > 0 && (
                     <div className="invoice-total-row">
                       <span className="invoice-total-label">Amount Paid</span>
-                      <span className="invoice-total-value" style={{ color: '#28a745' }}>-${parseFloat(selectedInvoice.amount_paid).toFixed(2)}</span>
+                      <span className="invoice-total-value" style={{ color: '#28a745' }}>-${parseFloat(selectedInvoice.amount_paid || 0).toFixed(2)}</span>
                     </div>
                   )}
                   <div className="invoice-total-row grand-total">
