@@ -117,11 +117,11 @@ router.post('/run-check', auth, async (req, res) => {
         AND (CURRENT_TIME - s.start_time) < INTERVAL '4 hours'
         -- no clock-in today
         AND NOT EXISTS (
-          SELECT 1 FROM time_tracking tt
+          SELECT 1 FROM time_entries tt
           WHERE tt.caregiver_id = s.caregiver_id
             AND tt.client_id = s.client_id
-            AND DATE(tt.clock_in) = CURRENT_DATE
-            AND ABS(EXTRACT(EPOCH FROM (tt.clock_in::time - s.start_time)) / 60) < 120
+            AND DATE(tt.start_time) = CURRENT_DATE
+            AND ABS(EXTRACT(EPOCH FROM (tt.start_time::time - s.start_time)) / 60) < 120
         )
         -- not already alerted today
         AND NOT EXISTS (
@@ -139,7 +139,7 @@ router.post('/run-check', auth, async (req, res) => {
       await db.query(`
         INSERT INTO noshow_alerts (schedule_id, caregiver_id, client_id, shift_date, expected_start, sms_sent)
         VALUES ($1,$2,$3,$4,$5, FALSE)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (schedule_id, shift_date) DO NOTHING
       `, [row.schedule_id, row.caregiver_id, row.client_id, row.shift_date, row.expected_start]);
 
       let smsSent = false;

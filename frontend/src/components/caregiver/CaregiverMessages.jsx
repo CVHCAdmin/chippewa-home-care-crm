@@ -110,9 +110,9 @@ const CaregiverMessages = ({ token, onClose }) => {
           const unread = parseInt(thread.unread_count) || 0;
           const others = thread.other_participants || [];
           const sender = thread.is_broadcast ? 'Admin Broadcast'
-            : others.length === 1 ? `${others[0].first_name} ${others[0].last_name}`
-            : others.length === 0 ? thread.sender_first + ' ' + thread.sender_last
-            : `${others[0].first_name} +${others.length - 1}`;
+            : others.length === 1 ? `${others[0]?.first_name || ''} ${others[0]?.last_name || ''}`.trim()
+            : !others.length ? (thread.sender_first || '') + ' ' + (thread.sender_last || '')
+            : `${others[0]?.first_name || 'User'} +${others.length - 1}`;
 
           return (
             <div key={thread.id} onClick={() => openThread(thread)}

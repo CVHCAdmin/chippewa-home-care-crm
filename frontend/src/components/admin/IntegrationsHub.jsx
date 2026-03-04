@@ -366,12 +366,13 @@ const IntegrationsHub = ({ token }) => {
               <input type="file" accept=".csv" style={{display:'none'}} onChange={async e=>{
                 const file = e.target.files[0]; if(!file) return;
                 const text = await file.text();
-                const lines = text.split('\n'); const headers = lines[0].split(',').map(h=>h.trim());
+                const lines = text.split('\n'); if(!lines[0]) return toast('CSV file is empty','error');
+                const csvHeaders = lines[0].split(',').map(h=>h.trim());
                 const rows = lines.slice(1).filter(l=>l.trim()).map(l=>{
                   const vals = l.split(','); const obj={};
-                  headers.forEach((h,i)=>obj[h]=vals[i]?.trim()||''); return obj;
+                  csvHeaders.forEach((h,i)=>obj[h]=vals[i]?.trim()||''); return obj;
                 });
-                const r = await fetch(`${API_BASE_URL}/api/authorizations/import-csv`,{method:'POST',headers,body:JSON.stringify({rows})});
+                const r = await fetch(`${API_BASE_URL}/api/authorizations/import-csv`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({rows})});
                 const d = await r.json();
                 if(r.ok){toast(`Imported ${d.imported} authorizations`,'success');get('/api/authorizations').then(d=>d&&setAuthorizations(d));}
                 else toast(d.error||'Import failed','error');

@@ -399,7 +399,7 @@ const HelpPanel = ({ isOpen, onClose, currentPage = '' }) => {
                   style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.875rem 1rem', marginBottom: '0.5rem', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: '10px', cursor: 'pointer', transition: 'all 0.15s' }}>
                   <div style={{ fontWeight: '600', color: '#111827', fontSize: '0.9rem', marginBottom: '0.2rem' }}>{article.title}</div>
                   <div style={{ fontSize: '0.8rem', color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {article.content.split('\n')[0].slice(0, 80)}...
+                    {(article.content || '').split('\n')[0]?.slice(0, 80)}...
                   </div>
                 </button>
               ))}

@@ -476,7 +476,7 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
                       <td style={{ padding: '0.5rem 0.75rem', verticalAlign: 'top' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                           <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: cgColor(cg.id) }} />
-                          <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>{cg.name.split(' ')[0]}</span>
+                          <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>{(cg.name || '').split(' ')[0]}</span>
                         </div>
                       </td>
                       {[0,1,2,3,4,5,6].map(day => {

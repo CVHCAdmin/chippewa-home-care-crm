@@ -73,7 +73,7 @@ const RULES = {
     const bg = await db.query(`
       SELECT * FROM background_checks
       WHERE caregiver_id = $1
-        AND (expiry_date IS NULL OR expiry_date > CURRENT_DATE)
+        AND (expiration_date IS NULL OR expiration_date > CURRENT_DATE)
         AND status = 'clear'
       LIMIT 1
     `, [claim.caregiver_id || claim.created_by]);

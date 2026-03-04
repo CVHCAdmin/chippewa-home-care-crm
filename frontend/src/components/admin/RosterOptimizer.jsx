@@ -538,7 +538,7 @@ export default function RosterOptimizer({ token }) {
                       <td style={{ padding: '0.4rem 0.75rem', verticalAlign: 'top' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                           <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: cgColorFor(cg.id), flexShrink: 0 }} />
-                          <span style={{ fontSize: '0.83rem', fontWeight: '600', whiteSpace: 'nowrap' }}>{cg.name.split(' ')[0]}</span>
+                          <span style={{ fontSize: '0.83rem', fontWeight: '600', whiteSpace: 'nowrap' }}>{(cg.name || '').split(' ')[0]}</span>
                         </div>
                         <div style={{ fontSize: '0.68rem', color: '#9CA3AF', paddingLeft: '1.1rem' }}>{cg.totalHours}/{cg.targetHours}h</div>
                       </td>

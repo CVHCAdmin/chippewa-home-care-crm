@@ -156,9 +156,9 @@ const MessageBoard = ({ token }) => {
             const unread = parseInt(thread.unread_count) || 0;
             const others = thread.other_participants || [];
             const label = thread.is_broadcast ? '📢 All Staff'
-              : others.length === 0 ? 'Just you'
-              : others.length === 1 ? `${others[0].first_name} ${others[0].last_name}`
-              : `${others[0].first_name} +${others.length - 1} others`;
+              : !others.length ? 'Just you'
+              : others.length === 1 ? `${others[0]?.first_name || ''} ${others[0]?.last_name || ''}`.trim()
+              : `${others[0]?.first_name || 'User'} +${others.length - 1} others`;
 
             return (
               <div key={thread.id} onClick={() => openThread(thread)}

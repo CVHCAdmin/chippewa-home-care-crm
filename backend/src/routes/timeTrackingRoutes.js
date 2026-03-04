@@ -56,8 +56,8 @@ router.post('/check-warnings', verifyToken, async (req, res) => {
         const { sendPushToUser } = require('./pushNotificationRoutes');
         const scheduledEnd = new Date(new Date(te.start_time).getTime() + te.allotted_minutes * 60000);
         const endTime = scheduledEnd.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        sendPushToUser(req.user.id, { title: '⏰ 15-Minute Warning', body: `Shift with ${te.client_first} ${te.client_last} ends at ${endTime}. Start wrapping up!`, icon: '/icon-192.png', tag: 'shift-warning-15min', data: { type: 'shift_warning', timeEntryId } });
-      } catch {}
+        sendPushToUser(req.user.id, { title: '⏰ 15-Minute Warning', body: `Shift with ${te.client_first} ${te.client_last} ends at ${endTime}. Start wrapping up!`, icon: '/icon-192.png', tag: 'shift-warning-15min', data: { type: 'shift_warning', timeEntryId } }).catch(e => console.error('[Push 15min warning]', e.message));
+      } catch(e) { console.error('[Push setup]', e.message); }
       return res.json({ warning: true, minutesRemaining: Math.round(minutesRemaining), message: '15 minutes remaining — start wrapping up' });
     }
     if (minutesElapsed > te.allotted_minutes + 5) {
@@ -184,8 +184,8 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       let clientName = null;
       if (clientId) { const cl = await db.query('SELECT first_name, last_name FROM clients WHERE id=$1', [clientId]); if (cl.rows[0]) clientName = `${cl.rows[0].first_name} ${cl.rows[0].last_name}`; }
       const startTimeFormatted = new Date(result.rows[0].start_time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      sendPushToUser(req.user.id, { title: '✅ Clocked In', body: `You are clocked in${clientName ? ` for ${clientName}` : ''}. Started at ${startTimeFormatted}.`, icon: '/icon-192.png', tag: `clock-in-${entryId}`, data: { type: 'clock_in', timeEntryId: entryId } });
-    } catch {}
+      sendPushToUser(req.user.id, { title: '✅ Clocked In', body: `You are clocked in${clientName ? ` for ${clientName}` : ''}. Started at ${startTimeFormatted}.`, icon: '/icon-192.png', tag: `clock-in-${entryId}`, data: { type: 'clock_in', timeEntryId: entryId } }).catch(e => console.error('[Push clock-in]', e.message));
+    } catch(e) { console.error('[Push setup]', e.message); }
     res.status(201).json({ id: result.rows[0].id, client_id: result.rows[0].client_id, start_time: result.rows[0].start_time });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -213,9 +213,9 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
       const { sendPushToUser } = require('./pushNotificationRoutes');
       const clientName = timeEntry.rows[0].client_first_name ? `${timeEntry.rows[0].client_first_name} ${timeEntry.rows[0].client_last_name}` : null;
       const durationStr = durationMinutes >= 60 ? `${Math.floor(durationMinutes/60)}h ${durationMinutes%60}m` : `${durationMinutes}m`;
-      sendPushToUser(req.user.id, { title: '🕐 Clocked Out', body: `Shift complete${clientName ? ` — ${clientName}` : ''}. Duration: ${durationStr}.`, icon: '/icon-192.png', tag: `clock-out-${req.params.id}`, data: { type: 'clock_out' } });
-    } catch {}
-    try { const { createEVVFromTimeEntry } = require('./sandataRoutes'); createEVVFromTimeEntry(req.params.id).catch(e => console.error('[EVV auto-create]', e.message)); } catch(e) {}
+      sendPushToUser(req.user.id, { title: '🕐 Clocked Out', body: `Shift complete${clientName ? ` — ${clientName}` : ''}. Duration: ${durationStr}.`, icon: '/icon-192.png', tag: `clock-out-${req.params.id}`, data: { type: 'clock_out' } }).catch(e => console.error('[Push clock-out]', e.message));
+    } catch(e) { console.error('[Push setup]', e.message); }
+    try { const { createEVVFromTimeEntry } = require('./sandataRoutes'); createEVVFromTimeEntry(req.params.id).catch(e => console.error('[EVV auto-create]', e.message)); } catch(e) { console.error('[EVV require]', e.message); }
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
