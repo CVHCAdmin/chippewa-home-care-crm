@@ -13,6 +13,7 @@ const ADLTracking = ({ token }) => {
   const [activeTab, setActiveTab] = useState('logs');
   const [showAddReqModal, setShowAddReqModal] = useState(false);
   const [showLogModal, setShowLogModal] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [dateRange, setDateRange] = useState({
     start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     end: new Date().toISOString().split('T')[0]

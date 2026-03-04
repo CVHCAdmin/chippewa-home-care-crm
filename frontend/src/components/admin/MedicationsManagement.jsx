@@ -14,6 +14,7 @@ const MedicationsManagement = ({ token }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showLogModal, setShowLogModal] = useState(false);
   const [editingMed, setEditingMed] = useState(null);
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     const fn = (e) => { if (isDirty) { e.preventDefault(); e.returnValue = "You have unsaved changes. Leave anyway?"; return e.returnValue; } };

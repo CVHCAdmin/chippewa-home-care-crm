@@ -44,16 +44,17 @@ const AuditLogs = ({ token }) => {
         }
       );
       const data = await response.json();
-      setLogs(data.logs || []);
-      
+      const logsList = Array.isArray(data.logs) ? data.logs : [];
+      setLogs(logsList);
+
       // Calculate stats
-      const uniqueUsers = new Set(data.logs.map(log => log.user_id)).size;
-      const dataChanges = data.logs.filter(log => log.action === 'update' || log.action === 'create' || log.action === 'delete').length;
-      const accessEvents = data.logs.filter(log => log.action === 'login' || log.action === 'access').length;
-      const suspiciousActivity = data.logs.filter(log => log.flags && log.flags.length > 0).length;
+      const uniqueUsers = new Set(logsList.map(log => log.user_id)).size;
+      const dataChanges = logsList.filter(log => log.action === 'update' || log.action === 'create' || log.action === 'delete').length;
+      const accessEvents = logsList.filter(log => log.action === 'login' || log.action === 'access').length;
+      const suspiciousActivity = logsList.filter(log => log.flags && log.flags.length > 0).length;
 
       setStats({
-        totalEvents: data.logs.length,
+        totalEvents: logsList.length,
         uniqueUsers,
         dataChanges,
         accessEvents,
@@ -393,7 +394,7 @@ const AuditLogs = ({ token }) => {
 
                       <div style={{ fontSize: '0.9rem', color: '#666' }}>
                         <p style={{ margin: '0.25rem 0' }}>
-                          <strong>{log.entity_type.replace('_', ' ').toUpperCase()}</strong>
+                          <strong>{(log.entity_type || '').replace('_', ' ').toUpperCase()}</strong>
                           {' '} (ID: {log.entity_id})
                         </p>
                         <p style={{ margin: '0.25rem 0' }}>
