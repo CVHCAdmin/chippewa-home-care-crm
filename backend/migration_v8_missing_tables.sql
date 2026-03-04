@@ -803,6 +803,17 @@ CREATE TABLE IF NOT EXISTS route_plans (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- If route_plans already existed, ensure all expected columns are present
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS plan_date DATE;
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS total_distance DECIMAL(10,2);
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS total_time INTEGER;
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS stop_count INTEGER DEFAULT 0;
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'draft';
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id);
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_route_plans_caregiver ON route_plans(caregiver_id);
 CREATE INDEX IF NOT EXISTS idx_route_plans_date ON route_plans(plan_date);
 
@@ -818,6 +829,12 @@ CREATE TABLE IF NOT EXISTS route_plan_stops (
   time_from_prev INTEGER,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- If route_plan_stops already existed, ensure all expected columns are present
+ALTER TABLE route_plan_stops ADD COLUMN IF NOT EXISTS scheduled_visit_id UUID;
+ALTER TABLE route_plan_stops ADD COLUMN IF NOT EXISTS distance_from_prev DECIMAL(10,2);
+ALTER TABLE route_plan_stops ADD COLUMN IF NOT EXISTS time_from_prev INTEGER;
+
 CREATE INDEX IF NOT EXISTS idx_route_stops_plan ON route_plan_stops(route_plan_id);
 
 -- ═══════════════════════════════════════════════════════════════════════════════
@@ -897,6 +914,15 @@ CREATE TABLE IF NOT EXISTS authorizations (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- If authorizations already existed, ensure all expected columns are present
+ALTER TABLE authorizations ADD COLUMN IF NOT EXISTS authorization_number VARCHAR(100);
+ALTER TABLE authorizations ADD COLUMN IF NOT EXISTS payer_name VARCHAR(255);
+ALTER TABLE authorizations ADD COLUMN IF NOT EXISTS total_units DECIMAL(10,2);
+ALTER TABLE authorizations ADD COLUMN IF NOT EXISTS used_units DECIMAL(10,2) DEFAULT 0;
+ALTER TABLE authorizations ADD COLUMN IF NOT EXISTS remaining_units DECIMAL(10,2);
+ALTER TABLE authorizations ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'active';
+
 CREATE INDEX IF NOT EXISTS idx_authorizations_client ON authorizations(client_id);
 CREATE INDEX IF NOT EXISTS idx_authorizations_status ON authorizations(status);
 
