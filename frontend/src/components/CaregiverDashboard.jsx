@@ -80,6 +80,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [showMoreDrawer, setShowMoreDrawer] = useState(false);
   const [showAllClients, setShowAllClients] = useState(false);
 
+  // Ref to hold a setter so background geo can push updates into geofence check
+  const bgLocationRef = React.useRef(null);
+
   useEffect(() => {
     loadData();
     // GPS tracking handled by useGeolocation hook (watch: true)
@@ -89,8 +92,16 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       notificationTitle: 'CVHC HomeCare',
       notificationText: 'Monitoring location for auto clock-in',
       onLocation: (loc) => {
-        // Background location updates feed into the geofence check
-        // The geofence polling useEffect will pick up the latest position
+        // Background location updates trigger a geofence check using latest refs
+        if (loc && (loc.latitude || loc.lat)) {
+          bgLocationRef.current = loc;
+          runGeofenceCheck(
+            loc,
+            activeSessionRef.current,
+            clientsRef.current,
+            schedulesRef.current
+          );
+        }
       }
     });
     return () => {
@@ -367,8 +378,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // Start geofence polling when location is available
   useEffect(() => {
     if (!location) return;
-    // Run immediately on location change
-    runGeofenceCheck(location, activeSession, clients, schedules);
+    // Run immediately on location change — use refs to avoid stale closures
+    runGeofenceCheck(
+      locationRef.current,
+      activeSessionRef.current,
+      clientsRef.current,
+      schedulesRef.current
+    );
     // Set up interval using refs so it always reads the latest state (no stale closure)
     if (!geofenceIntervalRef.current) {
       geofenceIntervalRef.current = setInterval(() => {

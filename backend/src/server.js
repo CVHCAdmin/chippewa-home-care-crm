@@ -78,7 +78,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 5,
+  windowMs: 15 * 60 * 1000, max: 15,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' }
 });
 app.use('/api/auth/login', authLimiter);
