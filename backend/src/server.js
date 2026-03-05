@@ -51,7 +51,7 @@ app.use(cors({
     const allowed = [...new Set([...defaultOrigins, ...extraOrigins])];
 
     if (!origin || allowed.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`));
+    callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
@@ -237,7 +237,7 @@ app.use((err, req, res, next) => {
 
 // ============ ONE-TIME MIGRATION ENDPOINT ============
 // Hit GET /api/run-migration-v7 once to create new tables, then this can be removed
-app.get('/api/run-migration-v7', async (req, res) => {
+app.get('/api/run-migration-v7', verifyToken, async (req, res) => {
   const db = require('./db');
   try {
     await db.query(`
@@ -335,8 +335,12 @@ app.get('/api/run-migration-v7', async (req, res) => {
 
 // ============ START SERVER ============
 const agencyName = process.env.AGENCY_NAME || 'HomeCare CRM';
-app.listen(port, () => {
-  console.log(`🚀 ${agencyName} API running on port ${port}`);
-  console.log(`📊 Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
-  if (!process.env.ALLOWED_ORIGINS) console.warn('⚠️  ALLOWED_ORIGINS not set — CORS will block all browser requests in production!');
-});
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`🚀 ${agencyName} API running on port ${port}`);
+    console.log(`📊 Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+    if (!process.env.ALLOWED_ORIGINS) console.warn('⚠️  ALLOWED_ORIGINS not set — CORS will block all browser requests in production!');
+  });
+}
+
+module.exports = app;

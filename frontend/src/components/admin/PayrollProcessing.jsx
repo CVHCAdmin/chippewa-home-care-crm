@@ -68,6 +68,7 @@ const PayrollProcessing = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/caregivers`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) { setCaregivers([]); return; }
       setCaregivers(await response.json());
     } catch (error) {
       console.error('Failed to load caregivers:', error);

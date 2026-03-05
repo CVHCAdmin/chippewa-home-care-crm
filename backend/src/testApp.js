@@ -95,6 +95,16 @@ app.use('/api/failsafe',          verifyToken, require('./routes/failsafeRoutes'
 app.use('/api/edi',               verifyToken, require('./routes/ediRoutes'));
 app.use('/api/gusto',             verifyToken, require('./routes/gustoRoutes'));
 app.use('/api/push',              verifyToken, require('./routes/pushNotificationRoutes').router);
+app.use('/api/communication-log', verifyToken, require('./routes/communicationRoutes'));
+app.use('/api/no-show',           verifyToken, require('./routes/noShowRoutes'));
+app.use('/api/forms',             verifyToken, require('./routes/formBuilderRoutes'));
+app.use('/api/forecast',          verifyToken, require('./routes/forecastRoutes'));
+app.use('/api/optimizer',         verifyToken, require('./routes/optimizerRoutes'));
+app.use('/api/roster-optimizer',  verifyToken, require('./routes/rosterOptimizerRoutes'));
+app.use('/api/client-portal', (req, res, next) => {
+  if (req.path.startsWith('/admin')) return verifyToken(req, res, next);
+  next();
+}, require('./routes/clientPortalRoutes'));
 
 // Explicit path workarounds
 app.get('/api/schedules-all', verifyToken, async (req, res) => {

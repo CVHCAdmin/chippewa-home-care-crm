@@ -74,11 +74,13 @@ router.put('/:id', auth, async (req, res) => {
     if (followUpDone !== undefined) { params.push(followUpDone); fields.push(`follow_up_done=$${params.length}`); }
     if (body) { params.push(body); fields.push(`body=$${params.length}`); }
     if (subject !== undefined) { params.push(subject); fields.push(`subject=$${params.length}`); }
+    if (fields.length === 0) return res.status(400).json({ error: 'No fields to update' });
     params.push(req.params.id);
     const result = await db.query(
       `UPDATE communication_log SET ${fields.join(', ')}, updated_at=NOW() WHERE id=$${params.length} RETURNING *`,
       params
     );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Record not found' });
     res.json(result.rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

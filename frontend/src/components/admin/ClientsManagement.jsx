@@ -141,9 +141,9 @@ const ClientsManagement = ({ token }) => {
         fetch(`${API_BASE_URL}/api/care-types`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
 
-      setClients(await clientRes.json());
-      setReferralSources(await rsRes.json());
-      setCareTypes(await ctRes.json());
+      setClients(clientRes.ok ? await clientRes.json() : []);
+      setReferralSources(rsRes.ok ? await rsRes.json() : []);
+      setCareTypes(ctRes.ok ? await ctRes.json() : []);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {

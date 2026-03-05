@@ -202,7 +202,7 @@ const MessageBoard = ({ token }) => {
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '0.5rem 0', marginBottom: '1rem' }}>
         {messages.map(msg => {
-          const isMe = msg.sender_id === (token && JSON.parse(atob(token.split('.')[1])).id);
+          let isMe = false; try { isMe = msg.sender_id === JSON.parse(atob(token.split('.')[1])).id; } catch {};
           return (
             <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
               <div style={{ fontSize: '0.75rem', color: '#9CA3AF', marginBottom: '0.2rem', paddingLeft: isMe ? 0 : '0.5rem', paddingRight: isMe ? '0.5rem' : 0 }}>

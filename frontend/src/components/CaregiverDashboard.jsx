@@ -266,7 +266,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
             body: JSON.stringify({ latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy, speed: pos.coords.speed, heading: pos.coords.heading })
           }).catch(() => {});
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
         },
         () => {},
         { enableHighAccuracy: true, timeout: 10000 }

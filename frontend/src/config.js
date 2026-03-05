@@ -77,8 +77,17 @@ export const getDashboardReferrals = (token) => apiCall('/api/dashboard/referral
 export const getDashboardHours = (token) => apiCall('/api/dashboard/caregiver-hours', { method: 'GET' }, token);
 
 export const exportInvoicesCSV = async (token) => {
+  if (isTokenExpired(token)) {
+    if (_onSessionExpired) _onSessionExpired();
+    throw new Error('SESSION_EXPIRED');
+  }
   const headers = { 'Authorization': `Bearer ${token}` };
   const response = await fetch(`${API_BASE_URL}/api/billing/export/invoices-csv`, { headers });
+  if (response.status === 401) {
+    if (_onSessionExpired) _onSessionExpired();
+    throw new Error('SESSION_EXPIRED');
+  }
+  if (!response.ok) throw new Error('Failed to export CSV');
   return response.blob();
 };
 

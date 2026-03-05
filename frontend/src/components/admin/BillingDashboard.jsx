@@ -148,11 +148,11 @@ const BillingDashboard = ({ token }) => {
         fetch(`${API_BASE_URL}/api/users?role=caregiver`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
 
-      setInvoices(await invoiceRes.json());
-      setClients(await clientRes.json());
-      setReferralSources(await rsRes.json());
-      setCareTypes(await ctRes.json());
-      setRates(await ratesRes.json());
+      setInvoices(invoiceRes.ok ? await invoiceRes.json() : []);
+      setClients(clientRes.ok ? await clientRes.json() : []);
+      setReferralSources(rsRes.ok ? await rsRes.json() : []);
+      setCareTypes(ctRes.ok ? await ctRes.json() : []);
+      setRates(ratesRes.ok ? await ratesRes.json() : []);
       
       try {
         const caregiversData = await caregiversRes.json();
@@ -332,6 +332,7 @@ const BillingDashboard = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoiceId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load invoice');
       const invoice = await response.json();
       setSelectedInvoice(invoice);
       setShowInvoiceModal(true);

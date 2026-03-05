@@ -723,7 +723,7 @@ const SchedulingHub = ({ token }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {weekData.caregivers.map(({ caregiver, days: dayData }) => (
+                  {(weekData.caregivers || []).map(({ caregiver, days: dayData }) => (
                     <tr key={caregiver.id}>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -886,10 +886,10 @@ const SchedulingHub = ({ token }) => {
           {coverageLoading ? <div className='card' style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div> : coverageData ? (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
-                <div className='card' style={statCard}><div style={statVal('#2563EB')}>{coverageData.summary.totalCaregivers}</div><div style={statLabel}>Active Caregivers</div></div>
-                <div className='card' style={statCard}><div style={statVal('#059669')}>{coverageData.summary.totalScheduledHours}h</div><div style={statLabel}>Scheduled</div></div>
-                <div className='card' style={statCard}><div style={statVal(coverageData.summary.underScheduledClientCount > 0 ? '#DC2626' : '#059669')}>{coverageData.summary.underScheduledClientCount}</div><div style={statLabel}>Under-Scheduled</div></div>
-                <div className='card' style={statCard}><div style={statVal(coverageData.summary.totalShortfallUnits > 0 ? '#DC2626' : '#059669')}>{coverageData.summary.totalShortfallUnits}u</div><div style={statLabel}>Shortfall ({coverageData.summary.totalShortfallHours}h)</div></div>
+                <div className='card' style={statCard}><div style={statVal('#2563EB')}>{coverageData.summary?.totalCaregivers ?? 0}</div><div style={statLabel}>Active Caregivers</div></div>
+                <div className='card' style={statCard}><div style={statVal('#059669')}>{coverageData.summary?.totalScheduledHours ?? 0}h</div><div style={statLabel}>Scheduled</div></div>
+                <div className='card' style={statCard}><div style={statVal((coverageData.summary?.underScheduledClientCount ?? 0) > 0 ? '#DC2626' : '#059669')}>{coverageData.summary?.underScheduledClientCount ?? 0}</div><div style={statLabel}>Under-Scheduled</div></div>
+                <div className='card' style={statCard}><div style={statVal((coverageData.summary?.totalShortfallUnits ?? 0) > 0 ? '#DC2626' : '#059669')}>{coverageData.summary?.totalShortfallUnits ?? 0}u</div><div style={statLabel}>Shortfall ({coverageData.summary?.totalShortfallHours ?? 0}h)</div></div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '1rem' }}>
                 <div className='card'>

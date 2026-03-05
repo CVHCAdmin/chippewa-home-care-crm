@@ -42,9 +42,10 @@ router.put('/config', auth, async (req, res) => {
         admin_email = COALESCE($6, admin_email),
         is_active = COALESCE($7, is_active),
         updated_at = NOW()
+      WHERE id = (SELECT id FROM noshow_alert_config LIMIT 1)
       RETURNING *
     `, [graceMinutes, notifyAdmin, notifyCaregiver, notifyClientFamily, adminPhone, adminEmail, isActive]);
-    res.json(result.rows[0]);
+    res.json(result.rows[0] || {});
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -77,6 +78,7 @@ router.put('/alerts/:id/resolve', auth, async (req, res) => {
         status = $1, resolved_at = NOW(), resolved_by = $2, resolution_note = $3
       WHERE id = $4 RETURNING *
     `, [status, req.user.id, resolutionNote || null, req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Alert not found' });
     res.json(result.rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

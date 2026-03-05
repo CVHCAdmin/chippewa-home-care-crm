@@ -15,7 +15,7 @@ const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, 
         <div style={{ fontSize: '0.85rem', color: '#666' }}>{caregiver.email}</div>
       </div>
       <span className={`badge ${caregiver.role === 'admin' ? 'badge-danger' : 'badge-info'}`}>
-        {caregiver.role.toUpperCase()}
+        {(caregiver.role || 'caregiver').toUpperCase()}
       </span>
     </div>
     
@@ -413,7 +413,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                   <td><strong>{formatCurrency(caregiver.default_pay_rate)}</strong>/hr</td>
                   <td>
                     <span className={`badge ${caregiver.role === 'admin' ? 'badge-danger' : 'badge-info'}`}>
-                      {caregiver.role.toUpperCase()}
+                      {(caregiver.role || 'caregiver').toUpperCase()}
                     </span>
                   </td>
                   <td>

@@ -350,12 +350,12 @@ router.get('/portal/notes', familyAuth, async (req, res) => {
 
   try {
     const result = await db.query(`
-      SELECT te.id, te.clock_in, te.clock_out, te.hours, te.notes,
-        cp.first_name as caregiver_first, cp.last_name as caregiver_last
+      SELECT te.id, te.start_time, te.end_time, te.duration_minutes, te.notes,
+        u.first_name as caregiver_first, u.last_name as caregiver_last
       FROM time_entries te
-      JOIN caregiver_profiles cp ON te.caregiver_id = cp.id
-      WHERE te.client_id = $1 AND te.status = 'approved'
-      ORDER BY te.clock_in DESC
+      JOIN users u ON te.caregiver_id = u.id
+      WHERE te.client_id = $1 AND te.is_complete = true
+      ORDER BY te.start_time DESC
       LIMIT 30
     `, [req.clientId]);
     res.json(result.rows);

@@ -86,10 +86,10 @@ router.get('/revenue', auth, async (req, res) => {
     const authSummary = await db.query(`
       SELECT
         COUNT(*) AS total_active_auths,
-        SUM(authorized_hours) AS total_auth_hours,
-        SUM(used_hours) AS total_used_hours,
-        ROUND(AVG(used_hours::numeric / NULLIF(authorized_hours,0) * 100), 1) AS avg_utilization_pct,
-        SUM((authorized_hours - used_hours) * COALESCE(hourly_rate, 18.50)) AS total_projected_remaining
+        SUM(COALESCE(authorized_units, 0)) AS total_auth_hours,
+        SUM(COALESCE(used_units, 0)) AS total_used_hours,
+        ROUND(AVG(COALESCE(used_units,0)::numeric / NULLIF(COALESCE(authorized_units,0),0) * 100), 1) AS avg_utilization_pct,
+        SUM((COALESCE(authorized_units,0) - COALESCE(used_units,0)) * 18.50) AS total_projected_remaining
       FROM authorizations
       WHERE status = 'active' AND end_date >= CURRENT_DATE
     `);

@@ -183,8 +183,8 @@ const IncidentReporting = ({ token }) => {
         const term = searchTerm.toLowerCase();
         return (
           getClientName(incident.client_id).toLowerCase().includes(term) ||
-          incident.description.toLowerCase().includes(term) ||
-          incident.incident_type.toLowerCase().includes(term)
+          (incident.description || '').toLowerCase().includes(term) ||
+          (incident.incident_type || '').toLowerCase().includes(term)
         );
       }
       return true;

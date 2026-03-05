@@ -7,15 +7,24 @@ const db = require('../db');
 const auth = require('../middleware/auth');
 
 // Initialize Stripe with your secret key
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn('⚠️  STRIPE_SECRET_KEY not set — payment endpoints will return errors');
+}
+const stripe = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.env.STRIPE_SECRET_KEY) : null;
 
 // Your frontend URL for redirects
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
+// Guard: all Stripe routes require configured key
+const requireStripe = (req, res, next) => {
+  if (!stripe) return res.status(503).json({ error: 'Stripe payments not configured. Set STRIPE_SECRET_KEY.' });
+  next();
+};
+
 // ==================== CREATE CHECKOUT SESSION ====================
 // POST /api/stripe/create-checkout-session
 // Creates a Stripe checkout session for an invoice
-router.post('/create-checkout-session', auth, async (req, res) => {
+router.post('/create-checkout-session', auth, requireStripe, async (req, res) => {
   try {
     const { invoiceId } = req.body;
 
@@ -94,7 +103,7 @@ router.post('/create-checkout-session', auth, async (req, res) => {
 // ==================== CREATE PAYMENT LINK ====================
 // POST /api/stripe/create-payment-link
 // Creates a shareable payment link for an invoice (no auth required to pay)
-router.post('/create-payment-link', auth, async (req, res) => {
+router.post('/create-payment-link', auth, requireStripe, async (req, res) => {
   try {
     const { invoiceId } = req.body;
 
@@ -161,7 +170,7 @@ router.post('/create-payment-link', auth, async (req, res) => {
 // ==================== PUBLIC PAYMENT PAGE ====================
 // GET /api/stripe/invoice/:invoiceId/pay
 // Public endpoint - allows anyone with the link to view and pay
-router.get('/invoice/:invoiceId/pay', async (req, res) => {
+router.get('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
   try {
     const { invoiceId } = req.params;
 
@@ -200,7 +209,7 @@ router.get('/invoice/:invoiceId/pay', async (req, res) => {
 });
 
 // POST /api/stripe/invoice/:invoiceId/pay - Create session for public payment
-router.post('/invoice/:invoiceId/pay', async (req, res) => {
+router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
   try {
     const { invoiceId } = req.params;
 
@@ -263,7 +272,7 @@ router.post('/invoice/:invoiceId/pay', async (req, res) => {
 // ==================== STRIPE WEBHOOK ====================
 // POST /api/stripe/webhook
 // Handles Stripe webhook events (payment success, etc.)
-router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+router.post('/webhook', express.raw({ type: 'application/json' }), requireStripe, async (req, res) => {
   const sig = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -321,7 +330,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 // ==================== VERIFY PAYMENT ====================
 // GET /api/stripe/verify-payment/:sessionId
 // Verify a payment was successful (for success page)
-router.get('/verify-payment/:sessionId', async (req, res) => {
+router.get('/verify-payment/:sessionId', requireStripe, async (req, res) => {
   try {
     const { sessionId } = req.params;
 
@@ -347,7 +356,7 @@ router.get('/verify-payment/:sessionId', async (req, res) => {
 
 // ==================== GET PAYMENT HISTORY ====================
 // GET /api/stripe/payments/:invoiceId
-router.get('/payments/:invoiceId', auth, async (req, res) => {
+router.get('/payments/:invoiceId', auth, requireStripe, async (req, res) => {
   try {
     const { invoiceId } = req.params;
 

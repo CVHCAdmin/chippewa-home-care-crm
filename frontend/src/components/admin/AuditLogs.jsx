@@ -103,8 +103,8 @@ const AuditLogs = ({ token }) => {
     if (filters.searchTerm) {
       const term = filters.searchTerm.toLowerCase();
       filtered = filtered.filter(log =>
-        log.user_name.toLowerCase().includes(term) ||
-        log.entity_id.includes(term) ||
+        (log.user_name || '').toLowerCase().includes(term) ||
+        (log.entity_id || '').includes(term) ||
         (log.change_description && log.change_description.toLowerCase().includes(term))
       );
     }

@@ -52,6 +52,22 @@ const auditLog = async (userId, action, tableName, recordId, oldData, newData) =
 
 // ==================== SCHEDULES ROUTES ====================
 
+// GET /api/schedules/caregiver/:caregiverId - alias used by SchedulingHub
+// NOTE: Must be registered BEFORE /:caregiverId to avoid being shadowed
+router.get('/caregiver/:caregiverId', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT s.*,
+        c.first_name as client_first_name, c.last_name as client_last_name
+      FROM schedules s
+      JOIN clients c ON s.client_id = c.id
+      WHERE s.caregiver_id = $1 AND s.is_active = true
+      ORDER BY s.day_of_week, s.date, s.start_time
+    `, [req.params.caregiverId]);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // GET /api/schedules/:caregiverId - Get schedules for a specific caregiver (caregiver dashboard)
 router.get('/:caregiverId', verifyToken, async (req, res) => {
   try {
@@ -63,21 +79,6 @@ router.get('/:caregiverId', verifyToken, async (req, res) => {
       FROM schedules s
       JOIN clients c ON s.client_id = c.id
       LEFT JOIN care_types ct ON c.care_type_id = ct.id
-      WHERE s.caregiver_id = $1 AND s.is_active = true
-      ORDER BY s.day_of_week, s.date, s.start_time
-    `, [req.params.caregiverId]);
-    res.json(result.rows);
-  } catch (error) { res.status(500).json({ error: error.message }); }
-});
-
-// GET /api/schedules/caregiver/:caregiverId - alias used by SchedulingHub
-router.get('/caregiver/:caregiverId', verifyToken, async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT s.*,
-        c.first_name as client_first_name, c.last_name as client_last_name
-      FROM schedules s
-      JOIN clients c ON s.client_id = c.id
       WHERE s.caregiver_id = $1 AND s.is_active = true
       ORDER BY s.day_of_week, s.date, s.start_time
     `, [req.params.caregiverId]);

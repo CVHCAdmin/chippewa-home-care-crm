@@ -170,7 +170,7 @@ const ApplicationsDashboard = ({ token }) => {
                   <p className="app-date">{new Date(app.created_at).toLocaleDateString()}</p>
                 </div>
                 <span className={`badge ${getStatusColor(app.status)}`}>
-                  {app.status.toUpperCase()}
+                  {(app.status || 'applied').toUpperCase()}
                 </span>
               </div>
 

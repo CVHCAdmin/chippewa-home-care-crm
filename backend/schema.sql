@@ -46,7 +46,7 @@ CREATE INDEX idx_users_is_active ON users(is_active);
 
 -- Login Activity Tracking
 CREATE TABLE login_activity (
-  id SERIAL PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   email VARCHAR(255),
   user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   success BOOLEAN NOT NULL DEFAULT false,
