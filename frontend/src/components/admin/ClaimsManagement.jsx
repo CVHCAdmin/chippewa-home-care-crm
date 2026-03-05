@@ -30,6 +30,7 @@ const ClaimsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/claims?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load claims');
       const data = await res.json();
       setClaims(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -44,6 +45,7 @@ const ClaimsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/referral-sources`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load payers');
       const data = await res.json();
       setPayers(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -56,6 +58,7 @@ const ClaimsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/claims/reports/summary`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load summary');
       const data = await res.json();
       setSummary(data);
     } catch (error) {
@@ -68,6 +71,7 @@ const ClaimsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/billing/invoices?status=pending`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load invoices');
       const data = await res.json();
       setInvoices(Array.isArray(data) ? data : []);
     } catch (error) {

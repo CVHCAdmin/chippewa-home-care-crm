@@ -19,6 +19,7 @@ const ClientOnboarding = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load clients');
       const data = await response.json();
       setClients(data);
       
@@ -38,6 +39,7 @@ const ClientOnboarding = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/clients/${clientId}/onboarding`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load onboarding data');
       const data = await response.json();
       setClientData(prev => ({
         ...prev,

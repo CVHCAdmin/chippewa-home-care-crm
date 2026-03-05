@@ -39,6 +39,7 @@ const BackgroundChecks = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/background-checks?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load checks');
       const data = await res.json();
       setChecks(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -53,6 +54,7 @@ const BackgroundChecks = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/caregivers`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load caregivers');
       const data = await res.json();
       setCaregivers(Array.isArray(data) ? data : []);
     } catch (error) {

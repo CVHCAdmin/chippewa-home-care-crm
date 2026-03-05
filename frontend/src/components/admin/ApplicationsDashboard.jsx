@@ -24,6 +24,7 @@ const ApplicationsDashboard = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/applications`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load applications');
       const data = await response.json();
       setApplications(data);
     } catch (error) {

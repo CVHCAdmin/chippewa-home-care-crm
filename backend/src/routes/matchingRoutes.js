@@ -202,7 +202,7 @@ router.get('/client/:clientId/restrictions', async (req, res) => {
   }
 });
 
-router.post('/client/:clientId/restrictions', async (req, res) => {
+router.post('/client/:clientId/restrictions', auth, async (req, res) => {
   try {
     const { caregiverId, restrictionType, reason } = req.body;
     if (!caregiverId || !restrictionType) return res.status(400).json({ error: 'caregiverId and restrictionType required' });

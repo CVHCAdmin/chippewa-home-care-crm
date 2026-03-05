@@ -29,17 +29,17 @@ router.get('/revenue', auth, async (req, res) => {
         a.client_id,
         c.first_name || ' ' || c.last_name AS client_name,
         a.service_type,
-        a.authorized_hours,
-        a.used_hours,
-        (a.authorized_hours - a.used_hours) AS remaining_hours,
-        a.hourly_rate,
-        ((a.authorized_hours - a.used_hours) * COALESCE(a.hourly_rate, 18.50)) AS projected_remaining_revenue,
+        COALESCE(a.authorized_hours, a.authorized_units) AS authorized_hours,
+        COALESCE(a.used_hours, a.used_units, 0) AS used_hours,
+        (COALESCE(a.authorized_hours, a.authorized_units, 0) - COALESCE(a.used_hours, a.used_units, 0)) AS remaining_hours,
+        COALESCE(a.hourly_rate, 18.50) AS hourly_rate,
+        ((COALESCE(a.authorized_hours, a.authorized_units, 0) - COALESCE(a.used_hours, a.used_units, 0)) * COALESCE(a.hourly_rate, 18.50)) AS projected_remaining_revenue,
         a.end_date
       FROM authorizations a
       JOIN clients c ON a.client_id = c.id
       WHERE a.status = 'active'
         AND a.end_date >= CURRENT_DATE
-        AND (a.authorized_hours - a.used_hours) > 0
+        AND (COALESCE(a.authorized_hours, a.authorized_units, 0) - COALESCE(a.used_hours, a.used_units, 0)) > 0
       ORDER BY projected_remaining_revenue DESC
     `);
 

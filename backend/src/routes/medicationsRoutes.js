@@ -99,10 +99,10 @@ router.get('/logs/client/:clientId', auth, async (req, res) => {
     let query = `
       SELECT ml.*, 
         cm.medication_name, cm.dosage, cm.frequency,
-        cp.first_name as caregiver_first, cp.last_name as caregiver_last
+        u.first_name as caregiver_first, u.last_name as caregiver_last
       FROM medication_logs ml
       JOIN client_medications cm ON ml.medication_id = cm.id
-      LEFT JOIN caregiver_profiles cp ON ml.caregiver_id = cp.id
+      LEFT JOIN users u ON ml.caregiver_id = u.id
       WHERE ml.client_id = $1
     `;
     const params = [req.params.clientId];

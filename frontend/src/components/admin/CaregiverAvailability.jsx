@@ -60,6 +60,7 @@ const CaregiverAvailability = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/users/caregivers`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load caregivers');
       const data = await response.json();
       setCaregivers(data);
       setLoading(false);
@@ -83,6 +84,7 @@ const CaregiverAvailability = ({ token }) => {
         })
       ]);
 
+      if (!availRes.ok || !blackoutRes.ok) throw new Error('Failed to load availability');
       const availData = await availRes.json();
       const blackoutData = await blackoutRes.json();
 

@@ -81,24 +81,27 @@ export function useGeolocation({ watch = false, highAccuracy = true } = {}) {
           enableHighAccuracy: highAccuracy,
           timeout: 15000,
         });
-        setPosition({
+        const result = {
           latitude:  pos.coords.latitude,
           longitude: pos.coords.longitude,
           accuracy:  pos.coords.accuracy,
           timestamp: pos.timestamp,
-        });
+        };
+        setPosition(result);
+        return result;
       } else {
         // Web: browser geolocation
         await new Promise((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(
             pos => {
-              setPosition({
+              const result = {
                 latitude:  pos.coords.latitude,
                 longitude: pos.coords.longitude,
                 accuracy:  pos.coords.accuracy,
                 timestamp: pos.timestamp,
-              });
-              resolve();
+              };
+              setPosition(result);
+              resolve(result);
             },
             err => reject(new Error(err.message)),
             { enableHighAccuracy: highAccuracy, timeout: 15000 }

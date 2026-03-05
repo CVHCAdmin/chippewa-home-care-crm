@@ -16,6 +16,7 @@ const subscribeToPush = async (token) => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     const reg = await navigator.serviceWorker.ready;
     const vapidRes = await fetch(`${API_BASE_URL}/api/push/vapid-key`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!vapidRes.ok) return;
     const { publicKey } = await vapidRes.json();
     if (!publicKey || publicKey === 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') return;
     const subscription = await reg.pushManager.subscribe({
@@ -277,10 +278,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ timeEntryId: sessionId })
       })
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error('check-warnings failed'); return r.json(); })
       .then(d => {
         if (d.warning && !d.overTime) {
-          // 15-min warning - show in-app alert
           toast(`⏰ ${d.minutesRemaining} min remaining — start wrapping up your shift!`, 'warning');
         } else if (d.warning && d.overTime) {
           toast(`⚠️ You are ${d.minutesOver} min over your scheduled time — please clock out`, 'error');
@@ -422,9 +422,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = location?.latitude || null;
       let lng = location?.longitude || null;
       if (!lat) {
-        await getPosition();
-        lat = location?.latitude || null;
-        lng = location?.longitude || null;
+        const pos = await getPosition();
+        lat = pos?.latitude || location?.latitude || null;
+        lng = pos?.longitude || location?.longitude || null;
       }
 
       await impact('medium'); // native haptic on button press

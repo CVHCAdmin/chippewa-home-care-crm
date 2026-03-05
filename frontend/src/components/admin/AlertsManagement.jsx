@@ -39,6 +39,7 @@ const AlertsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/alerts?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load alerts');
       const data = await res.json();
       setAlerts(Array.isArray(data) ? data : []);
     } catch (error) {

@@ -58,6 +58,7 @@ const ADLTracking = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load clients');
       const data = await res.json();
       setClients(Array.isArray(data) ? data.filter(c => c.status === 'active') : []);
     } catch (error) {
@@ -71,6 +72,7 @@ const ADLTracking = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/adl/client/${selectedClient}/requirements`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to load requirements');
       const data = await res.json();
       setRequirements(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -86,6 +88,7 @@ const ADLTracking = ({ token }) => {
         `${API_BASE_URL}/api/adl/client/${selectedClient}/logs?startDate=${dateRange.start}&endDate=${dateRange.end}`, 
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
+      if (!res.ok) throw new Error('Failed to load logs');
       const data = await res.json();
       setLogs(Array.isArray(data) ? data : []);
     } catch (error) {

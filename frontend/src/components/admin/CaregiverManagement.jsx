@@ -107,6 +107,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
         fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/care-types`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
+      if (!cgRes.ok || !ctRes.ok) throw new Error('Failed to load data');
       setCaregivers(await cgRes.json());
       setCareTypes(await ctRes.json());
     } catch (error) {
@@ -189,6 +190,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
       const response = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${caregiver.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load rates');
       setCaregiverRates(await response.json());
       setShowRatesModal(true);
     } catch (error) {

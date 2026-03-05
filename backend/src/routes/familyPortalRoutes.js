@@ -60,7 +60,7 @@ router.post('/admin/members', auth, async (req, res) => {
       const hashedPassword = await bcrypt.hash(password, 10);
       
       const userResult = await db.query(`
-        INSERT INTO users (email, password, first_name, last_name, role, status)
+        INSERT INTO users (email, password_hash, first_name, last_name, role, status)
         VALUES ($1, $2, $3, $4, 'family', 'active')
         RETURNING id
       `, [email, hashedPassword, firstName, lastName]);
@@ -122,7 +122,7 @@ router.put('/admin/members/:id/reset-password', auth, async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    await db.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, fm.rows[0].user_id]);
+    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashedPassword, fm.rows[0].user_id]);
     
     res.json({ success: true });
   } catch (error) {
@@ -235,7 +235,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const valid = await bcrypt.compare(password, user.rows[0].password);
+    const valid = await bcrypt.compare(password, user.rows[0].password_hash);
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -296,11 +296,11 @@ router.get('/portal/schedule', familyAuth, async (req, res) => {
 
   try {
     const result = await db.query(`
-      SELECT s.*, cp.first_name as caregiver_first, cp.last_name as caregiver_last
+      SELECT s.*, u.first_name as caregiver_first, u.last_name as caregiver_last
       FROM schedules s
-      LEFT JOIN caregiver_profiles cp ON s.caregiver_id = cp.id
-      WHERE s.client_id = $1 AND s.scheduled_date >= CURRENT_DATE
-      ORDER BY s.scheduled_date, s.start_time
+      LEFT JOIN users u ON s.caregiver_id = u.id
+      WHERE s.client_id = $1 AND s.date >= CURRENT_DATE
+      ORDER BY s.date, s.start_time
     `, [req.clientId]);
     res.json(result.rows);
   } catch (error) {

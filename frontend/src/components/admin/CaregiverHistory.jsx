@@ -53,7 +53,7 @@ const GPSRouteMap = ({ timeEntryId, token, onClose }) => {
     fetch(`${API_BASE_URL}/api/time-entries/${timeEntryId}/gps`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error('Failed to load GPS'); return r.json(); })
       .then(data => { setPoints(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
   }, [timeEntryId, token]);
