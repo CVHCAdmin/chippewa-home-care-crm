@@ -11,6 +11,11 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000, // fail fast if can't connect within 5s
 });
 
+// Prevent unhandled pool errors from crashing the process
+pool.on('error', (err) => {
+  console.error('Unexpected database pool error:', err.message);
+});
+
 // Test connection on startup
 pool.query('SELECT NOW()', (err, res) => {
   if (err) {

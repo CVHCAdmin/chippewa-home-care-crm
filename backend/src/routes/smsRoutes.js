@@ -280,7 +280,7 @@ router.post('/shift-reminders', auth, async (req, res) => {
       JOIN users u ON s.caregiver_id = u.id
       JOIN clients c ON s.client_id = c.id
       WHERE s.date = CURRENT_DATE + INTERVAL '1 day'
-      AND s.status = 'scheduled'
+      AND s.is_active = true
     `);
 
     let sent = 0;

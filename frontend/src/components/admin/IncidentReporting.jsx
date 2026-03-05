@@ -159,6 +159,7 @@ const IncidentReporting = ({ token }) => {
   };
 
   const getSeverityLabel = (severity) => {
+    if (!severity) return 'Unknown';
     return severity.charAt(0).toUpperCase() + severity.slice(1);
   };
 
