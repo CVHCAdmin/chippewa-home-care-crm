@@ -171,7 +171,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     if (!window.confirm('Delete this shift?')) return;
     setSaving(true);
     try {
-      await fetch(`${API_BASE_URL}/api/schedules-all/${scheduleId}`, {
+      await fetch(`${API_BASE_URL}/api/schedules/${scheduleId}`, {
         method: 'DELETE',
         headers: { Authorization:`Bearer ${token}` },
       });
