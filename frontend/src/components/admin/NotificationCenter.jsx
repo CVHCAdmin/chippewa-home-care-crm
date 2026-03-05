@@ -41,15 +41,15 @@ const NotificationCenter = ({ token }) => {
         })
       ]);
 
-      const notificationsData = await notificationsRes.json();
-      const settingsData = await settingsRes.json();
-      const caregiversData = await caregiversRes.json();
-      const clientsData = await clientsRes.json();
+      const notificationsData = notificationsRes.ok ? await notificationsRes.json() : [];
+      const settingsData = settingsRes.ok ? await settingsRes.json() : {};
+      const caregiversData = caregiversRes.ok ? await caregiversRes.json() : [];
+      const clientsData = clientsRes.ok ? await clientsRes.json() : [];
 
       setNotifications(Array.isArray(notificationsData) ? notificationsData : []);
       setSettings(settingsData || {});
-      setCaregivers(caregiversData);
-      setClients(clientsData);
+      setCaregivers(Array.isArray(caregiversData) ? caregiversData : []);
+      setClients(Array.isArray(clientsData) ? clientsData : []);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {

@@ -34,7 +34,7 @@ const FamilyPortalAdmin = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/family-portal/admin/members?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setFamilyMembers(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load family members:', error);
@@ -48,7 +48,7 @@ const FamilyPortalAdmin = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setClients(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load clients:', error);
@@ -60,7 +60,7 @@ const FamilyPortalAdmin = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/family-portal/admin/messages`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setMessages(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load messages:', error);

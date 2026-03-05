@@ -21,6 +21,7 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
       const response = await fetch(`${API_BASE_URL}/api/applications/${applicationId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load application');
       const data = await response.json();
       setApp(data);
       setStatus(data.status);

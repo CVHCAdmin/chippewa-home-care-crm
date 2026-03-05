@@ -158,7 +158,7 @@ const CaregiverHistory = ({ caregiverId, caregiverName, token, onBack }) => {
     try {
       const url = `${API_BASE_URL}/api/time-entries/caregiver-history/${caregiverId}?startDate=${dateRange.start}T00:00:00&endDate=${dateRange.end}T23:59:59&limit=100`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       const list = Array.isArray(data) ? data : [];
       setEntries(list);
 

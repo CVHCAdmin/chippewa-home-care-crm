@@ -28,8 +28,8 @@ const EmergencyCoverage = ({ token }) => {
         fetch(`${API_BASE_URL}/api/emergency/miss-reports`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/clients`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
-      const reports = await reportsRes.json();
-      const clientList = await clientsRes.json();
+      const reports = reportsRes.ok ? await reportsRes.json() : [];
+      const clientList = clientsRes.ok ? await clientsRes.json() : [];
       setMissReports(Array.isArray(reports) ? reports : []);
       setClients(Array.isArray(clientList) ? clientList : []);
     } catch (e) {

@@ -32,7 +32,7 @@ const SMSManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/sms/messages?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setMessages(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load messages:', error);
@@ -46,7 +46,7 @@ const SMSManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/sms/templates`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setTemplates(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load templates:', error);
@@ -58,7 +58,7 @@ const SMSManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/caregivers`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setCaregivers(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load caregivers:', error);
@@ -70,7 +70,7 @@ const SMSManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setClients(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load clients:', error);

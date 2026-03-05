@@ -70,7 +70,10 @@ app.use('/api/audit-logs',        verifyToken, require('./routes/auditLogs'));
 app.use('/api/users',             verifyToken, require('./routes/users'));
 app.use('/api/claims',            verifyToken, require('./routes/claimsRoutes'));
 app.use('/api/stripe',                         require('./routes/stripeRoutes'));
-app.use('/api/applications',      verifyToken, require('./routes/applicationsRoutes'));
+app.use('/api/applications', (req, res, next) => {
+  if (req.method === 'POST' && req.path === '/') return next();
+  return verifyToken(req, res, next);
+}, require('./routes/applicationsRoutes'));
 app.use('/api/schedules',         verifyToken, require('./routes/schedulesRoutes'));
 app.use('/api/sms',               verifyToken, require('./routes/smsRoutes'));
 app.use('/api/open-shifts',       verifyToken, require('./routes/openShiftsRoutes'));

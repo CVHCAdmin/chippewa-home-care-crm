@@ -55,8 +55,8 @@ const ComplianceTracking = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/users/caregivers`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await response.json();
-      setCaregivers(data);
+      const data = response.ok ? await response.json() : [];
+      setCaregivers(Array.isArray(data) ? data : []);
       setLoading(false);
     } catch (error) {
       console.error('Failed to load caregivers:', error);
@@ -699,7 +699,7 @@ const ExpiryOverview = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/background-checks/overview/expiring?days=${days}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const result = await res.json();
+      const result = res.ok ? await res.json() : [];
       setData(Array.isArray(result) ? result : []);
     } catch { toast('Failed to load expiry overview', 'error'); }
     finally { setLoading(false); }

@@ -91,7 +91,7 @@ export function useGeolocation({ watch = false, highAccuracy = true } = {}) {
         return result;
       } else {
         // Web: browser geolocation
-        await new Promise((resolve, reject) => {
+        return await new Promise((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(
             pos => {
               const result = {

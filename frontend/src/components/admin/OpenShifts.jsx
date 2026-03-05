@@ -28,7 +28,7 @@ const OpenShifts = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/open-shifts?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setShifts(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load shifts:', error);
@@ -42,7 +42,7 @@ const OpenShifts = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setClients(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load clients:', error);
@@ -54,7 +54,7 @@ const OpenShifts = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/care-types`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setCareTypes(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load care types:', error);
@@ -66,7 +66,7 @@ const OpenShifts = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/open-shifts/${shiftId}/claims`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setClaims(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load claims:', error);

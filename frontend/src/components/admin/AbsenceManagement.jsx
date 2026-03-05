@@ -31,11 +31,11 @@ const AbsenceManagement = ({ token }) => {
         })
       ]);
 
-      const absencesData = await absencesRes.json();
-      const caregiversData = await caregiversRes.json();
+      const absencesData = absencesRes.ok ? await absencesRes.json() : [];
+      const caregiversData = caregiversRes.ok ? await caregiversRes.json() : [];
 
-      setAbsences(absencesData);
-      setCaregivers(caregiversData);
+      setAbsences(Array.isArray(absencesData) ? absencesData : []);
+      setCaregivers(Array.isArray(caregiversData) ? caregiversData : []);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {

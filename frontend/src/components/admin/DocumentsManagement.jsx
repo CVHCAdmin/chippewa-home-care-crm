@@ -27,7 +27,7 @@ const DocumentsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/documents?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setDocuments(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load documents:', error);
@@ -41,7 +41,7 @@ const DocumentsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setClients(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load clients:', error);
@@ -53,7 +53,7 @@ const DocumentsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/caregivers`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setCaregivers(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load caregivers:', error);

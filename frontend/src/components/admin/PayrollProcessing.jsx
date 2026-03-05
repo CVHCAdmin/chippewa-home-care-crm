@@ -173,6 +173,7 @@ const PayrollProcessing = ({ token }) => {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to process paycheck');
       const result = await response.json();
       setPayrollData(payrollData.map(p => p.caregiver_id === caregiverId ? { ...p, status: 'processed', check_number: result.checkNumber } : p));
       setMessage(`✓ Check #${result.checkNumber} processed`);

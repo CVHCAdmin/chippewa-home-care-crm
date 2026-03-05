@@ -180,7 +180,7 @@ const getCheckResults = async (referenceNumber) => {
 
     return {
       referenceNumber,
-      status: parsed.status === 'Completed' ? 'completed' : 'pending',
+      status: (parsed.status === 'Completed' || parsed.status === 'Complete') ? 'completed' : 'pending',
       result,
       hasRecord: parsed.hasRecord,
       rawResult: parsed.result,

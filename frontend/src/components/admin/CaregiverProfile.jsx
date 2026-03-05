@@ -43,9 +43,9 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
         })
       ]);
 
-      const caregiverData = await caregiverRes.json();
-      const profileData = await profileRes.json();
-      const certsData = await certsRes.json();
+      const caregiverData = caregiverRes.ok ? await caregiverRes.json() : null;
+      const profileData = profileRes.ok ? await profileRes.json() : null;
+      const certsData = certsRes.ok ? await certsRes.json() : [];
 
       setCaregiver(caregiverData);
       setProfile(profileData);
