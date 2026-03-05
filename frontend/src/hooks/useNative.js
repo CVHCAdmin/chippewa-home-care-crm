@@ -259,6 +259,7 @@ export function useOfflineSync() {
 export function useBackgroundGeolocation() {
   const [isRunning, setIsRunning] = useState(false);
   const webWatchIdRef = useRef(null);
+  const bgWatcherIdRef = useRef(null);
 
   const start = useCallback(async ({ onLocation, notificationTitle = 'CVHC HomeCare', notificationText = 'Monitoring your location for auto clock-in' } = {}) => {
     const BgGeo = await getBgGeo();
@@ -272,7 +273,7 @@ export function useBackgroundGeolocation() {
           if (perm.location !== 'granted') throw new Error('Location permission denied');
         }
 
-        await BgGeo.addWatcher(
+        bgWatcherIdRef.current = await BgGeo.addWatcher(
           {
             backgroundMessage: notificationText,
             backgroundTitle: notificationTitle,
@@ -322,8 +323,9 @@ export function useBackgroundGeolocation() {
 
   const stop = useCallback(async () => {
     const BgGeo = await getBgGeo();
-    if (BgGeo && isNative && platform === 'android') {
-      await BgGeo.removeAllWatchers().catch(() => {});
+    if (BgGeo && isNative && platform === 'android' && bgWatcherIdRef.current !== null) {
+      await BgGeo.removeWatcher({ id: bgWatcherIdRef.current }).catch(() => {});
+      bgWatcherIdRef.current = null;
     } else if (webWatchIdRef.current !== null) {
       navigator.geolocation.clearWatch(webWatchIdRef.current);
       webWatchIdRef.current = null;

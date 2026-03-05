@@ -108,8 +108,10 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
         fetch(`${API_BASE_URL}/api/care-types`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
       if (!cgRes.ok || !ctRes.ok) throw new Error('Failed to load data');
-      setCaregivers(await cgRes.json());
-      setCareTypes(await ctRes.json());
+      const cgs = await cgRes.json();
+      const cts = await ctRes.json();
+      setCaregivers(Array.isArray(cgs) ? cgs : []);
+      setCareTypes(Array.isArray(cts) ? cts : []);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {

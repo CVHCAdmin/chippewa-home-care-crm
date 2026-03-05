@@ -67,6 +67,8 @@ const PortalApp = () => {
         setClient(payload);
       } catch {
         handleLogout();
+        setLoading(false);
+        return;
       }
     }
     setLoading(false);

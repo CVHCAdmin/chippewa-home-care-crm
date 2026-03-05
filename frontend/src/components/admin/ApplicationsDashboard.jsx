@@ -26,7 +26,7 @@ const ApplicationsDashboard = ({ token }) => {
       });
       if (!response.ok) throw new Error('Failed to load applications');
       const data = await response.json();
-      setApplications(data);
+      setApplications(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load applications:', error);
     } finally {

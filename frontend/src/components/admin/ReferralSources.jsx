@@ -38,7 +38,7 @@ const ReferralSources = ({ token }) => {
   const loadSources = async () => {
     try {
       const data = await getReferralSources(token);
-      setSources(data);
+      setSources(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load referral sources:', error);
     } finally {

@@ -34,18 +34,14 @@ router.get('/roster', async (req, res) => {
             AND schedule_type = 'recurring'
             AND day_of_week IS NOT NULL
         ), 0) AS current_weekly_hours,
-        -- Number of active clients assigned
+        -- Number of active clients assigned (from schedules)
         COALESCE((
-          SELECT COUNT(*)
-          FROM client_assignments
-          WHERE caregiver_id = u.id AND status = 'active'
+          SELECT COUNT(DISTINCT client_id)
+          FROM schedules
+          WHERE caregiver_id = u.id AND is_active = true
         ), 0) AS active_client_count
       FROM users u
-      LEFT JOIN (
-        SELECT caregiver_id, MAX(max_hours_per_week) AS max_hours_per_week
-        FROM caregiver_schedules
-        GROUP BY caregiver_id
-      ) cs ON cs.caregiver_id = u.id
+      LEFT JOIN caregiver_availability cs ON cs.caregiver_id = u.id
       WHERE u.role = 'caregiver' AND u.is_active = true
       ORDER BY u.first_name, u.last_name
     `);
@@ -61,11 +57,11 @@ router.get('/roster', async (req, res) => {
         c.city,
         c.preferred_caregivers,
         c.do_not_use_caregivers,
-        -- Hours from active assignment
+        -- Hours from authorizations
         COALESCE((
-          SELECT hours_per_week FROM client_assignments
+          SELECT authorized_units FROM authorizations
           WHERE client_id = c.id AND status = 'active'
-          ORDER BY assignment_date DESC LIMIT 1
+          ORDER BY created_at DESC LIMIT 1
         ), 0) AS assigned_hours_per_week,
         -- Days already scheduled (recurring)
         COALESCE((
@@ -74,11 +70,11 @@ router.get('/roster', async (req, res) => {
           WHERE client_id = c.id AND is_active = true
             AND schedule_type = 'recurring' AND day_of_week IS NOT NULL
         ), '{}') AS scheduled_days,
-        -- Current caregiver(s)
+        -- Current caregiver(s) from active schedules
         COALESCE((
           SELECT ARRAY_AGG(DISTINCT caregiver_id)
-          FROM client_assignments
-          WHERE client_id = c.id AND status = 'active'
+          FROM schedules
+          WHERE client_id = c.id AND is_active = true
         ), '{}') AS current_caregivers
       FROM clients c
       WHERE c.is_active = true

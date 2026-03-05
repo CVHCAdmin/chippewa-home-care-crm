@@ -39,8 +39,8 @@ const ReportsAnalytics = ({ token }) => {
       if (!cgRes.ok || !clRes.ok) throw new Error('Failed to load filters');
       const caregiverData = await cgRes.json();
       const clientData = await clRes.json();
-      setCaregivers(caregiverData);
-      setClients(clientData);
+      setCaregivers(Array.isArray(caregiverData) ? caregiverData : []);
+      setClients(Array.isArray(clientData) ? clientData : []);
     } catch (error) {
       console.error('Failed to load filters:', error);
     }

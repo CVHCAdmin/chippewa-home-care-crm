@@ -47,7 +47,11 @@ export const apiCall = async (endpoint, options = {}, token) => {
     throw new Error(msg);
   }
 
-  return response.json();
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) return null;
+  const text = await response.text();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
 };
 
 export const getClients = (token) => apiCall('/api/clients', { method: 'GET' }, token);

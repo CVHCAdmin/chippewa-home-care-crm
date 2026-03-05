@@ -317,6 +317,24 @@ router.get('/portal/notifications', clientAuth, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: MARK ALL NOTIFICATIONS READ (must be before /:id/read)
+// PUT /api/client-portal/portal/notifications/read-all
+// ─────────────────────────────────────────────────────────────────────────────
+router.put('/portal/notifications/read-all', clientAuth, async (req, res) => {
+  try {
+    await db.query(`
+      UPDATE client_notifications
+      SET is_read = true
+      WHERE client_id = $1 AND is_read = false
+    `, [req.clientId]);
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PORTAL: MARK NOTIFICATION READ
 // PUT /api/client-portal/portal/notifications/:id/read
 // ─────────────────────────────────────────────────────────────────────────────
@@ -327,24 +345,6 @@ router.put('/portal/notifications/:id/read', clientAuth, async (req, res) => {
       SET is_read = true
       WHERE id = $1 AND client_id = $2
     `, [req.params.id, req.clientId]);
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PORTAL: MARK ALL NOTIFICATIONS READ
-// PUT /api/client-portal/portal/notifications/read-all
-// ─────────────────────────────────────────────────────────────────────────────
-router.put('/portal/notifications/read-all', clientAuth, async (req, res) => {
-  try {
-    await db.query(`
-      UPDATE client_notifications
-      SET is_read = true
-      WHERE client_id = $1 AND is_read = false
-    `, [req.clientId]);
 
     res.json({ success: true });
   } catch (error) {

@@ -64,11 +64,11 @@ router.get('/client-data/:clientId', async (req, res) => {
       [clientId]
     );
 
-    // Also check client_assignments for hours_per_week
+    // Check authorizations for weekly hours
     const assignRes = await db.query(
-      `SELECT hours_per_week FROM client_assignments
+      `SELECT authorized_units AS hours_per_week FROM authorizations
        WHERE client_id = $1 AND status = 'active'
-       ORDER BY assignment_date DESC LIMIT 1`,
+       ORDER BY created_at DESC LIMIT 1`,
       [clientId]
     );
     const assignedHoursPerWeek = assignRes.rows[0]?.hours_per_week || null;

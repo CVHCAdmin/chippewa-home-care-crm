@@ -217,7 +217,7 @@ const auditLogger = (pool) => {
 
     res.on('finish', async () => {
       try {
-        if (logged || res.statusCode >= 400) return;
+        if (logged) return;
         logged = true;
         const user_id = req.user?.id || req.user?.userId || SYSTEM_USER_ID;
         const table_name = extractTableName(req.path);
@@ -231,7 +231,7 @@ const auditLogger = (pool) => {
 
         await log({
           user_id,
-          action: `${req.method} ${req.path}`,
+          action: `${req.method} ${req.path} [${res.statusCode}]`,
           table_name,
           record_id,
           old_data: null,

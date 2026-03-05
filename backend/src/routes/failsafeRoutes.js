@@ -162,7 +162,7 @@ router.post('/validate-claims', auth, requireAdmin, async (req, res) => {
         rs.name as payer_name, rs.edi_payer_id,
         ev.sandata_status, ev.sandata_exception_desc, ev.is_verified as evv_verified,
         ev.gps_in_lat, ev.gps_out_lat, ev.gps_in_lng, ev.gps_out_lng,
-        ev.evv_worker_id, ev.npi_number
+        cp.evv_worker_id, cp.npi_number
       FROM claims c
       JOIN clients cl ON c.client_id = cl.id
       LEFT JOIN referral_sources rs ON c.payer_id = rs.id
