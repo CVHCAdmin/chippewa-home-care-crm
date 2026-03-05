@@ -23,9 +23,10 @@ export default function RevenueForecast({ token }) {
         fetch(`${API}/api/forecast/revenue?months=${months}`, { headers: h }),
         fetch(`${API}/api/forecast/caregiver-utilization`, { headers: h }),
       ]);
+      if (!fR.ok || !uR.ok) throw new Error('Failed to load forecast');
       setData(await fR.json());
       setUtilData(await uR.json());
-    } catch (e) {}
+    } catch (e) { console.error('[RevenueForecast]', e.message); }
     setLoading(false);
   };
 

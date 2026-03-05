@@ -37,6 +37,7 @@ const PerformanceRatings = ({ token }) => {
         })
       ]);
 
+      if (!caregiversRes.ok || !clientsRes.ok) throw new Error('Failed to load data');
       const caregiversData = await caregiversRes.json();
       const clientsData = await clientsRes.json();
 
@@ -55,8 +56,9 @@ const PerformanceRatings = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/performance-reviews`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load reviews');
       const data = await response.json();
-      
+
       const reviewsByCaregiver = {};
       caregiversList.forEach(cg => {
         reviewsByCaregiver[cg.id] = [];

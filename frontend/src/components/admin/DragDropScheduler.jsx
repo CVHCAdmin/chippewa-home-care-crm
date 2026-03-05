@@ -74,6 +74,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         fetch(`${API_BASE_URL}/api/clients`,        { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/schedules-all`,  { headers: { Authorization: `Bearer ${token}` } }),
       ]);
+      if (!cgRes.ok || !clRes.ok || !schRes.ok) throw new Error('Failed to load schedule data');
       const [cgs, cls, schs] = await Promise.all([cgRes.json(), clRes.json(), schRes.json()]);
       setCaregivers(Array.isArray(cgs) ? cgs : []);
       setClients(Array.isArray(cls) ? cls : []);

@@ -60,6 +60,7 @@ const EmergencyCoverage = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/emergency/available-caregivers?${params}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      if (!res.ok) throw new Error('Failed to fetch caregivers');
       const data = await res.json();
       setAvailableCaregivers(Array.isArray(data) ? data : []);
     } catch (e) {

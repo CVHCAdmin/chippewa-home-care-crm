@@ -143,7 +143,7 @@ router.post('/miss-report', auth, async (req, res) => {
             // Log notification
             await db.query(`
               INSERT INTO open_shift_notifications (open_shift_id, caregiver_id, notification_type)
-              VALUES ($1, $2, 'push') ON CONFLICT DO NOTHING
+              VALUES ($1, $2, 'push') ON CONFLICT (open_shift_id, caregiver_id) DO NOTHING
             `, [openShiftId, cg.id]);
 
             // Send push

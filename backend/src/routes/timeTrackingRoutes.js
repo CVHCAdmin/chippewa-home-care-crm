@@ -72,16 +72,15 @@ router.get('/caregiver-history/:caregiverId', verifyToken, async (req, res) => {
   try {
     const { startDate, endDate, limit = 50 } = req.query;
     const params = [req.params.caregiverId, limit];
-    if (startDate) params.push(startDate);
-    if (endDate) params.push(endDate);
+    let dateFilters = '';
+    if (startDate) { params.push(startDate); dateFilters += ` AND te.start_time >= $${params.length}::timestamptz`; }
+    if (endDate) { params.push(endDate); dateFilters += ` AND te.start_time <= $${params.length}::timestamptz`; }
     const result = await db.query(
       `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name,
         c.address as client_address, c.city as client_city,
         (SELECT COUNT(*) FROM gps_tracking gt WHERE gt.time_entry_id = te.id) as gps_point_count
        FROM time_entries te LEFT JOIN clients c ON te.client_id = c.id
-       WHERE te.caregiver_id = $1
-         ${startDate ? `AND te.start_time >= $${params.indexOf(startDate) + 1}::timestamptz` : ''}
-         ${endDate ? `AND te.start_time <= $${params.indexOf(endDate) + 1}::timestamptz` : ''}
+       WHERE te.caregiver_id = $1${dateFilters}
        ORDER BY te.start_time DESC LIMIT $2`,
       params
     );

@@ -75,10 +75,10 @@ router.get('/client/:clientId/logs', auth, async (req, res) => {
   const { startDate, endDate } = req.query;
   try {
     let query = `
-      SELECT al.*, 
-        cp.first_name as caregiver_first, cp.last_name as caregiver_last
+      SELECT al.*,
+        u.first_name as caregiver_first, u.last_name as caregiver_last
       FROM adl_logs al
-      LEFT JOIN caregiver_profiles cp ON al.caregiver_id = cp.id
+      LEFT JOIN users u ON al.caregiver_id = u.id
       WHERE al.client_id = $1
     `;
     const params = [req.params.clientId];
@@ -121,9 +121,9 @@ router.post('/log', auth, async (req, res) => {
 router.get('/logs/time-entry/:timeEntryId', auth, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT al.*, cp.first_name as caregiver_first, cp.last_name as caregiver_last
+      SELECT al.*, u.first_name as caregiver_first, u.last_name as caregiver_last
       FROM adl_logs al
-      LEFT JOIN caregiver_profiles cp ON al.caregiver_id = cp.id
+      LEFT JOIN users u ON al.caregiver_id = u.id
       WHERE al.time_entry_id = $1
       ORDER BY al.performed_at
     `, [req.params.timeEntryId]);

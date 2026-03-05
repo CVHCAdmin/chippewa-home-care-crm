@@ -83,6 +83,7 @@ const ExpenseManagement = ({ token }) => {
       const response = await fetch(`${API_BASE_URL}/api/expenses?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Failed to load expenses');
       const data = await response.json();
       setExpenses(Array.isArray(data) ? data : []);
     } catch (error) {

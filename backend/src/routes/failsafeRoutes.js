@@ -127,7 +127,7 @@ router.post('/validate-evv', auth, requireAdmin, async (req, res) => {
             await db.query(`
               INSERT INTO validation_log (id, entity_type, entity_id, validation_type, status, message, details)
               VALUES ($1,'evv_visit',$2,$3,$4,$5,$6)
-              ON CONFLICT DO NOTHING
+              ON CONFLICT (id) DO NOTHING
             `, [uuidv4(), visit.id, result.code, result.status, result.message, JSON.stringify({ visitId: visit.id, rule: ruleName })]);
           }
         } catch (e) { /* skip failed rule */ }

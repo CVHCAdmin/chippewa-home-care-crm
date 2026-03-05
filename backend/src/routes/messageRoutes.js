@@ -163,14 +163,14 @@ router.post('/send', auth, async (req, res) => {
 
     // Add sender as participant
     await db.query(
-      `INSERT INTO message_thread_participants (thread_id, user_id, last_read_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING`,
+      `INSERT INTO message_thread_participants (thread_id, user_id, last_read_at) VALUES ($1, $2, NOW()) ON CONFLICT (thread_id, user_id) DO NOTHING`,
       [threadId, senderId]
     );
 
     // Add all recipients as participants
     for (const recipientId of allRecipientIds) {
       await db.query(
-        `INSERT INTO message_thread_participants (thread_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        `INSERT INTO message_thread_participants (thread_id, user_id) VALUES ($1, $2) ON CONFLICT (thread_id, user_id) DO NOTHING`,
         [threadId, recipientId]
       );
     }

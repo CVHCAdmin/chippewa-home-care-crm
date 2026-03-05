@@ -36,6 +36,7 @@ const ReportsAnalytics = ({ token }) => {
           headers: { 'Authorization': `Bearer ${token}` }
         })
       ]);
+      if (!cgRes.ok || !clRes.ok) throw new Error('Failed to load filters');
       const caregiverData = await cgRes.json();
       const clientData = await clRes.json();
       setCaregivers(caregiverData);
@@ -61,6 +62,7 @@ const ReportsAnalytics = ({ token }) => {
           clientId: clientFilter || null
         })
       });
+      if (!response.ok) throw new Error('Failed to generate report');
       const data = await response.json();
       setReportData(data);
     } catch (error) {
