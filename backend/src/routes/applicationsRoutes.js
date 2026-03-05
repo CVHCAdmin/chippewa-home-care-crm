@@ -246,12 +246,12 @@ router.post('/:id/hire', auth, async (req, res) => {
       VALUES ($1, 'hired', $2, $3)
     `, [req.params.id, 'Converted to caregiver. Temporary password was set.', req.user.id]);
 
-    res.json({ 
-      success: true, 
-      caregiverId: userId, 
+    res.json({
+      success: true,
+      caregiverId: userId,
       tempPassword,
       caregiver: caregiver.rows[0],
-      message: `${a.first_name} ${a.last_name} is now a caregiver. Temp password: ${tempPassword}`
+      message: `${a.first_name} ${a.last_name} is now a caregiver. Please share the temporary password securely.`
     });
   } catch (error) {
     console.error('Hire error:', error);

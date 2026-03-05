@@ -30,6 +30,16 @@ const port = process.env.PORT || 5000;
 app.use(helmet());
 app.use(compression());
 
+// HTTPS redirect in production (Render sets X-Forwarded-Proto)
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (req.headers['x-forwarded-proto'] === 'http') {
+      return res.redirect(301, `https://${req.headers.host}${req.url}`);
+    }
+    next();
+  });
+}
+
 // CORS — CVHC defaults + ALLOWED_ORIGINS env var for additional domains (white-labeling)
 // To add a new domain: set ALLOWED_ORIGINS=https://newclient.netlify.app in Render env vars
 app.use(cors({
