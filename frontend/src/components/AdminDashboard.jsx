@@ -44,6 +44,7 @@ import CommunicationLog from './admin/CommunicationLog';
 import NoShowAlerts from './admin/NoShowAlerts';
 import FormBuilder from './admin/FormBuilder';
 import RevenueForecast from './admin/RevenueForecast';
+import BillingImport from './admin/BillingImport';
 
 const NAV_SECTIONS = [
   {
@@ -87,6 +88,7 @@ const NAV_SECTIONS = [
     id: 'financial', label: 'Financial', icon: '💰',
     items: [
       { id: 'billing', label: 'Billing', icon: '🧾' },
+      { id: 'billing-import', label: 'Billing Import', icon: '📥' },
       { id: 'claims', label: 'Claims', icon: '📑' },
       { id: 'payroll', label: 'Payroll', icon: '💵' },
       { id: 'expenses', label: 'Expenses', icon: '💳' },
@@ -238,6 +240,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'clients': return <ClientsManagement token={token} />;
       case 'caregivers': return <CaregiverManagement token={token} onViewProfile={handleViewCaregiverProfile} onViewHistory={handleViewCaregiverHistory} />;
       case 'billing': return <BillingDashboard token={token} />;
+      case 'billing-import': return <BillingImport token={token} />;
       case 'scheduling': return <SchedulingHub token={token} />;
       case 'emergency-coverage': return <EmergencyCoverage token={token} />;
       case 'route-optimizer': return <RouteOptimizer token={token} />;

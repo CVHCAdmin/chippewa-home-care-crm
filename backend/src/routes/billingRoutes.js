@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/shared');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -971,6 +972,143 @@ router.get('/billing-summary', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error generating billing summary:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== CSV IMPORT ====================
+
+// Import billing data from Midas / My Choice Wisconsin CSV
+router.post('/import-csv', auth, requireAdmin, async (req, res) => {
+  const { rows, source } = req.body;
+
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'No rows provided' });
+  }
+
+  let imported = 0, skipped = 0;
+  const errors = [];
+
+  try {
+    // Group rows by clientId + billing month
+    const invoiceGroups = {};
+
+    for (const [idx, row] of rows.entries()) {
+      try {
+        if (!row.clientId) {
+          errors.push({ row: idx + 1, error: 'No client matched' });
+          skipped++;
+          continue;
+        }
+        if (!row.serviceDate) {
+          errors.push({ row: idx + 1, error: 'Missing service date' });
+          skipped++;
+          continue;
+        }
+
+        const svcDate = new Date(row.serviceDate);
+        if (isNaN(svcDate.getTime())) {
+          errors.push({ row: idx + 1, error: 'Invalid service date' });
+          skipped++;
+          continue;
+        }
+
+        // Billing period = month of service date
+        const periodStart = new Date(svcDate.getFullYear(), svcDate.getMonth(), 1).toISOString().slice(0, 10);
+        const periodEnd = new Date(svcDate.getFullYear(), svcDate.getMonth() + 1, 0).toISOString().slice(0, 10);
+        const groupKey = `${row.clientId}|${periodStart}`;
+
+        if (!invoiceGroups[groupKey]) {
+          invoiceGroups[groupKey] = {
+            clientId: row.clientId,
+            periodStart,
+            periodEnd,
+            lineItems: [],
+          };
+        }
+
+        const hours = parseFloat(row.hours) || 0;
+        const rate = parseFloat(row.rate) || 0;
+        const amount = parseFloat(row.amount) || (hours * rate);
+
+        invoiceGroups[groupKey].lineItems.push({
+          time_entry_id: null,
+          caregiver_id: row.caregiverId || null,
+          description: row.description || `Imported from ${source || 'CSV'}`,
+          hours: hours,
+          rate: rate,
+          amount: amount,
+          service_date: row.serviceDate,
+        });
+      } catch (err) {
+        errors.push({ row: idx + 1, error: err.message });
+        skipped++;
+      }
+    }
+
+    // Create invoices for each group
+    for (const group of Object.values(invoiceGroups)) {
+      try {
+        // Check for existing invoice for this client + period
+        const existing = await db.query(
+          `SELECT id FROM invoices WHERE client_id = $1 AND billing_period_start = $2 AND billing_period_end = $3`,
+          [group.clientId, group.periodStart, group.periodEnd]
+        );
+        if (existing.rows.length > 0) {
+          skipped += group.lineItems.length;
+          errors.push({ row: null, error: `Invoice already exists for client ${group.clientId} period ${group.periodStart}` });
+          continue;
+        }
+
+        // Get client info
+        const clientResult = await db.query(
+          `SELECT id, first_name, last_name, referral_source_id, is_private_pay FROM clients WHERE id = $1`,
+          [group.clientId]
+        );
+        if (clientResult.rows.length === 0) {
+          skipped += group.lineItems.length;
+          errors.push({ row: null, error: `Client ${group.clientId} not found` });
+          continue;
+        }
+        const client = clientResult.rows[0];
+
+        const total = group.lineItems.reduce((sum, li) => sum + li.amount, 0);
+        const dueDate = new Date(group.periodEnd);
+        dueDate.setDate(dueDate.getDate() + 30);
+
+        const invoiceNumber = generateInvoiceNumber(group.clientId);
+        const invoiceResult = await db.query(`
+          INSERT INTO invoices (
+            client_id, invoice_number, billing_period_start, billing_period_end,
+            subtotal, total, payment_status, payment_due_date, notes,
+            referral_source_id, invoice_type
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)
+          RETURNING *
+        `, [
+          group.clientId, invoiceNumber, group.periodStart, group.periodEnd,
+          total, total, dueDate,
+          `Imported from ${source || 'CSV'}`,
+          client.referral_source_id,
+          client.is_private_pay ? 'private_pay' : 'insurance'
+        ]);
+
+        await insertLineItems(invoiceResult.rows[0].id, group.lineItems);
+        imported += group.lineItems.length;
+      } catch (err) {
+        skipped += group.lineItems.length;
+        errors.push({ row: null, error: `Invoice creation failed: ${err.message}` });
+      }
+    }
+
+    res.json({
+      imported,
+      skipped,
+      invoicesCreated: Object.keys(invoiceGroups).length - errors.filter(e => !e.row).length,
+      errors: errors.slice(0, 50),
+      source: source || 'CSV',
+    });
+  } catch (error) {
+    console.error('Billing import error:', error);
     res.status(500).json({ error: error.message });
   }
 });
