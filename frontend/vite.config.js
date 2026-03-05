@@ -27,6 +27,7 @@ export default defineConfig({
     minify: 'terser',
     chunkSizeWarningLimit: 600,
     rollupOptions: {
+      external: ['@capacitor-community/background-geolocation'],
       output: {
         manualChunks: {
           // Split vendor libs into their own chunk
