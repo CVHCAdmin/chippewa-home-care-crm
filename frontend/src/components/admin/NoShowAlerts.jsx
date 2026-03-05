@@ -42,6 +42,7 @@ export default function NoShowAlerts({ token }) {
     setChecking(true);
     try {
       const r = await fetch(`${API}/api/no-show/run-check`, { method: 'POST', headers: h });
+      if (!r.ok) throw new Error('Check failed');
       const data = await r.json();
       flash(`✓ Check complete — ${data.alerts} new alert${data.alerts !== 1 ? 's' : ''} created (${data.checked} shifts checked)`);
       load();

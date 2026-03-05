@@ -19,7 +19,7 @@ const ShiftSwaps = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/shift-swaps?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setSwaps(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load swaps:', error);

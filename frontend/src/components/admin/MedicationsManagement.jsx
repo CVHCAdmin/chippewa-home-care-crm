@@ -38,7 +38,7 @@ const MedicationsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setClients(Array.isArray(data) ? data.filter(c => c.status === 'active') : []);
     } catch (error) {
       console.error('Failed to load clients:', error);
@@ -51,7 +51,7 @@ const MedicationsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/medications/client/${selectedClient}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setMedications(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load medications:', error);
@@ -65,7 +65,7 @@ const MedicationsManagement = ({ token }) => {
       const res = await fetch(`${API_BASE_URL}/api/medications/logs/client/${selectedClient}?startDate=${getDateRange().start}&endDate=${getDateRange().end}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setLogs(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load logs:', error);

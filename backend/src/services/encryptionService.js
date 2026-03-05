@@ -62,7 +62,7 @@ const decrypt = (encryptedValue) => {
 };
 
 const maskSSN     = (ssn) => { if (!ssn) return null; const c = ssn.replace(/\D/g,''); return `***-**-${c.slice(-4)}`; };
-const validateSSN = (ssn) => ssn.replace(/\D/g,'').length === 9;
-const normalizeSSN = (ssn) => ssn.replace(/\D/g,'');
+const validateSSN = (ssn) => ssn ? ssn.replace(/\D/g,'').length === 9 : false;
+const normalizeSSN = (ssn) => ssn ? ssn.replace(/\D/g,'') : '';
 
 module.exports = { encrypt, decrypt, maskSSN, validateSSN, normalizeSSN };

@@ -207,7 +207,7 @@ const auditLogger = (pool) => {
         const table_name = extractTableName(req.path);
         // Check suspicious activity for sensitive GETs
         if (isSensitiveOperation(table_name, 'GET', null)) {
-          checkSuspiciousActivity(user_id, `GET ${req.path}`, table_name, req.ip);
+          checkSuspiciousActivity(user_id, `GET ${req.path}`, table_name, req.ip).catch(err => console.error('[audit] suspicious activity check failed:', err.message));
         }
       }
       return next();

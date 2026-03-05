@@ -27,7 +27,7 @@ const clientAuth = async (req, res, next) => {
     // Verify portal is still enabled and client is active
     const result = await db.query(`
       SELECT cpa.*, c.first_name, c.last_name, c.is_active
-      FROM client_portal_auth cpa
+      FROM client_portal_accounts cpa
       JOIN clients c ON cpa.client_id = c.id
       WHERE cpa.client_id = $1 AND cpa.portal_enabled = true AND c.is_active = true
     `, [decoded.clientId]);
@@ -57,7 +57,7 @@ router.post('/login', async (req, res) => {
   try {
     const result = await db.query(`
       SELECT cpa.*, c.first_name, c.last_name, c.is_active
-      FROM client_portal_auth cpa
+      FROM client_portal_accounts cpa
       JOIN clients c ON cpa.client_id = c.id
       WHERE LOWER(cpa.email) = LOWER($1) AND cpa.portal_enabled = true
     `, [email]);
@@ -85,7 +85,7 @@ router.post('/login', async (req, res) => {
       const lockUntil = failCount >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null;
 
       await db.query(`
-        UPDATE client_portal_auth
+        UPDATE client_portal_accounts
         SET failed_login_count = $1, locked_until = $2, updated_at = NOW()
         WHERE client_id = $3
       `, [failCount, lockUntil, portal.client_id]);
@@ -95,7 +95,7 @@ router.post('/login', async (req, res) => {
 
     // Successful login — reset fail count, update last_login
     await db.query(`
-      UPDATE client_portal_auth
+      UPDATE client_portal_accounts
       SET failed_login_count = 0, locked_until = NULL, last_login = NOW(), updated_at = NOW()
       WHERE client_id = $1
     `, [portal.client_id]);
@@ -137,7 +137,7 @@ router.post('/set-password', async (req, res) => {
 
   try {
     const result = await db.query(`
-      SELECT * FROM client_portal_auth
+      SELECT * FROM client_portal_accounts
       WHERE invite_token = $1 AND invite_expires_at > NOW()
     `, [token]);
 
@@ -148,7 +148,7 @@ router.post('/set-password', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     await db.query(`
-      UPDATE client_portal_auth
+      UPDATE client_portal_accounts
       SET password_hash  = $1,
           invite_token   = NULL,
           invite_expires_at = NULL,
@@ -177,7 +177,7 @@ router.get('/portal/me', clientAuth, async (req, res) => {
         c.service_type, c.start_date,
         cpa.email as portal_email, cpa.last_login
       FROM clients c
-      JOIN client_portal_auth cpa ON cpa.client_id = c.id
+      JOIN client_portal_accounts cpa ON cpa.client_id = c.id
       WHERE c.id = $1
     `, [req.clientId]);
 
@@ -411,7 +411,7 @@ router.post('/admin/invite', auth, async (req, res) => {
     const inviteExpires = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
     await db.query(`
-      INSERT INTO client_portal_auth
+      INSERT INTO client_portal_accounts
         (client_id, email, invite_token, invite_expires_at, portal_enabled)
       VALUES ($1, $2, $3, $4, false)
       ON CONFLICT (client_id) DO UPDATE SET
@@ -464,7 +464,7 @@ router.get('/admin/clients', auth, async (req, res) => {
           ELSE 'not_invited'
         END as portal_status
       FROM clients c
-      LEFT JOIN client_portal_auth cpa ON cpa.client_id = c.id
+      LEFT JOIN client_portal_accounts cpa ON cpa.client_id = c.id
       WHERE c.is_active = true
       ORDER BY c.last_name, c.first_name
     `);
@@ -488,7 +488,7 @@ router.put('/admin/clients/:clientId/toggle', auth, async (req, res) => {
 
   try {
     await db.query(`
-      UPDATE client_portal_auth
+      UPDATE client_portal_accounts
       SET portal_enabled = $1, updated_at = NOW()
       WHERE client_id = $2
     `, [enabled, req.params.clientId]);
@@ -525,7 +525,7 @@ router.post('/admin/scheduled-visits', auth, async (req, res) => {
     const prefs = await db.query(`
       SELECT cnp.schedule_alerts, cpa.portal_enabled
       FROM client_notification_preferences cnp
-      JOIN client_portal_auth cpa ON cpa.client_id = cnp.client_id
+      JOIN client_portal_accounts cpa ON cpa.client_id = cnp.client_id
       WHERE cnp.client_id = $1
     `, [clientId]);
 
@@ -624,7 +624,7 @@ router.put('/admin/scheduled-visits/:id/cancel', auth, async (req, res) => {
     const prefs = await db.query(`
       SELECT cnp.schedule_alerts, cpa.portal_enabled
       FROM client_notification_preferences cnp
-      JOIN client_portal_auth cpa ON cpa.client_id = cnp.client_id
+      JOIN client_portal_accounts cpa ON cpa.client_id = cnp.client_id
       WHERE cnp.client_id = $1
     `, [visit.client_id]);
 

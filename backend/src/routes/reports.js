@@ -240,7 +240,7 @@ router.post('/performance', auth, async (req, res) => {
         COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
         COUNT(DISTINCT s.client_id) as clients_served,
         COALESCE(
-          (SELECT COUNT(*) FROM incidents i WHERE i.reported_by = u.id AND i.created_at >= $1 AND i.created_at <= $2),
+          (SELECT COUNT(*) FROM incident_reports i WHERE i.reported_by = u.id AND i.created_at >= $1 AND i.created_at <= $2),
           0
         ) as incident_count
       FROM users u
@@ -521,7 +521,7 @@ router.post('/:type/export', auth, async (req, res) => {
         SELECT
           u.first_name || ' ' || u.last_name as caregiver,
           bc.status as background_check_status,
-          bc.check_date, bc.expiration_date,
+          bc.initiated_date, bc.expiration_date,
           CASE WHEN bc.expiration_date < CURRENT_DATE THEN 'EXPIRED'
                WHEN bc.expiration_date < CURRENT_DATE + INTERVAL '60 days' THEN 'Expiring Soon'
                WHEN bc.expiration_date IS NULL THEN 'No Check on File'
@@ -529,7 +529,7 @@ router.post('/:type/export', auth, async (req, res) => {
           u.certifications
         FROM users u
         LEFT JOIN background_checks bc ON bc.caregiver_id = u.id
-          AND bc.id = (SELECT id FROM background_checks bc2 WHERE bc2.caregiver_id = u.id ORDER BY check_date DESC LIMIT 1)
+          AND bc.id = (SELECT id FROM background_checks bc2 WHERE bc2.caregiver_id = u.id ORDER BY initiated_date DESC NULLS LAST LIMIT 1)
         WHERE u.role = 'caregiver' AND u.is_active = true
         ORDER BY bc.expiration_date ASC NULLS FIRST, u.last_name
       `, []);
@@ -539,14 +539,14 @@ router.post('/:type/export', auth, async (req, res) => {
         SELECT
           c.first_name || ' ' || c.last_name as client,
           c.email, c.phone, c.city, c.state,
-          c.service_type, c.status, c.created_at::date as enrolled_date,
+          c.service_type, CASE WHEN c.is_active THEN 'active' ELSE 'inactive' END as status, c.created_at::date as enrolled_date,
           COALESCE(rs.name, 'Unknown') as referral_source,
           COUNT(DISTINCT s.caregiver_id) as assigned_caregivers
         FROM clients c
         LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
         LEFT JOIN schedules s ON s.client_id = c.id AND s.is_active = true
         WHERE c.is_active = true
-        GROUP BY c.id, c.first_name, c.last_name, c.email, c.phone, c.city, c.state, c.service_type, c.status, c.created_at, rs.name
+        GROUP BY c.id, c.first_name, c.last_name, c.email, c.phone, c.city, c.state, c.service_type, c.is_active, c.created_at, rs.name
         ORDER BY c.last_name
       `, []);
       data = result.rows;

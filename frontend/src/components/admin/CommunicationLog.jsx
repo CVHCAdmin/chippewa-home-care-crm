@@ -40,7 +40,7 @@ export default function CommunicationLog({ token, entityType, entityId, entityNa
       const params = new URLSearchParams({ limit: 100 });
       if (filterType) params.set('type', filterType);
       const r = await fetch(`${API}/api/communication-log/${entityType}/${entityId}?${params}`, { headers });
-      const data = await r.json();
+      const data = r.ok ? await r.json() : [];
       setLogs(Array.isArray(data) ? data : []);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -49,7 +49,7 @@ export default function CommunicationLog({ token, entityType, entityId, entityNa
   const loadFollowUps = async () => {
     try {
       const r = await fetch(`${API}/api/communication-log/follow-ups/pending`, { headers });
-      const data = await r.json();
+      const data = r.ok ? await r.json() : [];
       setFollowUps(Array.isArray(data) ? data.filter(f => f.entity_id === entityId) : []);
     } catch (e) {}
   };

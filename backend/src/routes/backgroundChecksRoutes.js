@@ -32,8 +32,8 @@ router.get('/', auth, async (req, res) => {
       query += ` AND bc.caregiver_id = $${params.length}`;
     }
 
-    query += ` ORDER BY bc.request_date DESC`;
-    
+    query += ` ORDER BY bc.created_at DESC`;
+
     const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
@@ -47,7 +47,7 @@ router.get('/caregiver/:caregiverId', auth, async (req, res) => {
     const result = await db.query(`
       SELECT * FROM background_checks
       WHERE caregiver_id = $1
-      ORDER BY request_date DESC
+      ORDER BY created_at DESC
     `, [req.params.caregiverId]);
     res.json(result.rows);
   } catch (error) {

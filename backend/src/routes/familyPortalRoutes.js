@@ -60,8 +60,8 @@ router.post('/admin/members', auth, async (req, res) => {
       const hashedPassword = await bcrypt.hash(password, 10);
       
       const userResult = await db.query(`
-        INSERT INTO users (email, password_hash, first_name, last_name, role, status)
-        VALUES ($1, $2, $3, $4, 'family', 'active')
+        INSERT INTO users (email, password_hash, first_name, last_name, role, is_active)
+        VALUES ($1, $2, $3, $4, 'family', true)
         RETURNING id
       `, [email, hashedPassword, firstName, lastName]);
       
@@ -102,8 +102,8 @@ router.put('/admin/members/:id/status', auth, async (req, res) => {
     const fm = await db.query('SELECT user_id FROM family_members WHERE id = $1', [req.params.id]);
     if (fm.rows[0]?.user_id) {
       await db.query(`
-        UPDATE users SET status = $1 WHERE id = $2
-      `, [isActive ? 'active' : 'inactive', fm.rows[0].user_id]);
+        UPDATE users SET is_active = $1 WHERE id = $2
+      `, [isActive, fm.rows[0].user_id]);
     }
 
     res.json({ success: true });
@@ -228,7 +228,7 @@ router.post('/login', async (req, res) => {
       SELECT u.*, fm.id as family_member_id, fm.client_id
       FROM users u
       JOIN family_members fm ON fm.user_id = u.id
-      WHERE u.email = $1 AND u.role = 'family' AND u.status = 'active'
+      WHERE u.email = $1 AND u.role = 'family' AND u.is_active = true
     `, [email]);
 
     if (user.rows.length === 0) {

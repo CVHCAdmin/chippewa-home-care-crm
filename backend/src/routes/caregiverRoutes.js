@@ -239,7 +239,7 @@ router.delete('/certifications/:certId', verifyToken, async (req, res) => {
 // GET /api/caregivers/:caregiverId/background-check
 router.get('/:caregiverId/background-check', verifyToken, async (req, res) => {
   try {
-    const result = await db.query(`SELECT * FROM background_checks WHERE caregiver_id = $1 ORDER BY check_date DESC LIMIT 1`, [req.params.caregiverId]);
+    const result = await db.query(`SELECT * FROM background_checks WHERE caregiver_id = $1 ORDER BY initiated_date DESC NULLS LAST LIMIT 1`, [req.params.caregiverId]);
     res.json(result.rows.length > 0 ? result.rows[0] : null);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -251,7 +251,7 @@ router.post('/:caregiverId/background-check', verifyToken, requireAdmin, async (
     if (!checkDate || !status) return res.status(400).json({ error: 'Check date and status are required' });
     const checkId = uuidv4();
     const result = await db.query(
-      `INSERT INTO background_checks (id, caregiver_id, check_date, expiration_date, status, clearance_number, notes, checked_by)
+      `INSERT INTO background_checks (id, caregiver_id, initiated_date, expiration_date, status, reference_number, notes, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [checkId, req.params.caregiverId, checkDate, expirationDate || null, status, clearanceNumber || null, notes || null, req.user.id]
     );

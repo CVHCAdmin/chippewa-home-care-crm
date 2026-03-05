@@ -44,6 +44,7 @@ const PaymentPage = () => {
         headers: { 'Content-Type': 'application/json' }
       });
 
+      if (!response.ok) throw new Error('Payment request failed');
       const data = await response.json();
 
       if (data.url) {

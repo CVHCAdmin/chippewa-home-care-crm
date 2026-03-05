@@ -78,7 +78,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
       fetch(`${API_BASE_URL}/api/client-portal/admin/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
-        .then(r => r.json())
+        .then(r => { if (!r.ok) throw new Error('Request failed'); return r.json(); })
         .then(data => {
           const found = Array.isArray(data) ? data.find(c => c.id === client.id) : null;
           if (found) {

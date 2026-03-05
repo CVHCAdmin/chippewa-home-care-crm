@@ -52,7 +52,7 @@ router.post('/prospects/:id/convert', verifyToken, requireAdmin, async (req, res
     if (prospect.rows.length === 0) return res.status(404).json({ error: 'Prospect not found' });
     const p = prospect.rows[0];
     const clientResult = await db.query(
-      `INSERT INTO clients (first_name, last_name, phone, email, address, city, state, status) VALUES ($1,$2,$3,$4,$5,$6,$7,'active') RETURNING *`,
+      `INSERT INTO clients (first_name, last_name, phone, email, address, city, state, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,true) RETURNING *`,
       [p.first_name, p.last_name, p.phone, p.email, p.address, p.city, p.state]
     );
     await db.query(`UPDATE prospects SET status='converted', converted_client_id=$1, updated_at=NOW() WHERE id=$2`, [clientResult.rows[0].id, req.params.id]);

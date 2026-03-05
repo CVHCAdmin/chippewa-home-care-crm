@@ -252,6 +252,7 @@ export function useOfflineSync() {
 // so Android doesn't kill it. Falls back to regular watchPosition on web/iOS.
 export function useBackgroundGeolocation() {
   const [isRunning, setIsRunning] = useState(false);
+  const webWatchIdRef = useRef(null);
 
   const start = useCallback(async ({ onLocation, notificationTitle = 'CVHC HomeCare', notificationText = 'Monitoring your location for auto clock-in' } = {}) => {
     const BgGeo = await getBgGeo();
@@ -296,7 +297,7 @@ export function useBackgroundGeolocation() {
     } else {
       // Web or iOS — use regular watchPosition as fallback
       if ('geolocation' in navigator) {
-        navigator.geolocation.watchPosition(
+        webWatchIdRef.current = navigator.geolocation.watchPosition(
           pos => {
             if (onLocation) onLocation({
               latitude: pos.coords.latitude,
@@ -317,6 +318,9 @@ export function useBackgroundGeolocation() {
     const BgGeo = await getBgGeo();
     if (BgGeo && isNative && platform === 'android') {
       await BgGeo.removeAllWatchers().catch(() => {});
+    } else if (webWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(webWatchIdRef.current);
+      webWatchIdRef.current = null;
     }
     setIsRunning(false);
   }, []);

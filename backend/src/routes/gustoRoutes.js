@@ -112,19 +112,19 @@ router.get('/preview', auth, requireAdmin, async (req, res) => {
         COUNT(te.id) as shift_count,
         ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric, 2) as total_hours,
         ROUND(SUM(CASE WHEN EXTRACT(DOW FROM te.start_time) IN (0,6) THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600 ELSE 0 END)::numeric, 2) as weekend_hours,
-        cp.pay_rate as hourly_rate,
-        ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric * COALESCE(cp.pay_rate, 0), 2) as gross_pay
+        cp.base_hourly_rate as hourly_rate,
+        ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric * COALESCE(cp.base_hourly_rate, 0), 2) as gross_pay
       FROM users u
       JOIN time_entries te ON te.caregiver_id = u.id
       LEFT JOIN gusto_employee_map gem ON gem.user_id = u.id
       LEFT JOIN (
         SELECT DISTINCT ON (caregiver_id) caregiver_id, pay_rate
-        FROM caregiver_pay_rates ORDER BY caregiver_id, effective_date DESC
+        FROM caregiver_pay_rates ORDER BY caregiver_id, created_at DESC
       ) cp ON cp.caregiver_id = u.id
       WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1
         AND te.is_complete = true
         AND u.role = 'caregiver'
-      GROUP BY u.id, u.first_name, u.last_name, u.email, gem.gusto_employee_id, gem.is_synced, cp.pay_rate
+      GROUP BY u.id, u.first_name, u.last_name, u.email, gem.gusto_employee_id, gem.is_synced, cp.base_hourly_rate
       ORDER BY u.last_name, u.first_name
     `, [startDate, endDate]);
 

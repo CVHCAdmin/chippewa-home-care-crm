@@ -13,7 +13,7 @@ const ImpersonationModal = ({ token, onImpersonate, onClose }) => {
     fetch(`${API_BASE_URL}/api/auth/users`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error('Request failed'); return r.json(); })
       .then(data => { setUsers(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => { setError('Failed to load users'); setLoading(false); });
   }, [token]);

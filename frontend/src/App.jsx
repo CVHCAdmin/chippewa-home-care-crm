@@ -127,7 +127,7 @@ const MainApp = () => {
       }
     }
     setLoading(false);
-  }, [token]);
+  }, [token, handleLogout]);
 
   const handleLogin = (token, userData) => {
     localStorage.setItem('token', token);

@@ -53,7 +53,7 @@ router.get('/:id', auth, async (req, res) => {
   try {
     const result = await db.query(`
       SELECT c.*, 
-        rs.name as payer_name, rs.billing_address, rs.billing_contact,
+        rs.name as payer_name, rs.address as billing_address, rs.contact_name as billing_contact,
         cl.first_name as client_first_name, cl.last_name as client_last_name,
         cl.medicaid_id, cl.insurance_id,
         i.invoice_number, i.total as invoice_total

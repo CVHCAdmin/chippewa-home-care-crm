@@ -34,7 +34,7 @@ router.get('/', auth, async (req, res) => {
       query += ` AND (ssr.requesting_caregiver_id = $${params.length} OR ssr.target_caregiver_id = $${params.length})`;
     }
 
-    query += ` ORDER BY ssr.requested_at DESC`;
+    query += ` ORDER BY ssr.created_at DESC`;
     
     const result = await db.query(query, params);
     res.json(result.rows);
