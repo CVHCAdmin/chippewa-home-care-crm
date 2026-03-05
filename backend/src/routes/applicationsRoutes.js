@@ -56,7 +56,7 @@ router.post('/', async (req, res) => {
     res.json({ 
       success: true, 
       message: 'Application submitted successfully',
-      applicationId: result.rows[0].id 
+      applicationId: result.rows[0]?.id
     });
   } catch (error) {
     console.error('Application submission error:', error);

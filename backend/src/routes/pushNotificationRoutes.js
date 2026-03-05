@@ -181,7 +181,7 @@ router.get('/unread-count', auth, async (req, res) => {
       `SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND is_read = false`,
       [req.user.id]
     );
-    res.json({ count: parseInt(result.rows[0].count) });
+    res.json({ count: parseInt(result.rows[0]?.count || 0) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

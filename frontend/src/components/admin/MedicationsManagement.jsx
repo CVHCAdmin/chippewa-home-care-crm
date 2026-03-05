@@ -352,7 +352,7 @@ const MedicationsManagement = ({ token }) => {
                         <td><strong>{log.medication_name}</strong></td>
                         <td>{log.dosage_given || log.dosage || '-'}</td>
                         <td>{getLogStatusBadge(log.status)}</td>
-                        <td>{log.caregiver_first} {log.caregiver_last}</td>
+                        <td>{log.caregiver_first || ''} {log.caregiver_last || ''}</td>
                         <td>{log.notes || '-'}</td>
                       </tr>
                     ))}

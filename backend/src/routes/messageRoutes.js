@@ -73,7 +73,7 @@ router.get('/unread-count', auth, async (req, res) => {
         AND m.created_at > COALESCE(mtp.last_read_at, '1970-01-01')
     `, [userId]);
 
-    res.json({ count: parseInt(result.rows[0].count) });
+    res.json({ count: parseInt(result.rows[0]?.count || 0) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

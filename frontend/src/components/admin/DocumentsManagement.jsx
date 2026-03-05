@@ -368,7 +368,7 @@ const UploadForm = ({ clients, caregivers, onSubmit, onCancel }) => {
     onSubmit(data);
   };
 
-  const entities = formData.entityType === 'client' ? clients : caregivers;
+  const entities = (formData.entityType === 'client' ? clients : caregivers) || [];
 
   return (
     <form onSubmit={handleSubmit}>

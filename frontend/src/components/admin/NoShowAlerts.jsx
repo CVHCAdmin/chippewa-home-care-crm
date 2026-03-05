@@ -239,7 +239,7 @@ export default function NoShowAlerts({ token }) {
           <div style={{ background: '#fff', borderRadius: '12px', padding: '1.5rem', maxWidth: '420px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
             <h4 style={{ margin: '0 0 0.5rem' }}>Resolve Alert</h4>
             <p style={{ fontSize: '0.88rem', color: '#6B7280', margin: '0 0 1rem' }}>
-              {resolveModal.caregiver_name} → {resolveModal.client_name}
+              {resolveModal.caregiver_name || 'Unknown'} → {resolveModal.client_name || 'Unknown'}
             </p>
             <textarea value={resolveNote} onChange={e => setResolveNote(e.target.value)}
               placeholder='Resolution note (optional)...' rows={3}

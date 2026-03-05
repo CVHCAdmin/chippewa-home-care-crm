@@ -176,7 +176,7 @@ const LoginActivity = ({ token }) => {
               <tbody>
                 {activity.map(row => {
                   const name = row.first_name
-                    ? `${row.first_name} ${row.last_name}`
+                    ? `${row.first_name} ${row.last_name || ''}`
                     : '—';
                   return (
                     <tr key={row.id} style={{ background: row.success ? undefined : '#FFF5F5' }}>

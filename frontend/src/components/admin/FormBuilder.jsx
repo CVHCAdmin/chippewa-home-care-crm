@@ -360,7 +360,7 @@ export default function FormBuilder({ token }) {
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
                     <button onClick={() => setFillModal(t)} style={{ flex: 1, padding: '0.4rem', borderRadius: '6px', border: 'none', background: '#3B82F6', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}>Fill Out</button>
-                    <button onClick={() => setEditTemplate({ ...t, fields: typeof t.fields === 'string' ? JSON.parse(t.fields) : t.fields })} style={{ padding: '0.4rem 0.65rem', borderRadius: '6px', border: '1px solid #E5E7EB', background: '#fff', color: '#374151', cursor: 'pointer', fontSize: '0.8rem' }}>Edit</button>
+                    <button onClick={() => { let fields; try { fields = typeof t.fields === 'string' ? JSON.parse(t.fields) : t.fields; } catch { fields = []; } setEditTemplate({ ...t, fields }); }} style={{ padding: '0.4rem 0.65rem', borderRadius: '6px', border: '1px solid #E5E7EB', background: '#fff', color: '#374151', cursor: 'pointer', fontSize: '0.8rem' }}>Edit</button>
                     <button onClick={() => deleteTemplate(t.id)} style={{ padding: '0.4rem 0.65rem', borderRadius: '6px', border: '1px solid #FCA5A5', background: '#fff', color: '#EF4444', cursor: 'pointer', fontSize: '0.8rem' }}>✕</button>
                   </div>
                 </div>
