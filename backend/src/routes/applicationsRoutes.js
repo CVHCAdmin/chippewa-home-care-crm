@@ -100,6 +100,28 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// Get application stats (must be before /:id)
+router.get('/stats/summary', auth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status = 'new') as new_count,
+        COUNT(*) FILTER (WHERE status = 'reviewing') as reviewing_count,
+        COUNT(*) FILTER (WHERE status = 'interviewed') as interviewed_count,
+        COUNT(*) FILTER (WHERE status = 'offered') as offered_count,
+        COUNT(*) FILTER (WHERE status = 'hired') as hired_count,
+        COUNT(*) FILTER (WHERE status = 'rejected') as rejected_count,
+        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '7 days') as last_7_days,
+        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '30 days') as last_30_days
+      FROM job_applications
+    `);
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get single application details
 router.get('/:id', auth, async (req, res) => {
   try {
@@ -243,28 +265,6 @@ router.delete('/:id', auth, async (req, res) => {
     await db.query('DELETE FROM application_status_history WHERE application_id = $1', [req.params.id]);
     await db.query('DELETE FROM job_applications WHERE id = $1', [req.params.id]);
     res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get application stats
-router.get('/stats/summary', auth, async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT 
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE status = 'new') as new_count,
-        COUNT(*) FILTER (WHERE status = 'reviewing') as reviewing_count,
-        COUNT(*) FILTER (WHERE status = 'interviewed') as interviewed_count,
-        COUNT(*) FILTER (WHERE status = 'offered') as offered_count,
-        COUNT(*) FILTER (WHERE status = 'hired') as hired_count,
-        COUNT(*) FILTER (WHERE status = 'rejected') as rejected_count,
-        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '7 days') as last_7_days,
-        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '30 days') as last_30_days
-      FROM job_applications
-    `);
-    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

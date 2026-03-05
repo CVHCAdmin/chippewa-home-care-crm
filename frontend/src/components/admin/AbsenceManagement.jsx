@@ -106,6 +106,7 @@ const AbsenceManagement = ({ token }) => {
   };
 
   const getTypeLabel = (type) => {
+    if (!type) return 'Unknown';
     return type.replace('_', ' ').toUpperCase();
   };
 

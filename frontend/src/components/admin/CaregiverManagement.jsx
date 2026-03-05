@@ -221,7 +221,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
       const ratesRes = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${selectedCaregiver.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      setCaregiverRates(await ratesRes.json());
+      setCaregiverRates(ratesRes.ok ? await ratesRes.json() : []);
     } catch (error) {
       toast('Failed to add rate: ' + error.message, 'error');
     }
@@ -239,7 +239,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
       const ratesRes = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${selectedCaregiver.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      setCaregiverRates(await ratesRes.json());
+      setCaregiverRates(ratesRes.ok ? await ratesRes.json() : []);
     } catch (error) {
       toast('Failed to delete rate: ' + error.message, 'error');
     }

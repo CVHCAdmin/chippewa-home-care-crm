@@ -86,8 +86,8 @@ const RouteOptimizer = ({ token }) => {
         fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/clients`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
-      const cgData = await cgRes.json();
-      const clData = await clRes.json();
+      const cgData = cgRes.ok ? await cgRes.json() : [];
+      const clData = clRes.ok ? await clRes.json() : [];
       setCaregivers(Array.isArray(cgData) ? cgData : []);
       setClients(Array.isArray(clData) ? clData : []);
     } catch (e) {

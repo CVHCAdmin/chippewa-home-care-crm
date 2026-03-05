@@ -127,7 +127,7 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
   try {
     const { scheduleId } = req.params;
     const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate } = req.body;
-    const normalize = t => t.split(':').map(n => n.padStart(2, '0')).join(':');
+    const normalize = t => String(t).split(':').map(n => n.padStart(2, '0')).join(':');
     if (startTime && endTime && normalize(startTime) >= normalize(endTime)) return res.status(400).json({ error: 'End time must be after start time' });
     const result = await db.query(
       `UPDATE schedules SET client_id=COALESCE($1,client_id), day_of_week=$2, date=$3,

@@ -118,7 +118,7 @@ router.get('/preview', auth, requireAdmin, async (req, res) => {
       JOIN time_entries te ON te.caregiver_id = u.id
       LEFT JOIN gusto_employee_map gem ON gem.user_id = u.id
       LEFT JOIN (
-        SELECT DISTINCT ON (caregiver_id) caregiver_id, pay_rate
+        SELECT DISTINCT ON (caregiver_id) caregiver_id, base_hourly_rate
         FROM caregiver_pay_rates ORDER BY caregiver_id, created_at DESC
       ) cp ON cp.caregiver_id = u.id
       WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1

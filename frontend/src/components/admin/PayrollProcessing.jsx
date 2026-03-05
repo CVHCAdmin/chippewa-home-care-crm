@@ -226,6 +226,7 @@ const PayrollProcessing = ({ token }) => {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ startDate: payPeriod.startDate, endDate: payPeriod.endDate, format })
       });
+      if (!response.ok) throw new Error('Export failed');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -244,6 +245,7 @@ const PayrollProcessing = ({ token }) => {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ startDate: payPeriod.startDate, endDate: payPeriod.endDate, payrollData })
       });
+      if (!response.ok) throw new Error('Export failed');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');

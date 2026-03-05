@@ -48,6 +48,52 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// Get claims summary/dashboard (must be before /:id)
+router.get('/reports/summary', auth, async (req, res) => {
+  try {
+    const summary = await db.query(`
+      SELECT
+        status,
+        COUNT(*) as count,
+        SUM(charge_amount) as total_charged,
+        SUM(paid_amount) as total_paid
+      FROM claims
+      GROUP BY status
+    `);
+
+    const byPayer = await db.query(`
+      SELECT
+        rs.name as payer_name,
+        COUNT(*) as claim_count,
+        SUM(c.charge_amount) as total_charged,
+        SUM(c.paid_amount) as total_paid,
+        SUM(CASE WHEN c.status = 'denied' THEN c.charge_amount ELSE 0 END) as total_denied
+      FROM claims c
+      JOIN referral_sources rs ON c.payer_id = rs.id
+      GROUP BY rs.id, rs.name
+      ORDER BY total_charged DESC
+    `);
+
+    const aging = await db.query(`
+      SELECT
+        SUM(CASE WHEN submitted_date > NOW() - INTERVAL '30 days' THEN charge_amount ELSE 0 END) as under_30,
+        SUM(CASE WHEN submitted_date BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days' THEN charge_amount ELSE 0 END) as days_30_60,
+        SUM(CASE WHEN submitted_date BETWEEN NOW() - INTERVAL '90 days' AND NOW() - INTERVAL '60 days' THEN charge_amount ELSE 0 END) as days_60_90,
+        SUM(CASE WHEN submitted_date < NOW() - INTERVAL '90 days' THEN charge_amount ELSE 0 END) as over_90
+      FROM claims
+      WHERE status IN ('submitted', 'accepted')
+    `);
+
+    res.json({
+      byStatus: summary.rows,
+      byPayer: byPayer.rows,
+      aging: aging.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get claim by ID
 router.get('/:id', auth, async (req, res) => {
   try {
@@ -224,51 +270,7 @@ router.post('/export/837p', auth, async (req, res) => {
   }
 });
 
-// Get claims summary/dashboard
-router.get('/reports/summary', auth, async (req, res) => {
-  try {
-    const summary = await db.query(`
-      SELECT 
-        status,
-        COUNT(*) as count,
-        SUM(charge_amount) as total_charged,
-        SUM(paid_amount) as total_paid
-      FROM claims
-      GROUP BY status
-    `);
-
-    const byPayer = await db.query(`
-      SELECT 
-        rs.name as payer_name,
-        COUNT(*) as claim_count,
-        SUM(c.charge_amount) as total_charged,
-        SUM(c.paid_amount) as total_paid,
-        SUM(CASE WHEN c.status = 'denied' THEN c.charge_amount ELSE 0 END) as total_denied
-      FROM claims c
-      JOIN referral_sources rs ON c.payer_id = rs.id
-      GROUP BY rs.id, rs.name
-      ORDER BY total_charged DESC
-    `);
-
-    const aging = await db.query(`
-      SELECT
-        SUM(CASE WHEN submitted_date > NOW() - INTERVAL '30 days' THEN charge_amount ELSE 0 END) as under_30,
-        SUM(CASE WHEN submitted_date BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days' THEN charge_amount ELSE 0 END) as days_30_60,
-        SUM(CASE WHEN submitted_date BETWEEN NOW() - INTERVAL '90 days' AND NOW() - INTERVAL '60 days' THEN charge_amount ELSE 0 END) as days_60_90,
-        SUM(CASE WHEN submitted_date < NOW() - INTERVAL '90 days' THEN charge_amount ELSE 0 END) as over_90
-      FROM claims
-      WHERE status IN ('submitted', 'accepted')
-    `);
-
-    res.json({
-      byStatus: summary.rows,
-      byPayer: byPayer.rows,
-      aging: aging.rows[0]
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// (moved above /:id route)
 
 // Helper functions
 function formatDate(date) {

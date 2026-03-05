@@ -217,22 +217,26 @@ const auditLogger = (pool) => {
     let logged = false;
 
     res.on('finish', async () => {
-      if (logged || res.statusCode >= 400) return;
-      logged = true;
-      const user_id = req.user?.id || req.user?.userId || SYSTEM_USER_ID;
-      const table_name = extractTableName(req.path);
-      const record_id = req.params?.id || null;
-      const ip_address = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+      try {
+        if (logged || res.statusCode >= 400) return;
+        logged = true;
+        const user_id = req.user?.id || req.user?.userId || SYSTEM_USER_ID;
+        const table_name = extractTableName(req.path);
+        const record_id = req.params?.id || null;
+        const ip_address = req.ip || req.headers['x-forwarded-for'] || 'unknown';
 
-      await log({
-        user_id,
-        action: `${req.method} ${req.path}`,
-        table_name,
-        record_id,
-        old_data: null,
-        new_data: req.body,
-        ip_address
-      });
+        await log({
+          user_id,
+          action: `${req.method} ${req.path}`,
+          table_name,
+          record_id,
+          old_data: null,
+          new_data: req.body,
+          ip_address
+        });
+      } catch (err) {
+        console.error('[audit] finish handler error:', err.message);
+      }
     });
 
     res.json = function(data) {

@@ -13,12 +13,12 @@ router.get('/revenue', auth, async (req, res) => {
     // Actual billed revenue last N months
     const actual = await db.query(`
       SELECT
-        DATE_TRUNC('month', service_date) AS period,
-        SUM(total_amount) AS billed,
+        DATE_TRUNC('month', service_date_from) AS period,
+        SUM(charge_amount) AS billed,
         SUM(paid_amount) AS collected,
         COUNT(*) AS claim_count
       FROM claims
-      WHERE service_date >= CURRENT_DATE - ($1 * INTERVAL '1 month')
+      WHERE service_date_from >= CURRENT_DATE - ($1 * INTERVAL '1 month')
         AND status NOT IN ('voided','rejected')
       GROUP BY 1 ORDER BY 1
     `, [months]);
@@ -29,17 +29,17 @@ router.get('/revenue', auth, async (req, res) => {
         a.client_id,
         c.first_name || ' ' || c.last_name AS client_name,
         a.service_type,
-        COALESCE(a.authorized_hours, a.authorized_units) AS authorized_hours,
-        COALESCE(a.used_hours, a.used_units, 0) AS used_hours,
-        (COALESCE(a.authorized_hours, a.authorized_units, 0) - COALESCE(a.used_hours, a.used_units, 0)) AS remaining_hours,
-        COALESCE(a.hourly_rate, 18.50) AS hourly_rate,
-        ((COALESCE(a.authorized_hours, a.authorized_units, 0) - COALESCE(a.used_hours, a.used_units, 0)) * COALESCE(a.hourly_rate, 18.50)) AS projected_remaining_revenue,
+        COALESCE(a.authorized_units, 0) AS authorized_hours,
+        COALESCE(a.used_units, 0) AS used_hours,
+        (COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) AS remaining_hours,
+        18.50 AS hourly_rate,
+        ((COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) * 18.50) AS projected_remaining_revenue,
         a.end_date
       FROM authorizations a
       JOIN clients c ON a.client_id = c.id
       WHERE a.status = 'active'
         AND a.end_date >= CURRENT_DATE
-        AND (COALESCE(a.authorized_hours, a.authorized_units, 0) - COALESCE(a.used_hours, a.used_units, 0)) > 0
+        AND (COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) > 0
       ORDER BY projected_remaining_revenue DESC
     `);
 
@@ -71,13 +71,13 @@ router.get('/revenue', auth, async (req, res) => {
       SELECT
         cl.client_id,
         c.first_name || ' ' || c.last_name AS client_name,
-        SUM(cl.total_amount) AS total_billed,
+        SUM(cl.charge_amount) AS total_billed,
         SUM(cl.paid_amount) AS total_collected,
         COUNT(*) AS claim_count,
-        AVG(cl.total_amount) AS avg_claim
+        AVG(cl.charge_amount) AS avg_claim
       FROM claims cl
       JOIN clients c ON cl.client_id = c.id
-      WHERE cl.service_date >= CURRENT_DATE - INTERVAL '90 days'
+      WHERE cl.service_date_from >= CURRENT_DATE - INTERVAL '90 days'
         AND cl.status NOT IN ('voided','rejected')
       GROUP BY 1,2 ORDER BY 3 DESC LIMIT 10
     `);

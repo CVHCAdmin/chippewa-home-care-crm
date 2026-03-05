@@ -354,18 +354,18 @@ router.post('/satisfaction', auth, async (req, res) => {
     const feedbackQuery = await db.query(`
       SELECT 
         CASE 
-          WHEN LOWER(pr.notes) LIKE '%excellent%' OR LOWER(pr.notes) LIKE '%great%' OR LOWER(pr.notes) LIKE '%amazing%' THEN 'Excellent Service'
-          WHEN LOWER(pr.notes) LIKE '%punctual%' OR LOWER(pr.notes) LIKE '%on time%' THEN 'Punctuality'
-          WHEN LOWER(pr.notes) LIKE '%friendly%' OR LOWER(pr.notes) LIKE '%kind%' OR LOWER(pr.notes) LIKE '%caring%' THEN 'Friendly & Caring'
-          WHEN LOWER(pr.notes) LIKE '%professional%' THEN 'Professionalism'
-          WHEN LOWER(pr.notes) LIKE '%late%' OR LOWER(pr.notes) LIKE '%missed%' THEN 'Timeliness Issues'
-          WHEN LOWER(pr.notes) LIKE '%communication%' THEN 'Communication'
+          WHEN LOWER(pr.comments) LIKE '%excellent%' OR LOWER(pr.comments) LIKE '%great%' OR LOWER(pr.comments) LIKE '%amazing%' THEN 'Excellent Service'
+          WHEN LOWER(pr.comments) LIKE '%punctual%' OR LOWER(pr.comments) LIKE '%on time%' THEN 'Punctuality'
+          WHEN LOWER(pr.comments) LIKE '%friendly%' OR LOWER(pr.comments) LIKE '%kind%' OR LOWER(pr.comments) LIKE '%caring%' THEN 'Friendly & Caring'
+          WHEN LOWER(pr.comments) LIKE '%professional%' THEN 'Professionalism'
+          WHEN LOWER(pr.comments) LIKE '%late%' OR LOWER(pr.comments) LIKE '%missed%' THEN 'Timeliness Issues'
+          WHEN LOWER(pr.comments) LIKE '%communication%' THEN 'Communication'
           ELSE 'General Feedback'
         END as theme,
         COUNT(*) as count
       FROM performance_ratings pr
       WHERE pr.created_at >= $1 AND pr.created_at <= $2
-        AND pr.notes IS NOT NULL AND pr.notes != ''
+        AND pr.comments IS NOT NULL AND pr.comments != ''
       GROUP BY theme
       ORDER BY count DESC
       LIMIT 6

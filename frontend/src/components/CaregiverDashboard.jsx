@@ -1098,7 +1098,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           {currentPage === 'open-shifts' && renderOpenShiftsPage()}
           {currentPage === 'availability' && renderAvailabilityPage()}
           {currentPage === 'time-off' && renderTimeOffPage()}
-          {currentPage === 'miss-report' && renderMissReportPage()}
+          {currentPage === 'miss-report' && <ShiftMissReport token={token} userId={user.id} onClose={() => setCurrentPage('home')} />}
           {currentPage === 'settings' && renderSettingsPage()}
         </div>
       </div>

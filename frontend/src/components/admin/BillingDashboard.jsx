@@ -365,11 +365,12 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
 };
   const handleMarkPaid = async (invoiceId) => {
     try {
-      await fetch(`${API_BASE_URL}/api/billing/invoices/${invoiceId}/payment-status`, {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoiceId}/payment-status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ status: 'paid', paymentDate: new Date() })
       });
+      if (!response.ok) throw new Error('Failed to mark paid');
       loadData();
       if (selectedInvoice?.id === invoiceId) {
         setSelectedInvoice({ ...selectedInvoice, payment_status: 'paid' });
@@ -471,6 +472,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       const response = await fetch(`${API_BASE_URL}/api/billing/export/invoices-csv`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Export failed');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -487,6 +489,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       const response = await fetch(`${API_BASE_URL}/api/billing/export/evv`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!response.ok) throw new Error('Export failed');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
