@@ -347,6 +347,12 @@ if (require.main === module) {
     console.log(`🚀 ${agencyName} API running on port ${port}`);
     console.log(`📊 Dashboard: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
     if (!process.env.ALLOWED_ORIGINS) console.warn('⚠️  ALLOWED_ORIGINS not set — CORS will block all browser requests in production!');
+
+    // Start automated daily backup (production only)
+    if (process.env.NODE_ENV !== 'test') {
+      const { startCron } = require('./jobs/scheduledBackup');
+      startCron();
+    }
   });
 }
 

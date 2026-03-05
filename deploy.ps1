@@ -128,8 +128,8 @@ function Backup-Database {
         
         $host = ($DatabaseUrl -split "@")[1] -split "/" | Select-Object -First 1
         $database = ($DatabaseUrl -split "/")[-1]
-        $user = ($DatabaseUrl -split "://")[1] -split ":")[0]
-        
+        $user = (($DatabaseUrl -split "://")[1] -split ":")[0]
+
         pg_dump -h $host -U $user -d $database > $backupFile
         
         $fileSize = (Get-Item $backupFile).Length / 1MB
@@ -171,8 +171,8 @@ function Restore-Database {
         $env:PGPASSWORD = ($DatabaseUrl -split "@")[0] -split ":" | Select-Object -Last 1
         $host = ($DatabaseUrl -split "@")[1] -split "/" | Select-Object -First 1
         $database = ($DatabaseUrl -split "/")[-1]
-        $user = ($DatabaseUrl -split "://")[1] -split ":")[0]
-        
+        $user = (($DatabaseUrl -split "://")[1] -split ":")[0]
+
         psql -h $host -U $user -d $database < $BackupFile
         
         Write-Success "✓ Database restored successfully"
