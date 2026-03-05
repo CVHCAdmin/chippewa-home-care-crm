@@ -75,6 +75,12 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register-caregiver', authLimiter);
 app.use('/api/auth/register-admin', authLimiter);
 
+const portalLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 10,
+  message: { error: 'Too many login attempts. Try again in 15 minutes.' }
+});
+app.use('/api/client-portal/login', portalLoginLimiter);
+
 app.use(auditLogger(db.pool));
 
 // ============ HEALTH CHECK ============

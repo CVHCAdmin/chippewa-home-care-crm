@@ -244,7 +244,7 @@ router.post('/:id/hire', auth, async (req, res) => {
     await db.query(`
       INSERT INTO application_status_history (application_id, status, notes, changed_by)
       VALUES ($1, 'hired', $2, $3)
-    `, [req.params.id, `Converted to caregiver. Temp password: ${tempPassword}`, req.user.id]);
+    `, [req.params.id, 'Converted to caregiver. Temporary password was set.', req.user.id]);
 
     res.json({ 
       success: true, 

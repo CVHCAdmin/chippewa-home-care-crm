@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/shared');
 
 // Initialize Twilio (set in env vars)
 let twilioClient = null;
@@ -259,7 +260,7 @@ router.get('/history', auth, async (req, res) => {
 });
 
 // Broadcast to caregivers (legacy endpoint — delegates to send-bulk logic)
-router.post('/broadcast', auth, async (req, res) => {
+router.post('/broadcast', auth, requireAdmin, async (req, res) => {
   req.body = { recipientType: 'caregiver', recipientIds: req.body.caregiverIds, body: req.body.message };
   // Forward to next matching route handler by re-dispatching
   res.redirect(307, '/api/sms/send-bulk');

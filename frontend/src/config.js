@@ -16,6 +16,7 @@ export const isTokenExpired = (token) => {
   }
 };
 
+/** Makes an authenticated API call. Returns parsed JSON on success, null on 429 (rate limited) or empty/non-JSON responses. */
 export const apiCall = async (endpoint, options = {}, token) => {
   const headers = { 'Content-Type': 'application/json', ...options.headers };
 
