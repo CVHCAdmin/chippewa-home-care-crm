@@ -51,7 +51,7 @@ app.use(cors({
     const allowed = [...new Set([...defaultOrigins, ...extraOrigins])];
 
     if (!origin || allowed.includes(origin)) return callback(null, true);
-    callback(null, false);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],

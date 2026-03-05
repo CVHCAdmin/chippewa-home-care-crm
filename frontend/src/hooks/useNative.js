@@ -206,12 +206,15 @@ export function useOfflineSync() {
   });
 
   const getQueueCount = useCallback(async () => {
+    let db;
     try {
-      const db  = await openDB();
+      db = await openDB();
       const tx  = db.transaction('queue', 'readonly');
       const req = tx.objectStore('queue').count();
       req.onsuccess = () => setQueueCount(req.result);
-    } catch { /* ignore */ }
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => db.close();
+    } catch { if (db) db.close(); }
   }, []);
 
   // Poll queue count every 5s
@@ -234,13 +237,15 @@ export function useOfflineSync() {
 
   // Auto-trigger background sync when back online
   useEffect(() => {
+    let timerId;
     if (online && queueCount > 0) {
       setSyncing(true);
       navigator.serviceWorker?.ready
         .then(sw => sw.sync?.register('sync-queue'))
         .catch(() => {})
-        .finally(() => setTimeout(() => setSyncing(false), 2000));
+        .finally(() => { timerId = setTimeout(() => setSyncing(false), 2000); });
     }
+    return () => clearTimeout(timerId);
   }, [online, queueCount]);
 
   return { queueCount, syncing, online };
@@ -324,6 +329,16 @@ export function useBackgroundGeolocation() {
       webWatchIdRef.current = null;
     }
     setIsRunning(false);
+  }, []);
+
+  // Cleanup on unmount — stop watcher if still running
+  useEffect(() => {
+    return () => {
+      if (webWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(webWatchIdRef.current);
+        webWatchIdRef.current = null;
+      }
+    };
   }, []);
 
   return { start, stop, isRunning };

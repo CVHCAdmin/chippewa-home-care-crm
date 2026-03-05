@@ -1,8 +1,9 @@
 // NoShowAlerts.jsx — monitor + configure automated no-show detection
 
 import { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../../config';
 
-const API = import.meta.env.VITE_API_URL || '';
+const API = API_BASE_URL;
 
 export default function NoShowAlerts({ token }) {
   const [alerts, setAlerts] = useState([]);

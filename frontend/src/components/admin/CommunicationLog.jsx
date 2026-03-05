@@ -3,8 +3,9 @@
 // Can be embedded inside ClientDetail, CaregiverProfile, or used standalone
 
 import { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../../config';
 
-const API = import.meta.env.VITE_API_URL || '';
+const API = API_BASE_URL;
 
 const LOG_TYPES = [
   { value: 'note',       label: 'Note',       icon: '📝', color: '#6B7280' },

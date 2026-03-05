@@ -258,13 +258,11 @@ router.get('/history', auth, async (req, res) => {
   }
 });
 
-// Broadcast to caregivers (legacy endpoint)
+// Broadcast to caregivers (legacy endpoint — delegates to send-bulk logic)
 router.post('/broadcast', auth, async (req, res) => {
-  const { caregiverIds, message } = req.body;
-  return router.handle({ 
-    ...req, 
-    body: { recipientType: 'caregiver', recipientIds: caregiverIds, body: message }
-  }, res);
+  req.body = { recipientType: 'caregiver', recipientIds: req.body.caregiverIds, body: req.body.message };
+  // Forward to next matching route handler by re-dispatching
+  res.redirect(307, '/api/sms/send-bulk');
 });
 
 // ==================== WEBHOOKS & AUTOMATION ====================

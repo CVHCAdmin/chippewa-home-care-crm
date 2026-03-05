@@ -341,9 +341,8 @@ const BillingDashboard = ({ token }) => {
     }
   };
 const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
-  if (!confirm(`Are you sure you want to delete invoice ${invoiceNumber}? This cannot be undone.`)) {
-    return;
-  }
+  const _cok = await confirm(`Are you sure you want to delete invoice ${invoiceNumber}? This cannot be undone.`, { danger: true });
+  if (!_cok) return;
   
   try {
     const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoiceId}`, {

@@ -55,11 +55,13 @@ const PortalApp = () => {
         const payload = JSON.parse(atob(token.split('.')[1]));
         if (payload.exp && payload.exp * 1000 < Date.now()) {
           handleLogout();
+          setLoading(false);
           return;
         }
         // role must be 'client'
         if (payload.role !== 'client') {
           handleLogout();
+          setLoading(false);
           return;
         }
         setClient(payload);
@@ -118,6 +120,7 @@ const MainApp = () => {
         const payload = JSON.parse(atob(token.split('.')[1]));
         if (payload.exp && payload.exp * 1000 < Date.now()) {
           handleLogout(true);
+          setLoading(false);
           return;
         }
         setUser(payload);

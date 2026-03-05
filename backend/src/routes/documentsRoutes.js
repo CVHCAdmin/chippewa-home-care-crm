@@ -78,11 +78,53 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// Get expiring documents (MUST be before /:entityType/:entityId)
+router.get('/reports/expiring', auth, async (req, res) => {
+  const { days = 30 } = req.query;
+  try {
+    const result = await db.query(`
+      SELECT d.*,
+        CASE
+          WHEN d.entity_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = d.entity_id)
+          WHEN d.entity_type = 'client' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM clients WHERE id = d.entity_id)
+          ELSE 'Company'
+        END as entity_name
+      FROM documents d
+      WHERE d.expiration_date IS NOT NULL
+      AND d.expiration_date <= CURRENT_DATE + $1::integer
+      AND d.expiration_date >= CURRENT_DATE
+      ORDER BY d.expiration_date ASC
+    `, [days]);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get unsigned documents for a user (MUST be before /:entityType/:entityId)
+router.get('/unsigned/:userId', auth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT d.* FROM documents d
+      WHERE d.requires_signature = true
+      AND d.signed_at IS NULL
+      AND (
+        (d.entity_type = 'company')
+        OR (d.entity_type = 'caregiver' AND d.entity_id = $1)
+      )
+      ORDER BY d.created_at DESC
+    `, [req.params.userId]);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get documents for an entity
 router.get('/:entityType/:entityId', auth, async (req, res) => {
   const { entityType, entityId } = req.params;
   const { documentType } = req.query;
-  
+
   try {
     let query = `
       SELECT d.*, u.first_name as uploaded_by_name
@@ -98,7 +140,7 @@ router.get('/:entityType/:entityId', auth, async (req, res) => {
     }
 
     query += ` ORDER BY d.created_at DESC`;
-    
+
     const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
@@ -166,48 +208,6 @@ router.post('/:id/acknowledge', auth, async (req, res) => {
     `, [req.user.id, req.params.id]);
 
     res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get expiring documents
-router.get('/reports/expiring', auth, async (req, res) => {
-  const { days = 30 } = req.query;
-  try {
-    const result = await db.query(`
-      SELECT d.*, 
-        CASE 
-          WHEN d.entity_type = 'caregiver' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = d.entity_id)
-          WHEN d.entity_type = 'client' THEN (SELECT CONCAT(first_name, ' ', last_name) FROM clients WHERE id = d.entity_id)
-          ELSE 'Company'
-        END as entity_name
-      FROM documents d
-      WHERE d.expiration_date IS NOT NULL
-      AND d.expiration_date <= CURRENT_DATE + $1::integer
-      AND d.expiration_date >= CURRENT_DATE
-      ORDER BY d.expiration_date ASC
-    `, [days]);
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get unsigned documents for a user
-router.get('/unsigned/:userId', auth, async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT d.* FROM documents d
-      WHERE d.requires_signature = true
-      AND d.signed_at IS NULL
-      AND (
-        (d.entity_type = 'company')
-        OR (d.entity_type = 'caregiver' AND d.entity_id = $1)
-      )
-      ORDER BY d.created_at DESC
-    `, [req.params.userId]);
-    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

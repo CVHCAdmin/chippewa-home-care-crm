@@ -112,7 +112,8 @@ const PayrollProcessing = ({ token }) => {
         const medicare = grossPay * settings.medicareRate;
         const totalDeductions = federalTax + stateTax + socialSecurity + medicare;
         
-        const netPay = grossPay - totalDeductions + mileageReimbursement; // Mileage is reimbursement, not taxed
+        const taxableGross = regularPay + overtimePay + weekendPay + nightPay + ptoPay;
+        const netPay = taxableGross - totalDeductions + mileageReimbursement; // Mileage is reimbursement, not taxed
         
         return {
           ...p,

@@ -213,7 +213,6 @@ const auditLogger = (pool) => {
       return next();
     }
 
-    const originalJson = res.json;
     let logged = false;
 
     res.on('finish', async () => {
@@ -222,7 +221,12 @@ const auditLogger = (pool) => {
         logged = true;
         const user_id = req.user?.id || req.user?.userId || SYSTEM_USER_ID;
         const table_name = extractTableName(req.path);
-        const record_id = req.params?.id || null;
+        let record_id = req.params?.id || null;
+        // Validate record_id is a UUID before inserting into UUID column
+        if (record_id && typeof record_id === 'string' &&
+            !record_id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+          record_id = null;
+        }
         const ip_address = req.ip || req.headers['x-forwarded-for'] || 'unknown';
 
         await log({
@@ -238,10 +242,6 @@ const auditLogger = (pool) => {
         console.error('[audit] finish handler error:', err.message);
       }
     });
-
-    res.json = function(data) {
-      return originalJson.call(this, data);
-    };
 
     next();
   };

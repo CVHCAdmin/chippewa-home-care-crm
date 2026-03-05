@@ -1,8 +1,9 @@
 // RevenueForecast.jsx — projected vs actual revenue, auth utilization, weekly outlook
 
 import { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../../config';
 
-const API = import.meta.env.VITE_API_URL || '';
+const API = API_BASE_URL;
 
 const fmt$ = (n) => '$' + parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const fmtH = (n) => Number(parseFloat(n || 0)).toFixed(1) + 'h';

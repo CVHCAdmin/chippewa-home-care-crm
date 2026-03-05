@@ -1,8 +1,9 @@
 // FormBuilder.jsx — Create custom forms, fill & submit against clients/caregivers
 
 import { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../../config';
 
-const API = import.meta.env.VITE_API_URL || '';
+const API = API_BASE_URL;
 
 const FIELD_TYPES = [
   { value: 'text',     label: 'Text Input',     icon: '✏️' },

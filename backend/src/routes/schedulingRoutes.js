@@ -228,7 +228,7 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
         if (!dryRun) {
           const scheduleId = uuidv4();
           await db.query(`INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, date, start_time, end_time, notes) VALUES ($1,$2,$3,'one-time',$4,$5,$6,$7)`, [scheduleId, bestMatch.id, shift.client_id, shift.shift_date, shift.start_time, shift.end_time, 'Auto-assigned']);
-          await db.query(`UPDATE open_shifts SET status='filled', filled_by=$1, filled_at=NOW() WHERE id=$2`, [bestMatch.id, shift.id]);
+          await db.query(`UPDATE open_shifts SET status='filled', claimed_by=$1, claimed_at=NOW() WHERE id=$2`, [bestMatch.id, shift.id]);
           shiftResult.scheduleId = scheduleId;
         }
         newAssignments.push({ caregiverId: bestMatch.id, date: shift.shift_date, startTime: shift.start_time, endTime: shift.end_time });

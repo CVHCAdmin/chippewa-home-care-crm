@@ -28,9 +28,9 @@ router.post('/referral-sources', verifyToken, requireAdmin, async (req, res) => 
     if (!name || !type) return res.status(400).json({ error: 'Name and type are required' });
     const sourceId = uuidv4();
     const result = await db.query(
-      `INSERT INTO referral_sources (id, name, type, contact_name, email, phone, address, city, state, zip, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [sourceId, name, type, contactName||null, email||null, phone||null, address||null, city||null, state||process.env.AGENCY_STATE||null, zip||null, req.user.id]
+      `INSERT INTO referral_sources (id, name, type, contact_name, email, phone, address, city, state, zip)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [sourceId, name, type, contactName||null, email||null, phone||null, address||null, city||null, state||process.env.AGENCY_STATE||null, zip||null]
     );
     await auditLog(req.user.id, 'CREATE', 'referral_sources', sourceId, null, result.rows[0]);
     res.status(201).json(result.rows[0]);
@@ -78,7 +78,7 @@ router.get('/referral-sources/stats', verifyToken, requireAdmin, async (req, res
 router.get('/notifications', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT * FROM notifications WHERE recipient_id=$1 OR (recipient_type='admin' AND $2='admin') ORDER BY created_at DESC LIMIT 50`,
+      `SELECT * FROM notifications WHERE (recipient_id=$1 OR user_id=$1) OR (recipient_type='admin' AND $2='admin') ORDER BY created_at DESC LIMIT 50`,
       [req.user.id, req.user.role]
     );
     res.json(result.rows);

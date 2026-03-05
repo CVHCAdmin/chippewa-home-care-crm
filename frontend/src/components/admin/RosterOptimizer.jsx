@@ -505,7 +505,7 @@ export default function RosterOptimizer({ token }) {
               </span>
             </h4>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <button onClick={() => setSelected(result.proposals.size === selected.size ? new Set() : new Set(result.proposals.map(p => p.id)))}
+              <button onClick={() => setSelected(result.proposals.length === selected.size ? new Set() : new Set(result.proposals.map(p => p.id)))}
                 style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: '1px solid #D1D5DB', background: '#fff', fontSize: '0.78rem', cursor: 'pointer' }}>
                 {selected.size === result.proposals.length ? 'Deselect All' : 'Select All'}
               </button>

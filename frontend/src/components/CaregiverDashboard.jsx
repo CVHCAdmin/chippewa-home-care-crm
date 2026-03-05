@@ -241,18 +241,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     setTimeout(() => setMessage({ text: '', type: '' }), 4000);
   };
 
-  const startGPSTracking = () => {
-    if ('geolocation' in navigator) {
-      navigator.geolocation.watchPosition(
-        (pos) => {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
-          setLocationError(null);
-        },
-        (err) => setLocationError(err.message),
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-      );
-    }
-  };
+  // startGPSTracking removed — GPS handled by useGeolocation hook
 
   // Push GPS breadcrumbs every 60 seconds during active shift
   const startGPSBreadcrumbs = (sessionId) => {
@@ -304,20 +293,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   useEffect(() => { clientsRef.current = clients; }, [clients]);
   useEffect(() => { schedulesRef.current = schedules; }, [schedules]);
 
-  const _startGPSTracking_REMOVED = () => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.watchPosition(
-        (pos) => {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
-          setLocationError(null);
-        },
-        (err) => setLocationError(err.message),
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-      );
-    } else {
-      setLocationError('Geolocation not supported');
-    }
-  };
 
   // ── GEOFENCE AUTO CLOCK-IN/OUT ────────────────────────────────────────────
   const runGeofenceCheck = async (currentLocation, currentSession, currentClients, currentSchedules) => {

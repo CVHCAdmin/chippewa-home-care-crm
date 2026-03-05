@@ -24,8 +24,8 @@ const buildSOAPRequest = (credentials, applicantData) => {
       <wor:request>
         <wor:FirstName>${escapeXml(firstName)}</wor:FirstName>
         <wor:LastName>${escapeXml(lastName)}</wor:LastName>
-        <wor:DateOfBirth>${dateOfBirth}</wor:DateOfBirth>
-        <wor:SSN>${ssn}</wor:SSN>
+        <wor:DateOfBirth>${escapeXml(dateOfBirth)}</wor:DateOfBirth>
+        <wor:SSN>${escapeXml(ssn)}</wor:SSN>
         <wor:RequestPurpose>${requestPurpose}</wor:RequestPurpose>
         <wor:RequesterReference>${Date.now()}</wor:RequesterReference>
       </wor:request>
@@ -136,6 +136,7 @@ const submitBackgroundCheck = async (applicantData) => {
  * Poll WORCS for results of a previously submitted check
  */
 const getCheckResults = async (referenceNumber) => {
+  if (!referenceNumber) throw new Error('referenceNumber is required');
   // Mock response for development
   if (referenceNumber.startsWith('MOCK-')) {
     return {
