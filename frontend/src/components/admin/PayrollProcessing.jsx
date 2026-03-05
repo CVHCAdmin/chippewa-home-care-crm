@@ -88,8 +88,9 @@ const PayrollProcessing = ({ token }) => {
           settings
         })
       });
+      if (!response.ok) throw new Error('Failed to calculate payroll');
       const data = await response.json();
-      
+
       // Enhance payroll data with calculations
       const enhanced = (data.payrollData || []).map(p => {
         const regularHours = Math.min(p.total_hours || 0, settings.overtimeThreshold);
@@ -352,14 +353,14 @@ const PayrollProcessing = ({ token }) => {
             </button>
           </div>
 
-          {discrepancies && (
+          {discrepancies && discrepancies.totals && (
             <>
               {/* Summary */}
               <div style={{ display:'flex', gap:'0.75rem', marginBottom:'1rem', flexWrap:'wrap' }}>
                 {[
-                  { label:'Shifts with Discrepancies', val: discrepancies.totals.totalShifts, color:'#6366F1' },
-                  { label:'Over Allotted', val: discrepancies.totals.overageCount + ' shifts', color:'#EF4444' },
-                  { label:'Under Allotted', val: discrepancies.totals.underageCount + ' shifts', color:'#F59E0B' },
+                  { label:'Shifts with Discrepancies', val: discrepancies.totals.totalShifts || 0, color:'#6366F1' },
+                  { label:'Over Allotted', val: (discrepancies.totals.overageCount || 0) + ' shifts', color:'#EF4444' },
+                  { label:'Under Allotted', val: (discrepancies.totals.underageCount || 0) + ' shifts', color:'#F59E0B' },
                   { label:'Total Overage Cost', val: '$' + Number(parseFloat(discrepancies.totals.totalOverageCost||0)).toFixed(2), color:'#DC2626' },
                 ].map(s => (
                   <div key={s.label} style={{ flex:1, minWidth:140, padding:'1rem', background:'#F9FAFB', borderRadius:12, borderLeft:`4px solid ${s.color}` }}>
@@ -370,7 +371,7 @@ const PayrollProcessing = ({ token }) => {
               </div>
 
               {/* Table */}
-              {discrepancies.discrepancies.length === 0 ? (
+              {(discrepancies.discrepancies || []).length === 0 ? (
                 <div style={{ textAlign:'center', padding:'2rem', color:'#9CA3AF', background:'#F9FAFB', borderRadius:12 }}>
                   ✅ No significant discrepancies found in this period
                 </div>
@@ -385,7 +386,7 @@ const PayrollProcessing = ({ token }) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {discrepancies.discrepancies.map(d => {
+                      {(discrepancies.discrepancies || []).map(d => {
                         const over = parseFloat(d.discrepancy_hours) > 0;
                         const under = parseFloat(d.discrepancy_hours) < 0;
                         return (

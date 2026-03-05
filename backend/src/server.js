@@ -238,7 +238,6 @@ app.use((err, req, res, next) => {
 // ============ ONE-TIME MIGRATION ENDPOINT ============
 // Hit GET /api/run-migration-v7 once to create new tables, then this can be removed
 app.get('/api/run-migration-v7', verifyToken, async (req, res) => {
-  const db = require('./db');
   try {
     await db.query(`
       CREATE TABLE IF NOT EXISTS communication_log (

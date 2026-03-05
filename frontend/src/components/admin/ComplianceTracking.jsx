@@ -81,9 +81,9 @@ const ComplianceTracking = ({ token }) => {
         })
       ]);
 
-      const bgData = await bgRes.json();
-      const trainingData = await trainingRes.json();
-      const docsData = await docsRes.json();
+      const bgData = bgRes.ok ? await bgRes.json() : null;
+      const trainingData = trainingRes.ok ? await trainingRes.json() : [];
+      const docsData = docsRes.ok ? await docsRes.json() : [];
 
       setBackgroundCheck(bgData || null);
       setTrainingRecords(Array.isArray(trainingData) ? trainingData : []);

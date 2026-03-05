@@ -48,18 +48,20 @@ const CarePlans = ({ token }) => {
         })
       ]);
 
-      const clientsData = await clientsRes.json();
-      const plansData = await plansRes.json();
+      const clientsData = clientsRes.ok ? await clientsRes.json() : [];
+      const plansData = plansRes.ok ? await plansRes.json() : [];
 
-      setClients(clientsData);
+      const safeClients = Array.isArray(clientsData) ? clientsData : [];
+      const safePlans = Array.isArray(plansData) ? plansData : [];
+      setClients(safeClients);
 
       // Group plans by client
       const plansByClient = {};
-      clientsData.forEach(client => {
+      safeClients.forEach(client => {
         plansByClient[client.id] = [];
       });
 
-      plansData.forEach(plan => {
+      safePlans.forEach(plan => {
         if (plansByClient[plan.client_id]) {
           plansByClient[plan.client_id].push(plan);
         }

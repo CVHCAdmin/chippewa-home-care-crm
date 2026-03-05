@@ -47,12 +47,12 @@ const IncidentReporting = ({ token }) => {
         })
       ]);
 
-      const clientsData = await clientsRes.json();
-      const caregiversData = await caregiversRes.json();
-      const incidentsData = await incidentsRes.json();
+      const clientsData = clientsRes.ok ? await clientsRes.json() : [];
+      const caregiversData = caregiversRes.ok ? await caregiversRes.json() : [];
+      const incidentsData = incidentsRes.ok ? await incidentsRes.json() : [];
 
-      setClients(clientsData);
-      setCaregivers(caregiversData);
+      setClients(Array.isArray(clientsData) ? clientsData : []);
+      setCaregivers(Array.isArray(caregiversData) ? caregiversData : []);
       setIncidents(Array.isArray(incidentsData) ? incidentsData : []);
     } catch (error) {
       console.error('Failed to load data:', error);

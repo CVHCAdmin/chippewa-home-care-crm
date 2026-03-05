@@ -16,8 +16,8 @@ const verifyToken = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
+    if (!process.env.JWT_SECRET) return res.status(500).json({ error: 'Server configuration error' });
     req.user = jwt.verify(token, process.env.JWT_SECRET);
-    if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET not configured');
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Invalid token' });
@@ -25,7 +25,7 @@ const verifyToken = (req, res, next) => {
 };
 
 const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
   next();
 };
 

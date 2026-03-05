@@ -9,8 +9,8 @@ const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 router.get('/notifications', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT * FROM notifications WHERE recipient_id=$1 OR (recipient_type='admin' AND $2='admin') ORDER BY created_at DESC LIMIT 50`,
-      [req.user.id, req.user.role]
+      `SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,
+      [req.user.id]
     );
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -36,7 +36,7 @@ router.put('/notification-settings', verifyToken, async (req, res) => {
         payment_alerts=COALESCE($5,payment_alerts), updated_at=NOW() WHERE user_id=$6 RETURNING *`,
       [emailEnabled, scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts, req.user.id]
     );
-    res.json(result.rows[0]);
+    res.json(result.rows[0] || {});
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -46,8 +46,8 @@ router.post('/notifications/send', verifyToken, requireAdmin, async (req, res) =
     if (!recipientId || !subject || !message) return res.status(400).json({ error: 'recipientId, subject, and message are required' });
     const notificationId = uuidv4();
     const result = await db.query(
-      `INSERT INTO notifications (id, recipient_type, recipient_id, notification_type, subject, message, status, sent_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [notificationId, recipientType, recipientId, notificationType||'general', subject, message, 'sent', req.user.id]
+      `INSERT INTO notifications (id, user_id, type, title, message) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [notificationId, recipientId, notificationType||'general', subject, message]
     );
     await auditLog(req.user.id, 'CREATE', 'notifications', notificationId, null, result.rows[0]);
     res.status(201).json(result.rows[0]);
@@ -62,8 +62,8 @@ router.post('/notifications/send-bulk', verifyToken, requireAdmin, async (req, r
     for (const recipientId of recipientIds) {
       const notificationId = uuidv4();
       const result = await db.query(
-        `INSERT INTO notifications (id, recipient_type, recipient_id, notification_type, subject, message, status, sent_by) VALUES ($1,'caregiver',$2,$3,$4,$5,'sent',$6) RETURNING *`,
-        [notificationId, recipientId, notificationType||'general', subject, message, req.user.id]
+        `INSERT INTO notifications (id, user_id, type, title, message) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [notificationId, recipientId, notificationType||'general', subject, message]
       );
       sent.push(result.rows[0]);
     }
@@ -74,7 +74,7 @@ router.post('/notifications/send-bulk', verifyToken, requireAdmin, async (req, r
 
 router.patch('/notifications/:id/read', verifyToken, async (req, res) => {
   try {
-    const result = await db.query(`UPDATE notifications SET is_read=true, updated_at=NOW() WHERE id=$1 RETURNING *`, [req.params.id]);
+    const result = await db.query(`UPDATE notifications SET is_read=true WHERE id=$1 RETURNING *`, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Notification not found' });
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -82,7 +82,7 @@ router.patch('/notifications/:id/read', verifyToken, async (req, res) => {
 
 router.delete('/notifications/:id', verifyToken, async (req, res) => {
   try {
-    const result = await db.query(`DELETE FROM notifications WHERE id=$1 AND recipient_id=$2 RETURNING *`, [req.params.id, req.user.id]);
+    const result = await db.query(`DELETE FROM notifications WHERE id=$1 AND user_id=$2 RETURNING *`, [req.params.id, req.user.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Notification not found' });
     res.json({ message: 'Notification deleted' });
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -92,8 +92,7 @@ router.get('/notifications/summary', verifyToken, requireAdmin, async (req, res)
   try {
     const result = await db.query(
       `SELECT COUNT(*) as total_notifications, COUNT(CASE WHEN is_read=false THEN 1 END) as unread_count,
-        COUNT(CASE WHEN status='sent' THEN 1 END) as sent_count, COUNT(CASE WHEN status='pending' THEN 1 END) as pending_count,
-        COUNT(CASE WHEN status='failed' THEN 1 END) as failed_count, COUNT(DISTINCT recipient_id) as unique_recipients FROM notifications`
+        COUNT(DISTINCT user_id) as unique_recipients FROM notifications`
     );
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }

@@ -28,9 +28,9 @@ export default function NoShowAlerts({ token }) {
         fetch(`${API}/api/no-show/stats`, { headers: h }),
         fetch(`${API}/api/no-show/config`, { headers: h }),
       ]);
-      setAlerts(await aR.json());
-      setStats(await sR.json());
-      const cfg = await cR.json();
+      setAlerts(aR.ok ? await aR.json() : []);
+      setStats(sR.ok ? await sR.json() : {});
+      const cfg = cR.ok ? await cR.json() : {};
       if (cfg && cfg.grace_minutes) setConfig(cfg);
     } catch (e) {}
     setLoading(false);

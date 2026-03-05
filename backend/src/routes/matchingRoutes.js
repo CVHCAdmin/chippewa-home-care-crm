@@ -337,7 +337,7 @@ function computePairScore(clientLat, clientLng, caregiver, clientNeeds, cgCaps, 
 // 4. 2-opt swap improvement until stable
 // 5. Return globally-improved solution
 // ════════════════════════════════════════════════════════════
-router.post('/optimize', async (req, res) => {
+router.post('/optimize', auth, async (req, res) => {
   try {
     const { weekStart, mode, options } = req.body;
     if (!weekStart) return res.status(400).json({ error: 'weekStart required (YYYY-MM-DD)' });

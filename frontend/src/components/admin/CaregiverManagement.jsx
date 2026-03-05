@@ -269,7 +269,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
 
   // Show full detail view when a caregiver is clicked
   if (detailId) {
-    return <CaregiverDetail caregiverId={detailId} token={token} onBack={() => { setDetailId(null); loadCaregivers(); }} />;
+    return <CaregiverDetail caregiverId={detailId} token={token} onBack={() => { setDetailId(null); loadData(); }} />;
   }
 
   return (
