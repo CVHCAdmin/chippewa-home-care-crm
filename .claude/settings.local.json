@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx vite:*)",
+      "Bash(do:*)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(do echo:*)",
+      "Bash(while read t)",
+      "Bash(echo \"  MISSING: $t\")",
+      "Bash(done)",
+      "Bash(PGPASSWORD=5BI0M3puPU6TD96X7kwFXdzm0eIqQIC7 psql:*)",
+      "Bash(\"/c/Program Files/PostgreSQL/18/bin/psql.exe\":*)",
+      "Bash(npm run:*)",
+      "Bash(ls:*)",
+      "Bash(rm:*)",
+      "Bash(node:*)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(npx vitest:*)"
+    ]
+  }
+}
