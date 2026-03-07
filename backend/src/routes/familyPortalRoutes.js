@@ -7,6 +7,7 @@ const db = require('../db');
 const auth = require('../middleware/auth');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { sendFamilyPortalWelcome, sendFamilyPasswordReset } = require('../services/emailService');
 
 // ==================== ADMIN ENDPOINTS ====================
 
@@ -69,16 +70,28 @@ router.post('/admin/members', auth, async (req, res) => {
     }
 
     const result = await db.query(`
-      INSERT INTO family_members 
-      (client_id, user_id, first_name, last_name, email, phone, relationship, 
+      INSERT INTO family_members
+      (client_id, user_id, first_name, last_name, email, phone, relationship,
        can_view_schedule, can_view_care_plan, can_view_medications, can_message, is_active)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)
       RETURNING *
     `, [
       clientId, userId, firstName, lastName, email, phone, relationship,
-      canViewSchedule !== false, canViewCarePlan !== false, 
+      canViewSchedule !== false, canViewCarePlan !== false,
       canViewMedications === true, canMessage !== false
     ]);
+
+    // Send welcome email with login credentials
+    if (email && password) {
+      const client = await db.query('SELECT first_name, last_name FROM clients WHERE id = $1', [clientId]);
+      const clientName = client.rows[0] ? `${client.rows[0].first_name} ${client.rows[0].last_name}` : 'your loved one';
+      await sendFamilyPortalWelcome({
+        to: email,
+        familyName: firstName,
+        clientName,
+        tempPassword: password,
+      });
+    }
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -116,14 +129,23 @@ router.put('/admin/members/:id/status', auth, async (req, res) => {
 router.put('/admin/members/:id/reset-password', auth, async (req, res) => {
   const { password } = req.body;
   try {
-    const fm = await db.query('SELECT user_id FROM family_members WHERE id = $1', [req.params.id]);
+    const fm = await db.query('SELECT user_id, first_name, email FROM family_members WHERE id = $1', [req.params.id]);
     if (!fm.rows[0]?.user_id) {
       return res.status(400).json({ error: 'No user account linked to this family member' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashedPassword, fm.rows[0].user_id]);
-    
+
+    // Send password reset email
+    if (fm.rows[0].email) {
+      await sendFamilyPasswordReset({
+        to: fm.rows[0].email,
+        familyName: fm.rows[0].first_name,
+        newPassword: password,
+      });
+    }
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

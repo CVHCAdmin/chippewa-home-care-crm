@@ -9,6 +9,7 @@ const auth    = require('../middleware/auth');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const crypto  = require('crypto');
+const { sendClientPortalInvite } = require('../services/emailService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT PORTAL AUTH MIDDLEWARE
@@ -421,14 +422,19 @@ router.post('/admin/invite', auth, async (req, res) => {
         updated_at        = NOW()
     `, [clientId, email, inviteToken, inviteExpires]);
 
-    // TODO: Send invite email via your email service
-    // The invite URL would be: https://your-app.com/portal/setup?token=<inviteToken>
-    const inviteUrl = `${process.env.FRONTEND_URL || 'https://chippewa-home-care.netlify.app'}/portal/setup?token=${inviteToken}`;
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://cvhc-crm.netlify.app'}/portal/setup?token=${inviteToken}`;
+    const clientName = `${client.rows[0].first_name} ${client.rows[0].last_name}`;
+
+    // Send invite email (non-blocking — still returns success if email fails)
+    const emailSent = await sendClientPortalInvite({ to: email, clientName, inviteUrl });
 
     res.json({
       success:   true,
-      inviteUrl, // Return URL so admin can manually share if email isn't configured
-      message:   `Invite created for ${client.rows[0].first_name} ${client.rows[0].last_name}`,
+      inviteUrl,
+      emailSent,
+      message:   emailSent
+        ? `Invite email sent to ${email} for ${clientName}`
+        : `Invite created for ${clientName} (email not sent — share link manually)`,
       expiresAt: inviteExpires,
     });
   } catch (error) {
