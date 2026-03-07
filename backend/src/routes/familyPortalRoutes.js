@@ -225,10 +225,12 @@ router.post('/login', async (req, res) => {
   
   try {
     const user = await db.query(`
-      SELECT u.*, fm.id as family_member_id, fm.client_id
+      SELECT u.*, fm.id as family_member_id, fm.client_id,
+        fm.can_view_schedule, fm.can_view_care_plan, fm.can_view_medications, fm.can_message,
+        fm.relationship, fm.is_primary_contact
       FROM users u
       JOIN family_members fm ON fm.user_id = u.id
-      WHERE u.email = $1 AND u.role = 'family' AND u.is_active = true
+      WHERE u.email = $1 AND u.role = 'family' AND u.is_active = true AND fm.is_active = true
     `, [email]);
 
     if (user.rows.length === 0) {
@@ -249,7 +251,8 @@ router.post('/login', async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    res.json({ token, user: { ...user.rows[0], password: undefined } });
+    const { password_hash, ...safeUser } = user.rows[0];
+    res.json({ token, user: safeUser });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

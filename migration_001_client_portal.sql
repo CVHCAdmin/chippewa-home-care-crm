@@ -12,7 +12,7 @@ BEGIN;
 --    Separate from users table intentionally.
 --    clients.email exists but has no auth — this adds it.
 -- ============================================================
-CREATE TABLE client_portal_auth (
+CREATE TABLE client_portal_accounts (
   id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   client_id          UUID NOT NULL UNIQUE REFERENCES clients(id) ON DELETE CASCADE,
   email              VARCHAR(255) UNIQUE NOT NULL,
@@ -27,9 +27,9 @@ CREATE TABLE client_portal_auth (
   updated_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_client_portal_auth_client_id    ON client_portal_auth(client_id);
-CREATE INDEX idx_client_portal_auth_email        ON client_portal_auth(email);
-CREATE INDEX idx_client_portal_auth_invite_token ON client_portal_auth(invite_token);
+CREATE INDEX idx_client_portal_accounts_client_id    ON client_portal_accounts(client_id);
+CREATE INDEX idx_client_portal_accounts_email        ON client_portal_accounts(email);
+CREATE INDEX idx_client_portal_accounts_invite_token ON client_portal_accounts(invite_token);
 
 -- ============================================================
 -- 2. SCHEDULED VISITS
@@ -118,8 +118,8 @@ CREATE TABLE client_notification_preferences (
 --    Reuses existing audit_log_trigger() function.
 --    Every insert/update/delete on sensitive portal tables is logged.
 -- ============================================================
-CREATE TRIGGER audit_client_portal_auth_trigger
-  AFTER INSERT OR UPDATE OR DELETE ON client_portal_auth
+CREATE TRIGGER audit_client_portal_accounts_trigger
+  AFTER INSERT OR UPDATE OR DELETE ON client_portal_accounts
   FOR EACH ROW EXECUTE FUNCTION audit_log_trigger();
 
 CREATE TRIGGER audit_scheduled_visits_trigger
@@ -160,7 +160,7 @@ CREATE TRIGGER sync_visit_status_trigger
 
 -- ============================================================
 -- 7. AUTO-CREATE NOTIFICATION PREFERENCES ON PORTAL ENABLE
---    When client_portal_auth is inserted, create default prefs.
+--    When client_portal_accounts is inserted, create default prefs.
 -- ============================================================
 CREATE OR REPLACE FUNCTION create_client_notification_prefs()
 RETURNS TRIGGER AS $$
@@ -173,7 +173,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER auto_create_client_notif_prefs_trigger
-  AFTER INSERT ON client_portal_auth
+  AFTER INSERT ON client_portal_accounts
   FOR EACH ROW EXECUTE FUNCTION create_client_notification_prefs();
 
 -- ============================================================
@@ -182,7 +182,7 @@ CREATE TRIGGER auto_create_client_notif_prefs_trigger
 -- SELECT table_name FROM information_schema.tables
 -- WHERE table_schema = 'public'
 -- AND table_name IN (
---   'client_portal_auth',
+--   'client_portal_accounts',
 --   'scheduled_visits',
 --   'client_notifications',
 --   'client_notification_preferences'

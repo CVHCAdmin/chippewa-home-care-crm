@@ -8,6 +8,8 @@ import PaymentPage, { PaymentSuccess } from './components/PaymentPage';
 import PortalLogin from './components/portal/PortalLogin';
 import PortalSetup from './components/portal/PortalSetup';
 import ClientPortal from './components/portal/ClientPortal';
+import FamilyPortalLogin from './components/portal/FamilyPortalLogin';
+import FamilyPortal from './components/portal/FamilyPortal';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
 import { setSessionExpiredCallback } from './config';
@@ -29,6 +31,9 @@ const App = () => {
 
         {/* Client portal */}
         <Route path="/portal/*"          element={<PortalApp />} />
+
+        {/* Family portal */}
+        <Route path="/family/*"          element={<FamilyApp />} />
 
         {/* Staff app */}
         <Route path="/*"                 element={<MainApp />} />
@@ -89,6 +94,88 @@ const PortalApp = () => {
   return (
     <ErrorBoundary>
       <ClientPortal user={client} token={token} onLogout={handleLogout} />
+    </ErrorBoundary>
+  );
+};
+
+// ── Family Portal App ─────────────────────────────────────────────────────────
+const FamilyApp = () => {
+  const [familyUser, setFamilyUser] = useState(null);
+  const [permissions, setPermissions] = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [token, setToken]           = useState(localStorage.getItem('family_token'));
+
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem('family_token');
+    localStorage.removeItem('family_user');
+    setToken(null);
+    setFamilyUser(null);
+    setPermissions(null);
+  }, []);
+
+  useEffect(() => {
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+          handleLogout();
+          setLoading(false);
+          return;
+        }
+        if (payload.role !== 'family') {
+          handleLogout();
+          setLoading(false);
+          return;
+        }
+        const stored = localStorage.getItem('family_user');
+        if (stored) {
+          const userData = JSON.parse(stored);
+          setFamilyUser(userData);
+          setPermissions({
+            can_view_schedule: userData.can_view_schedule !== false,
+            can_view_care_plan: userData.can_view_care_plan !== false,
+            can_view_medications: userData.can_view_medications === true,
+            can_message: userData.can_message !== false,
+          });
+        } else {
+          setFamilyUser(payload);
+          // Default all permissions to true if we don't have details
+          setPermissions({
+            can_view_schedule: true,
+            can_view_care_plan: true,
+            can_view_medications: true,
+            can_message: true,
+          });
+        }
+      } catch {
+        handleLogout();
+        setLoading(false);
+        return;
+      }
+    }
+    setLoading(false);
+  }, [token, handleLogout]);
+
+  const handleLogin = (newToken, userData) => {
+    localStorage.setItem('family_token', newToken);
+    localStorage.setItem('family_user', JSON.stringify(userData));
+    setToken(newToken);
+    setFamilyUser(userData);
+    setPermissions({
+      can_view_schedule: userData.can_view_schedule !== false,
+      can_view_care_plan: userData.can_view_care_plan !== false,
+      can_view_medications: userData.can_view_medications === true,
+      can_message: userData.can_message !== false,
+    });
+  };
+
+  if (loading) return <div className="loading"><div className="spinner"></div></div>;
+
+  if (!familyUser) return <FamilyPortalLogin onLogin={handleLogin} />;
+
+  return (
+    <ErrorBoundary>
+      <FamilyPortal user={familyUser} token={token} onLogout={handleLogout} permissions={permissions} />
     </ErrorBoundary>
   );
 };
