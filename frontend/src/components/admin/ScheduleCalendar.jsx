@@ -2,6 +2,7 @@
 // Professional scheduling calendar modeled after When I Work / Deputy
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { getTodayCT } from '../../utils/timezone';
 
 const ScheduleCalendar = ({ token }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -168,11 +169,12 @@ const ScheduleCalendar = ({ token }) => {
   for (let i = 0; i < firstDay; i++) days.push(null);
   for (let day = 1; day <= daysInMonth; day++) days.push(day);
 
-  const today = new Date();
-  const isToday = (day) => 
-    day === today.getDate() && 
-    currentDate.getMonth() === today.getMonth() && 
-    currentDate.getFullYear() === today.getFullYear();
+  const todayStr = getTodayCT();
+  const [todayY, todayM, todayD] = todayStr.split('-').map(Number);
+  const isToday = (day) =>
+    day === todayD &&
+    currentDate.getMonth() === todayM - 1 &&
+    currentDate.getFullYear() === todayY;
 
   if (loading) {
     return (

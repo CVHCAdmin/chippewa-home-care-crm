@@ -1,6 +1,7 @@
 // SchedulerGrid.jsx - Weekly schedule grid: click cell to create, click shift to edit/delete
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
+import { getTodayCT } from '../../utils/timezone';
 
 const PALETTE = [
   '#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6',
@@ -90,7 +91,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
   const weekDates    = getWeekDates(weekOf);
   const weekDateStrs = weekDates.map(d => d.toISOString().split('T')[0]);
-  const todayStr     = new Date().toISOString().split('T')[0];
+  const todayStr     = getTodayCT();
   const todayIdx     = weekDateStrs.indexOf(todayStr);
 
   function getShiftsForCell(caregiverId, dayIndex) {

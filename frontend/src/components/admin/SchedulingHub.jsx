@@ -2,6 +2,7 @@
 // Unified scheduling hub — 3 main tabs, slide-in create panel, fluid workflows
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { getTodayCT } from '../../utils/timezone';
 import AutoFillButton from './AutoFillButton';
 import DragDropScheduler from './DragDropScheduler';
 import ScheduleOptimizer from './ScheduleOptimizer';
@@ -717,7 +718,7 @@ const SchedulingHub = ({ token }) => {
                     <th style={{ width: '140px' }}>Caregiver</th>
                     {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((day, idx) => {
                       const date = new Date(weekData.weekStart); date.setDate(date.getDate() + idx);
-                      const isToday = new Date().toDateString() === date.toDateString();
+                      const isToday = date.toISOString().split('T')[0] === getTodayCT();
                       return (<th key={day} style={{ textAlign: 'center', minWidth: '95px', background: isToday ? '#EFF6FF' : undefined }}><div>{day}</div><div style={{ fontSize: '0.72rem', color: isToday ? '#2563EB' : '#6B7280', fontWeight: isToday ? '700' : '400' }}>{date.getDate()}</div></th>);
                     })}
                   </tr>
@@ -733,7 +734,7 @@ const SchedulingHub = ({ token }) => {
                       </td>
                       {[0,1,2,3,4,5,6].map(di => {
                         const date = new Date(weekData.weekStart); date.setDate(date.getDate() + di);
-                        const isToday = new Date().toDateString() === date.toDateString();
+                        const isToday = date.toISOString().split('T')[0] === getTodayCT();
                         const dateStr = date.toISOString().split('T')[0];
                         const hasShifts = dayData[di] && dayData[di].length > 0;
                         return (
@@ -823,8 +824,8 @@ const SchedulingHub = ({ token }) => {
               {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => <div key={d} style={{ padding: '0.5rem', textAlign: 'center', fontWeight: '600', fontSize: '0.8rem', background: '#F9FAFB', color: '#374151' }}>{d}</div>)}
               {Array.from({ length: calFirstDay }, (_, i) => <div key={`e${i}`} style={{ background: '#FAFAFA', minHeight: isMobile ? '50px' : '80px' }} />)}
               {Array.from({ length: calDaysInMonth }, (_, i) => {
-                const day = i + 1, today = new Date();
-                const isToday = day === today.getDate() && calCurrentDate.getMonth() === today.getMonth() && calCurrentDate.getFullYear() === today.getFullYear();
+                const day = i + 1, todayParts = getTodayCT().split('-').map(Number);
+                const isToday = day === todayParts[2] && calCurrentDate.getMonth() === todayParts[1] - 1 && calCurrentDate.getFullYear() === todayParts[0];
                 const dayScheds = getCalSchedulesForDay(day);
                 const dayProspectAppts = getProspectApptsForDay(day);
                 return (
