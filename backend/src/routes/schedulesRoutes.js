@@ -182,19 +182,42 @@ router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
 // prevent router.get('-all') from ever matching /api/schedules-all).
 
 // DELETE /api/schedules/:scheduleId - Delete a schedule (soft delete)
+// If the shift is part of a split shift and ?deletePair=true, both segments are deleted
 router.delete('/:scheduleId', verifyToken, async (req, res) => {
   try {
-    const result = await db.query(
-      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [req.params.scheduleId]
-    );
+    const { scheduleId } = req.params;
+    const deletePair = req.query.deletePair === 'true';
 
-    if (result.rows.length === 0) {
+    const current = await db.query('SELECT * FROM schedules WHERE id = $1', [scheduleId]);
+    if (current.rows.length === 0) {
       return res.status(404).json({ error: 'Schedule not found' });
     }
 
-    await auditLog(req.user.id, 'DELETE', 'schedules', req.params.scheduleId, null, result.rows[0]);
-    res.json({ message: 'Schedule deleted' });
+    const shift = current.rows[0];
+
+    // If split shift and deletePair requested, delete both segments
+    if (shift.is_split_shift && shift.split_shift_group_id && deletePair) {
+      const result = await db.query(
+        `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE split_shift_group_id = $1 AND is_active = true RETURNING *`,
+        [shift.split_shift_group_id]
+      );
+      for (const row of result.rows) {
+        await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row);
+      }
+      return res.json({ message: 'Split shift pair deleted', deletedCount: result.rows.length });
+    }
+
+    // Single delete
+    const result = await db.query(
+      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [scheduleId]
+    );
+    await auditLog(req.user.id, 'DELETE', 'schedules', scheduleId, null, result.rows[0]);
+    res.json({
+      message: 'Schedule deleted',
+      wasSplitShift: shift.is_split_shift || false,
+      splitShiftGroupId: shift.split_shift_group_id || null,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

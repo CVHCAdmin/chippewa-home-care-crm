@@ -223,8 +223,49 @@ router.delete('/performance-reviews/:id', verifyToken, requireAdmin, async (req,
 
 router.post('/schedules-enhanced', verifyToken, async (req, res) => {
   try {
-    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate } = req.body;
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, splitShift } = req.body;
     if (!caregiverId || !clientId || !startTime || !endTime) return res.status(400).json({ error: 'Missing required fields' });
+
+    // ── Split shift handling ──
+    if (splitShift) {
+      if (!splitShift.startTime || !splitShift.endTime) {
+        return res.status(400).json({ error: 'Split shift requires startTime and endTime' });
+      }
+      if (splitShift.startTime <= endTime) {
+        return res.status(400).json({ error: 'Split shift segment 2 must start after segment 1 ends' });
+      }
+
+      const splitGroupId = uuidv4();
+      const id1 = uuidv4();
+      const id2 = uuidv4();
+      const baseParams = [caregiverId, clientId, scheduleType||'recurring', dayOfWeek!=null?dayOfWeek:null, date||null, notes||null, frequency||'weekly', effectiveDate||null, anchorDate||null];
+
+      // Check caregiver availability conflicts for both segments
+      if (date) {
+        const conflicts1 = await db.query(
+          `SELECT id FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date=$2 AND NOT (end_time<=$3 OR start_time>=$4)`,
+          [caregiverId, date, startTime, endTime]
+        );
+        if (conflicts1.rows.length > 0) return res.status(400).json({ error: 'Caregiver has a conflicting schedule during segment 1' });
+
+        const conflicts2 = await db.query(
+          `SELECT id FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date=$2 AND NOT (end_time<=$3 OR start_time>=$4)`,
+          [caregiverId, date, splitShift.startTime, splitShift.endTime]
+        );
+        if (conflicts2.rows.length > 0) return res.status(400).json({ error: 'Caregiver has a conflicting schedule during segment 2' });
+      }
+
+      const insertSQL = `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date, is_split_shift, split_shift_group_id, split_segment)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14) RETURNING *`;
+
+      const seg1 = await db.query(insertSQL, [id1, ...baseParams.slice(0,5), startTime, endTime, ...baseParams.slice(5), splitGroupId, 1]);
+      const seg2 = await db.query(insertSQL, [id2, ...baseParams.slice(0,5), splitShift.startTime, splitShift.endTime, ...baseParams.slice(5), splitGroupId, 2]);
+
+      // TODO: EVV integration — split shifts may need separate EVV visit records
+      return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]] });
+    }
+
+    // ── Standard single shift ──
     const id = uuidv4();
     const result = await db.query(
       `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date)

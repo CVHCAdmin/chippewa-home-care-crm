@@ -191,6 +191,7 @@ app.use('/api/communication-log', verifyToken, require('./routes/communicationRo
 app.use('/api/no-show',           verifyToken, require('./routes/noShowRoutes'));
 app.use('/api/forms',             verifyToken, require('./routes/formBuilderRoutes'));
 app.use('/api/forecast',          verifyToken, require('./routes/forecastRoutes'));
+app.use('/api/payments',          verifyToken, require('./routes/paymentsRoutes'));
 
 // ── EXPLICIT ROUTES (Express path-boundary workarounds) ──────────────────────
 
@@ -200,6 +201,7 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT s.*, s.frequency, s.effective_date, s.anchor_date,
+              s.is_split_shift, s.split_shift_group_id, s.split_segment,
               u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
               c.first_name as client_first_name, c.last_name as client_last_name
        FROM schedules s

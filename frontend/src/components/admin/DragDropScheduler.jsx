@@ -54,7 +54,8 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   const [mobileDay, setMobileDay] = useState(new Date().getDay());
   const [toast, setToast]               = useState(null);
   const [newShift, setNewShift]         = useState(null);
-  const [newShiftForm, setNewShiftForm] = useState({ clientId:'', startTime:'09:00', endTime:'13:00', notes:'' });
+  const [newShiftForm, setNewShiftForm] = useState({ clientId:'', startTime:'09:00', endTime:'13:00', notes:'', isSplit:false, split2Start:'16:00', split2End:'20:00' });
+  const [splitError, setSplitError]     = useState('');
   const [editShift, setEditShift]         = useState(null);
   const [editShiftForm, setEditShiftForm] = useState({ clientId:'', startTime:'', endTime:'', notes:'' });
   const [editScope, setEditScope]         = useState('all'); // 'all' | 'once'
@@ -136,28 +137,55 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   function handleCellClick(caregiverId, dayIndex) {
     if (saving) return;
     setNewShift({ caregiverId, dayIndex });
-    setNewShiftForm({ clientId:'', startTime:'09:00', endTime:'13:00', notes:'' });
+    setNewShiftForm({ clientId:'', startTime:'09:00', endTime:'13:00', notes:'', isSplit:false, split2Start:'16:00', split2End:'20:00' });
+    setSplitError('');
+  }
+
+  // Validate split shift times and set error message
+  function validateSplitTimes(form) {
+    if (!form.isSplit) { setSplitError(''); return true; }
+    if (form.split2Start <= form.endTime) {
+      setSplitError('Shift 2 must start after Shift 1 ends');
+      return false;
+    }
+    if (form.split2End <= form.split2Start) {
+      setSplitError('Shift 2 end must be after Shift 2 start');
+      return false;
+    }
+    setSplitError('');
+    return true;
   }
 
   async function handleCreateShift() {
     if (!newShiftForm.clientId) return showToast('Select a client', 'error');
+    if (!validateSplitTimes(newShiftForm)) return;
     setSaving(true);
     try {
+      const payload = {
+        caregiverId:  newShift.caregiverId,
+        clientId:     newShiftForm.clientId,
+        scheduleType: 'one-time',
+        date:         weekDateStrs[newShift.dayIndex],
+        startTime:    newShiftForm.startTime,
+        endTime:      newShiftForm.endTime,
+        notes:        newShiftForm.notes,
+      };
+      if (newShiftForm.isSplit) {
+        payload.splitShift = {
+          startTime: newShiftForm.split2Start,
+          endTime:   newShiftForm.split2End,
+        };
+      }
       const res = await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
         method: 'POST',
         headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-        body: JSON.stringify({
-          caregiverId:  newShift.caregiverId,
-          clientId:     newShiftForm.clientId,
-          scheduleType: 'one-time',
-          date:         weekDateStrs[newShift.dayIndex],
-          startTime:    newShiftForm.startTime,
-          endTime:      newShiftForm.endTime,
-          notes:        newShiftForm.notes,
-        }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Failed to create shift');
-      showToast('Shift created ✓');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to create shift');
+      }
+      showToast(newShiftForm.isSplit ? 'Split shift created' : 'Shift created');
       setNewShift(null);
       await loadAll();
       onScheduleChange && onScheduleChange();
@@ -168,15 +196,20 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     }
   }
 
-  async function handleDeleteShift(scheduleId) {
-    if (!window.confirm('Delete this shift?')) return;
+  async function handleDeleteShift(scheduleId, shift) {
+    const isSplit = shift && shift.is_split_shift;
+    const msg = isSplit ? 'Delete both segments of this split shift?' : 'Delete this shift?';
+    if (!window.confirm(msg)) return;
     setSaving(true);
     try {
-      await fetch(`${API_BASE_URL}/api/schedules/${scheduleId}`, {
+      const url = isSplit
+        ? `${API_BASE_URL}/api/schedules/${scheduleId}?deletePair=true`
+        : `${API_BASE_URL}/api/schedules/${scheduleId}`;
+      await fetch(url, {
         method: 'DELETE',
         headers: { Authorization:`Bearer ${token}` },
       });
-      showToast('Shift deleted ✓');
+      showToast(isSplit ? 'Split shift pair deleted' : 'Shift deleted');
       setEditShift(null);
       await loadAll();
       onScheduleChange && onScheduleChange();
@@ -220,7 +253,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           }),
         });
         if (!res.ok) throw new Error('Failed to create one-time shift');
-        showToast(`One-time shift created for ${new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })} ✓`);
+        showToast(`One-time shift created for ${new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })}`);
       } else {
         // Update the recurring schedule itself
         const res = await fetch(`${API_BASE_URL}/api/schedules-all/${editShift.id}`, {
@@ -238,7 +271,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           }),
         });
         if (!res.ok) throw new Error('Failed to save');
-        showToast('Shift updated ✓');
+        showToast('Shift updated');
       }
       setEditShift(null);
       await loadAll();
@@ -250,10 +283,65 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     }
   }
 
+  // Helper: find the split partner of a shift in the same cell
+  function getSplitPartner(shift, cellShifts) {
+    if (!shift.is_split_shift || !shift.split_shift_group_id) return null;
+    return cellShifts.find(s => s.id !== shift.id && s.split_shift_group_id === shift.split_shift_group_id) || null;
+  }
+
+  // Render a single shift block on the grid
+  function renderShiftBlock(s, dayIndex, cellShifts) {
+    const client = clientMap[s.client_id];
+    const color  = clientColor(s.client_id, clientMap);
+    const durH   = Number(parseFloat((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60 || 0)).toFixed(2);
+    const isSplit = s.is_split_shift && s.split_segment;
+    const partner = isSplit ? getSplitPartner(s, cellShifts) : null;
+    // Only show the dashed connector above segment 2
+    const showConnector = isSplit && s.split_segment === 2 && partner;
+
+    return (
+      <React.Fragment key={s.id}>
+        {showConnector && (
+          <div style={{
+            borderLeft: `2px dashed ${color}`,
+            height: 8,
+            marginLeft: 12,
+            opacity: 0.5,
+          }} />
+        )}
+        <div
+          onClick={e => { e.stopPropagation(); openEditShift(s, weekDateStrs[dayIndex]); }}
+          style={{
+            background: color,
+            color:'#fff',
+            borderRadius:5,
+            padding:'3px 6px',
+            marginBottom: isSplit && s.split_segment === 1 ? 0 : 3,
+            fontSize:11,
+            fontWeight:600,
+            cursor:'pointer',
+            userSelect:'none',
+            boxShadow:'0 1px 3px rgba(0,0,0,0.15)',
+            borderLeft: isSplit ? '3px solid rgba(255,255,255,0.5)' : undefined,
+          }}
+        >
+          <div style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontWeight:700, display:'flex', alignItems:'center', gap:3 }}>
+            {client ? `${client.first_name} ${client.last_name}` : 'Unknown'}
+            {isSplit && <span style={{ fontSize:8, opacity:0.8, background:'rgba(255,255,255,0.25)', borderRadius:3, padding:'1px 3px' }}>Split {s.split_segment}/2</span>}
+          </div>
+          <div style={{ opacity:0.9, fontSize:10 }}>
+            {formatTime(s.start_time)}-{formatTime(s.end_time)} ({durH}h)
+            {!s.date && <span style={{ marginLeft:4, opacity:0.7 }}>&#8635;</span>}
+          </div>
+        </div>
+      </React.Fragment>
+    );
+  }
+
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:300, color:'#6B7280' }}>
       <div style={{ textAlign:'center' }}>
-        <div style={{ fontSize:32, marginBottom:12 }}>📅</div>
+        <div style={{ fontSize:32, marginBottom:12 }}>&#128197;</div>
         Loading schedule...
       </div>
     </div>
@@ -277,13 +365,13 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       {/* Header */}
       <div style={{ background:'#fff', borderBottom:'1px solid #E5E7EB', padding:'12px 20px', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
         <div style={{ display:'flex', gap:6 }}>
-          <button onClick={prevWeek} style={navBtn}>‹</button>
+          <button onClick={prevWeek} style={navBtn}>&#8249;</button>
           <button onClick={goToday}  style={{ ...navBtn, padding:'6px 14px', fontSize:13 }}>Today</button>
-          <button onClick={nextWeek} style={navBtn}>›</button>
+          <button onClick={nextWeek} style={navBtn}>&#8250;</button>
         </div>
         <span style={{ fontWeight:700, fontSize:16, color:'#111827', flex:1 }}>
           {weekDates[0].toLocaleDateString('en-US', { month:'short', day:'numeric' })}
-          {' – '}
+          {' \u2013 '}
           {weekDates[6].toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}
         </span>
         <span style={{ fontSize:12, color:'#9CA3AF' }}>Click any cell to add a shift</span>
@@ -338,16 +426,20 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                     const cl = clientMap[s.client_id];
                     const color = clientColor(s.client_id, clientMap);
                     const durH = Number(parseFloat((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60 || 0)).toFixed(2);
+                    const isSplit = s.is_split_shift && s.split_segment;
                     return (
                       <div key={s.id} onClick={() => openEditShift(s, weekDateStrs[mobileDay])} style={{
                         padding:'10px 14px', borderLeft:`4px solid ${color}`,
                         borderBottom:'1px solid #F9FAFB', cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center'
                       }}>
                         <div>
-                          <div style={{ fontWeight:600, fontSize:14 }}>{cl ? `${cl.first_name} ${cl.last_name}` : 'Unknown'}</div>
-                          <div style={{ fontSize:12, color:'#6B7280', marginTop:2 }}>{formatTime(s.start_time)} – {formatTime(s.end_time)} · {durH}h</div>
+                          <div style={{ fontWeight:600, fontSize:14, display:'flex', alignItems:'center', gap:6 }}>
+                            {cl ? `${cl.first_name} ${cl.last_name}` : 'Unknown'}
+                            {isSplit && <span style={{ fontSize:10, color, background:`${color}20`, borderRadius:4, padding:'1px 5px', fontWeight:700 }}>Split {s.split_segment}/2</span>}
+                          </div>
+                          <div style={{ fontSize:12, color:'#6B7280', marginTop:2 }}>{formatTime(s.start_time)} \u2013 {formatTime(s.end_time)} \u00B7 {durH}h</div>
                         </div>
-                        <span style={{ fontSize:12, color:'#9CA3AF' }}>✏️</span>
+                        <span style={{ fontSize:12, color:'#9CA3AF' }}>&#9998;</span>
                       </div>
                     );
                   })
@@ -400,7 +492,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                     {cg.first_name} {cg.last_name}
                   </div>
                   <div style={{ fontSize:11, color: isOver ? '#EF4444' : '#6B7280', fontWeight: isOver ? 700 : 400, marginTop:2 }}>
-                    {hrs}h{isOver ? ' ⚠️ OT' : ''}
+                    {hrs}h{isOver ? ' \u26A0\uFE0F OT' : ''}
                   </div>
                 </div>
 
@@ -423,37 +515,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                       onMouseEnter={e => e.currentTarget.style.background = isToday ? '#DBEAFE' : '#F9FAFB'}
                       onMouseLeave={e => e.currentTarget.style.background = isToday ? '#F0F9FF' : 'transparent'}
                     >
-                      {shifts.map(s => {
-                        const client = clientMap[s.client_id];
-                        const color  = clientColor(s.client_id, clientMap);
-                        const durH   = Number(parseFloat((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60 || 0)).toFixed(2);
-                        return (
-                          <div
-                            key={s.id}
-                            onClick={e => { e.stopPropagation(); openEditShift(s, weekDateStrs[dayIndex]); }}
-                            style={{
-                              background: color,
-                              color:'#fff',
-                              borderRadius:5,
-                              padding:'3px 6px',
-                              marginBottom:3,
-                              fontSize:11,
-                              fontWeight:600,
-                              cursor:'pointer',
-                              userSelect:'none',
-                              boxShadow:'0 1px 3px rgba(0,0,0,0.15)',
-                            }}
-                          >
-                            <div style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontWeight:700 }}>
-                              {client ? `${client.first_name} ${client.last_name}` : 'Unknown'}
-                            </div>
-                            <div style={{ opacity:0.9, fontSize:10 }}>
-                              {formatTime(s.start_time)}–{formatTime(s.end_time)} ({durH}h)
-                              {!s.date && <span style={{ marginLeft:4, opacity:0.7 }}>↻</span>}
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {shifts.map(s => renderShiftBlock(s, dayIndex, shifts))}
                     </div>
                   );
                 })}
@@ -479,30 +541,107 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       {/* Create shift modal */}
       {newShift && (
         <Modal
-          title={`New Shift — ${DAY_FULL[newShift.dayIndex]}, ${weekDates[newShift.dayIndex].toLocaleDateString('en-US',{ month:'long', day:'numeric' })}`}
+          title={`New Shift \u2014 ${DAY_FULL[newShift.dayIndex]}, ${weekDates[newShift.dayIndex].toLocaleDateString('en-US',{ month:'long', day:'numeric' })}`}
           onClose={() => setNewShift(null)}
         >
           <Field label="Client">
             <select value={newShiftForm.clientId} onChange={e => setNewShiftForm(f => ({ ...f, clientId:e.target.value }))} style={inputStyle}>
-              <option value="">— Select client —</option>
+              <option value="">\u2014 Select client \u2014</option>
               {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
             </select>
           </Field>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:12 }}>
-            <Field label="Start">
-              <input type="time" value={newShiftForm.startTime} onChange={e => setNewShiftForm(f => ({ ...f, startTime:e.target.value }))} style={inputStyle} />
-            </Field>
-            <Field label="End">
-              <input type="time" value={newShiftForm.endTime} onChange={e => setNewShiftForm(f => ({ ...f, endTime:e.target.value }))} style={inputStyle} />
-            </Field>
+
+          {/* Shift 1 time block */}
+          <div style={{ marginTop:12 }}>
+            {newShiftForm.isSplit && <div style={{ fontSize:11, fontWeight:700, color:'#3B82F6', marginBottom:4 }}>SHIFT 1</div>}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <Field label="Start">
+                <input type="time" value={newShiftForm.startTime} onChange={e => {
+                  const f = { ...newShiftForm, startTime:e.target.value };
+                  setNewShiftForm(f);
+                  validateSplitTimes(f);
+                }} style={inputStyle} />
+              </Field>
+              <Field label="End">
+                <input type="time" value={newShiftForm.endTime} onChange={e => {
+                  const f = { ...newShiftForm, endTime:e.target.value };
+                  setNewShiftForm(f);
+                  validateSplitTimes(f);
+                }} style={inputStyle} />
+              </Field>
+            </div>
           </div>
+
+          {/* Split Shift Toggle */}
+          <div style={{ marginTop:14, display:'flex', alignItems:'center', gap:8 }}>
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:13, fontWeight:600, color:'#374151' }}>
+              <div
+                onClick={() => {
+                  const next = { ...newShiftForm, isSplit: !newShiftForm.isSplit };
+                  if (!next.isSplit) { next.split2Start = '16:00'; next.split2End = '20:00'; }
+                  setNewShiftForm(next);
+                  validateSplitTimes(next);
+                }}
+                style={{
+                  width:36, height:20, borderRadius:10, position:'relative', cursor:'pointer',
+                  background: newShiftForm.isSplit ? '#3B82F6' : '#D1D5DB',
+                  transition:'background 0.2s',
+                }}
+              >
+                <div style={{
+                  width:16, height:16, borderRadius:'50%', background:'#fff', position:'absolute', top:2,
+                  left: newShiftForm.isSplit ? 18 : 2,
+                  transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.2)',
+                }} />
+              </div>
+              Split Shift
+            </label>
+            {newShiftForm.isSplit && (
+              <span style={{ fontSize:11, color:'#6B7280' }}>Two segments, same day</span>
+            )}
+          </div>
+
+          {/* Shift 2 time block (split only) */}
+          {newShiftForm.isSplit && (
+            <>
+              <div style={{ borderTop:'1px dashed #D1D5DB', margin:'14px 0 10px', position:'relative' }}>
+                <span style={{ position:'absolute', top:-9, left:'50%', transform:'translateX(-50%)', background:'#fff', padding:'0 8px', fontSize:10, color:'#6B7280', fontWeight:700 }}>BREAK</span>
+              </div>
+              <div style={{ fontSize:11, fontWeight:700, color:'#3B82F6', marginBottom:4 }}>SHIFT 2</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+                <Field label="Start">
+                  <input type="time" value={newShiftForm.split2Start} onChange={e => {
+                    const f = { ...newShiftForm, split2Start:e.target.value };
+                    setNewShiftForm(f);
+                    validateSplitTimes(f);
+                  }} style={inputStyle} />
+                </Field>
+                <Field label="End">
+                  <input type="time" value={newShiftForm.split2End} onChange={e => {
+                    const f = { ...newShiftForm, split2End:e.target.value };
+                    setNewShiftForm(f);
+                    validateSplitTimes(f);
+                  }} style={inputStyle} />
+                </Field>
+              </div>
+              {splitError && (
+                <div style={{ color:'#EF4444', fontSize:12, marginTop:6, fontWeight:600 }}>
+                  {splitError}
+                </div>
+              )}
+            </>
+          )}
+
           <Field label="Notes (optional)" style={{ marginTop:12 }}>
             <input type="text" value={newShiftForm.notes} onChange={e => setNewShiftForm(f => ({ ...f, notes:e.target.value }))} style={inputStyle} placeholder="Any notes..." />
           </Field>
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:16 }}>
             <button onClick={() => setNewShift(null)} style={cancelBtn}>Cancel</button>
-            <button onClick={handleCreateShift} disabled={saving} style={primaryBtn}>
-              {saving ? 'Creating...' : 'Create Shift'}
+            <button onClick={handleCreateShift} disabled={saving || (newShiftForm.isSplit && !!splitError)} style={{
+              ...primaryBtn,
+              opacity: (saving || (newShiftForm.isSplit && !!splitError)) ? 0.6 : 1,
+            }}>
+              {saving ? 'Creating...' : newShiftForm.isSplit ? 'Create Split Shift' : 'Create Shift'}
             </button>
           </div>
         </Modal>
@@ -510,13 +649,19 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
       {/* Edit/delete shift modal */}
       {editShift && (() => {
-        const color = clientColor(editShiftForm.clientId || editShift.client_id, clientMap);
         const durH  = editShiftForm.startTime && editShiftForm.endTime
           ? Number(parseFloat((timeToMinutes(editShiftForm.endTime) - timeToMinutes(editShiftForm.startTime)) / 60 || 0)).toFixed(2)
           : '0';
         const isRecurring = editShift.day_of_week !== null && editShift.day_of_week !== undefined;
+        const isSplit = editShift.is_split_shift;
         return (
-          <Modal title="Edit Shift" onClose={() => setEditShift(null)}>
+          <Modal title={isSplit ? `Edit Shift (Split ${editShift.split_segment}/2)` : 'Edit Shift'} onClose={() => setEditShift(null)}>
+            {isSplit && (
+              <div style={{ marginBottom:12, fontSize:12, color:'#3B82F6', background:'#EFF6FF', padding:'8px 10px', borderRadius:6, display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ fontSize:14 }}>&#128279;</span>
+                This is segment {editShift.split_segment} of a split shift. Deleting will remove both segments.
+              </div>
+            )}
             {isRecurring && (
               <div style={{ marginBottom:12 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:6 }}>Apply changes to:</div>
@@ -526,13 +671,13 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                     borderColor: editScope === 'all' ? '#F59E0B' : '#E5E7EB',
                     background: editScope === 'all' ? '#FFFBEB' : '#fff',
                     color: editScope === 'all' ? '#92400E' : '#6B7280',
-                  }}>↻ All future occurrences</button>
+                  }}>&#8635; All future occurrences</button>
                   <button type="button" onClick={() => setEditScope('once')} style={{
                     flex:1, padding:'8px 0', borderRadius:8, border:'2px solid', cursor:'pointer', fontWeight:600, fontSize:13,
                     borderColor: editScope === 'once' ? '#3B82F6' : '#E5E7EB',
                     background: editScope === 'once' ? '#EFF6FF' : '#fff',
                     color: editScope === 'once' ? '#1D4ED8' : '#6B7280',
-                  }}>📅 This date only{editDate ? ` (${new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric' })})` : ''}</button>
+                  }}>&#128197; This date only{editDate ? ` (${new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric' })})` : ''}</button>
                 </div>
                 {editScope === 'once' && (
                   <div style={{ marginTop:6, fontSize:12, color:'#2563EB', background:'#EFF6FF', padding:'6px 10px', borderRadius:6 }}>
@@ -562,15 +707,15 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             </div>
             {editShiftForm.startTime && editShiftForm.endTime && (
               <div style={{ textAlign:'center', fontSize:12, color:'#6B7280', margin:'6px 0 2px', background:'#F3F4F6', borderRadius:6, padding:'4px 0' }}>
-                {formatTime(editShiftForm.startTime)} – {formatTime(editShiftForm.endTime)} · <strong>{durH}h</strong>
+                {formatTime(editShiftForm.startTime)} \u2013 {formatTime(editShiftForm.endTime)} \u00B7 <strong>{durH}h</strong>
               </div>
             )}
             <Field label="Notes (optional)" style={{ marginTop:10 }}>
               <input type="text" value={editShiftForm.notes} onChange={e => setEditShiftForm(f => ({ ...f, notes: e.target.value }))} style={inputStyle} placeholder="Any notes..." />
             </Field>
             <div style={{ display:'flex', justifyContent:'space-between', marginTop:16 }}>
-              <button onClick={() => handleDeleteShift(editShift.id)} disabled={saving} style={{ ...cancelBtn, color:'#EF4444', borderColor:'#FECACA' }}>
-                {saving ? '...' : 'Delete Shift'}
+              <button onClick={() => handleDeleteShift(editShift.id, editShift)} disabled={saving} style={{ ...cancelBtn, color:'#EF4444', borderColor:'#FECACA' }}>
+                {saving ? '...' : isSplit ? 'Delete Split Pair' : 'Delete Shift'}
               </button>
               <div style={{ display:'flex', gap:8 }}>
                 <button onClick={() => setEditShift(null)} style={cancelBtn}>Cancel</button>
@@ -592,10 +737,10 @@ function Modal({ title, onClose, children }) {
       style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
       onClick={e => e.target === e.currentTarget && onClose()}
     >
-      <div style={{ background:'#fff', borderRadius:12, width:'100%', maxWidth:420, boxShadow:'0 20px 60px rgba(0,0,0,0.2)' }}>
+      <div style={{ background:'#fff', borderRadius:12, width:'100%', maxWidth:420, boxShadow:'0 20px 60px rgba(0,0,0,0.2)', maxHeight:'90vh', overflowY:'auto' }}>
         <div style={{ padding:'14px 20px', borderBottom:'1px solid #E5E7EB', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <h3 style={{ margin:0, fontSize:15, fontWeight:700, color:'#111827' }}>{title}</h3>
-          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20, color:'#9CA3AF', lineHeight:1 }}>×</button>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20, color:'#9CA3AF', lineHeight:1 }}>\u00D7</button>
         </div>
         <div style={{ padding:20 }}>{children}</div>
       </div>
