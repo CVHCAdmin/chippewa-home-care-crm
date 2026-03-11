@@ -225,4 +225,96 @@ router.get('/login-activity', verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// ─── CHANGE OWN PASSWORD ──────────────────────────────────────────────────────
+// Any logged-in user can change their own password
+router.put('/change-password', verifyToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current password and new password are required' });
+    if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
+
+    const result = await db.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
+
+    const match = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
+    if (!match) return res.status(401).json({ error: 'Current password is incorrect' });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await db.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [hashed, req.user.id]);
+    await auditLog(req.user.id, 'UPDATE', 'users', req.user.id, null, { action: 'password_changed_self' });
+
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// ─── FORGOT PASSWORD (REQUEST RESET) ─────────────────────────────────────────
+// Public endpoint — sends a reset link via email
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const result = await db.query('SELECT id, email, first_name FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase().trim()]);
+
+    // Always return success to prevent email enumeration
+    if (!result.rows.length) return res.json({ success: true, message: 'If an account exists with that email, a reset link has been sent.' });
+
+    const user = result.rows[0];
+    const resetToken = uuidv4();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await db.query(
+      `UPDATE users SET reset_token = $1, reset_token_expires = $2, updated_at = NOW() WHERE id = $3`,
+      [resetToken, expiresAt, user.id]
+    );
+
+    // Send reset email
+    const { sendPasswordReset } = require('../services/emailService');
+    const frontendUrl = process.env.FRONTEND_URL || 'https://cvhc-crm.netlify.app';
+    const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
+
+    await sendPasswordReset({ to: user.email, userName: user.first_name, resetUrl });
+
+    res.json({ success: true, message: 'If an account exists with that email, a reset link has been sent.' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Failed to process request' });
+  }
+});
+
+// ─── RESET PASSWORD (WITH TOKEN) ─────────────────────────────────────────────
+// Public endpoint — resets password using the emailed token
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) return res.status(400).json({ error: 'Token and new password are required' });
+    if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+
+    const result = await db.query(
+      `SELECT id, email FROM users WHERE reset_token = $1 AND reset_token_expires > NOW()`,
+      [token]
+    );
+
+    if (!result.rows.length) return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
+
+    const user = result.rows[0];
+    const hashed = await bcrypt.hash(newPassword, 10);
+
+    await db.query(
+      `UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL, updated_at = NOW() WHERE id = $2`,
+      [hashed, user.id]
+    );
+
+    await auditLog(user.id, 'UPDATE', 'users', user.id, null, { action: 'password_reset_via_email' });
+
+    res.json({ success: true, message: 'Password has been reset. You can now sign in.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
 module.exports = router;

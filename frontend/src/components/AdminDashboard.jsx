@@ -45,6 +45,8 @@ import NoShowAlerts from './admin/NoShowAlerts';
 import FormBuilder from './admin/FormBuilder';
 import RevenueForecast from './admin/RevenueForecast';
 import BillingImport from './admin/BillingImport';
+import BillingEngine from './admin/BillingEngine';
+import ChangePassword from './admin/ChangePassword';
 
 const NAV_SECTIONS = [
   {
@@ -90,6 +92,7 @@ const NAV_SECTIONS = [
       { id: 'billing', label: 'Billing', icon: '🧾' },
       { id: 'billing-import', label: 'Billing Import', icon: '📥' },
       { id: 'claims', label: 'Claims', icon: '📑' },
+      { id: 'billing-engine', label: 'Billing Engine', icon: '⚡' },
       { id: 'payroll', label: 'Payroll', icon: '💵' },
       { id: 'expenses', label: 'Expenses', icon: '💳' },
       { id: 'reports', label: 'Reports & Analytics', icon: '📊' },
@@ -104,6 +107,7 @@ const NAV_SECTIONS = [
       { id: 'documents', label: 'Documents', icon: '📁' },
       { id: 'audit-logs', label: 'Audit Logs', icon: '📜' },
       { id: 'login-activity', label: 'Login Activity', icon: '🔑' },
+      { id: 'change-password', label: 'Password Management', icon: '🔐' },
     ]
   },
   {
@@ -259,6 +263,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'expenses': return <ExpenseManagement token={token} />;
       case 'audit-logs': return <AuditLogs token={token} />;
       case 'login-activity': return <LoginActivity token={token} />;
+      case 'change-password': return <ChangePassword token={token} user={user} />;
       case 'caregiver-profile': return selectedCaregiverId ? (
         <CaregiverProfile caregiverId={selectedCaregiverId} token={token}
           onBack={() => { setSelectedCaregiverId(null); setCurrentPage('caregivers'); }} />
@@ -268,6 +273,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
           token={token} onBack={() => { setSelectedCaregiverId(null); setCurrentPage('caregivers'); }} />
       ) : null;
       case 'claims': return <ClaimsManagement token={token} />;
+      case 'billing-engine': return <BillingEngine token={token} />;
       case 'medications': return <MedicationsManagement token={token} />;
       case 'documents': return <DocumentsManagement token={token} />;
       case 'adl': return <ADLTracking token={token} />;

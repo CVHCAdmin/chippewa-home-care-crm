@@ -139,10 +139,33 @@ const sendFamilyPasswordReset = async ({ to, familyName, newPassword }) => {
   });
 };
 
+// ── Staff Password Reset ─────────────────────────────────────
+const sendPasswordReset = async ({ to, userName, resetUrl }) => {
+  return sendEmail({
+    to,
+    subject: `${AGENCY_NAME} — Password Reset Request`,
+    html: wrap(`
+      <p style="color: #333; font-size: 1rem;">Hello ${userName},</p>
+      <p style="color: #555; font-size: 0.95rem;">
+        We received a request to reset your password. Click the button below to set a new password.
+      </p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${resetUrl}" style="background: #1a5276; color: #fff; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 1rem; display: inline-block;">
+          Reset Password
+        </a>
+      </div>
+      <p style="color: #888; font-size: 0.85rem;">
+        This link expires in 1 hour. If you didn't request this reset, you can safely ignore this email.
+      </p>
+    `),
+  });
+};
+
 module.exports = {
   sendEmail,
   sendClientPortalInvite,
   sendFamilyPortalWelcome,
   sendFamilyPasswordReset,
+  sendPasswordReset,
   isConfigured,
 };
