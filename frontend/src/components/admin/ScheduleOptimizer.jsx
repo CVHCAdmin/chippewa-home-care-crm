@@ -43,7 +43,7 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
     if (!id || selectedCaregivers.find(c => c.id === id)) return;
     const cg = allCaregivers.find(c => c.id === id);
     if (!cg) return;
-    setSelectedCaregivers(prev => [...prev, { id, name: `${cg.first_name} ${cg.last_name}`, allocatedHours: 40, preferredStart: '', preferredEnd: '' }]);
+    setSelectedCaregivers(prev => [...prev, { id, name: `${cg.first_name} ${cg.last_name}`, allocatedHours: 40, preferredStart: '', preferredEnd: '', preferredDays: [] }]);
     setCgDropdown('');
   };
 
@@ -104,6 +104,13 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
   const updateClientRaw = (id, field, value) =>
     setSelectedClients(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
 
+  const toggleCgDay = (id, day) =>
+    setSelectedCaregivers(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const days = c.preferredDays || [];
+      return { ...c, preferredDays: days.includes(day) ? days.filter(d => d !== day) : [...days, day].sort((a, b) => a - b) };
+    }));
+
   const toggleClientDay = (id, day) =>
     setSelectedClients(prev => prev.map(c => {
       if (c.id !== id) return c;
@@ -126,6 +133,7 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
             id: c.id, allocatedHours: c.allocatedHours,
             preferredStart: c.preferredStart || null,
             preferredEnd: c.preferredEnd || null,
+            preferredDays: c.preferredDays?.length ? c.preferredDays : null,
           })),
           clients: selectedClients.map(c => ({
             id: c.id, visitsPerWeek: c.visitsPerWeek, hoursPerWeek: c.hoursPerWeek,
@@ -283,6 +291,29 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
                           onChange={e => updateCgField(cg.id, 'preferredEnd', e.target.value)}
                           style={{ padding: '0.25rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.82rem' }}
                         />
+                      </div>
+                    </div>
+
+                    {/* Preferred Days */}
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.25rem' }}>
+                        Preferred Days <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(empty = any day)</span>
+                      </label>
+                      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                        {DAY_NAMES.map((d, i) => {
+                          const isSelected = (cg.preferredDays || []).includes(i);
+                          return (
+                            <button key={i} type="button" onClick={() => toggleCgDay(cg.id, i)}
+                              style={{
+                                padding: '0.2rem 0.45rem', borderRadius: '5px', fontSize: '0.72rem', fontWeight: '700',
+                                cursor: 'pointer', border: 'none',
+                                background: isSelected ? DAY_COLORS[i] : '#F3F4F6',
+                                color: isSelected ? '#fff' : '#9CA3AF',
+                              }}>
+                              {d}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>

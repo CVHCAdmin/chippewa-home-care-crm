@@ -72,6 +72,7 @@ export default function RosterOptimizer({ token }) {
           enabled: true,
           preferredStart: '',
           preferredEnd: '',
+          preferredDays: [],
         })));
         setClients(data.clients.map(cl => {
           const hrs = parseFloat(cl.assigned_hours_per_week) || 0;
@@ -100,6 +101,13 @@ export default function RosterOptimizer({ token }) {
 
   const updateCgField = (id, field, value) =>
     setCaregivers(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
+
+  const toggleCgDay = (id, day) =>
+    setCaregivers(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const days = c.preferredDays || [];
+      return { ...c, preferredDays: days.includes(day) ? days.filter(d => d !== day) : [...days, day].sort((a, b) => a - b) };
+    }));
 
   const toggleAllCg = (val) =>
     setCaregivers(prev => prev.map(c => ({ ...c, enabled: val })));
@@ -139,6 +147,7 @@ export default function RosterOptimizer({ token }) {
             id: c.id, targetHours: c.targetHours,
             preferredStart: c.preferredStart || null,
             preferredEnd: c.preferredEnd || null,
+            preferredDays: c.preferredDays?.length ? c.preferredDays : null,
           })),
           clients: activeCl.map(c => ({
             id: c.id, hoursPerWeek: c.hoursPerWeek, visitsPerWeek: c.visitsPerWeek,
@@ -351,6 +360,29 @@ export default function RosterOptimizer({ token }) {
                             onChange={e => updateCgField(cg.id, 'preferredEnd', e.target.value)}
                             style={{ padding: '0.2rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.78rem', boxSizing: 'border-box' }}
                           />
+                        </div>
+
+                        {/* Preferred Days */}
+                        <div style={{ marginTop: '0.4rem' }}>
+                          <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.2rem' }}>
+                            Preferred Days <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(empty = any day)</span>
+                          </label>
+                          <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap' }}>
+                            {DAY_NAMES.map((d, i) => {
+                              const isSel = (cg.preferredDays || []).includes(i);
+                              return (
+                                <button key={i} type="button" onClick={() => toggleCgDay(cg.id, i)}
+                                  style={{
+                                    padding: '0.15rem 0.35rem', borderRadius: '4px', fontSize: '0.68rem', fontWeight: '700',
+                                    cursor: 'pointer', border: 'none',
+                                    background: isSel ? DAY_COLORS[i] : '#F3F4F6',
+                                    color: isSel ? '#fff' : '#9CA3AF',
+                                  }}>
+                                  {d}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
                       </div>
                     )}

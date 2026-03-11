@@ -189,6 +189,14 @@ router.post('/run', async (req, res) => {
       cgRemaining[cg.id] = Math.max(0, parseFloat(cg.targetHours) - existingHrs);
     });
 
+    // ── Build caregiver preferred-days map (session-only override) ──────
+    const cgPreferredDaysMap = {};
+    inputCaregivers.forEach(cg => {
+      if (Array.isArray(cg.preferredDays) && cg.preferredDays.length > 0) {
+        cgPreferredDaysMap[cg.id] = new Set(cg.preferredDays);
+      }
+    });
+
     // ── Algorithm ─────────────────────────────────────────────────────────
     const proposals = [];
     const unscheduled = [];
@@ -245,6 +253,9 @@ router.post('/run', async (req, res) => {
 
           for (const cg of ranked) {
             if (cgRemaining[cg.id] < hrsPerVisit - 0.01) continue;
+
+            // If caregiver has preferred days set for this run, skip non-preferred days
+            if (cgPreferredDaysMap[cg.id] && !cgPreferredDaysMap[cg.id].has(day)) continue;
 
             // Check caregiver availability for this day
             const cgInfo = cgMap[cg.id];

@@ -187,6 +187,14 @@ router.post('/run', async (req, res) => {
       cgRemainingHours[cg.id] = Math.max(0, parseFloat(cg.allocatedHours) - alreadyBooked);
     });
 
+    // ── 5b. Build caregiver preferred-days map (session-only override) ──
+    const cgPreferredDaysMap = {};
+    selectedCaregivers.forEach(cg => {
+      if (Array.isArray(cg.preferredDays) && cg.preferredDays.length > 0) {
+        cgPreferredDaysMap[cg.id] = new Set(cg.preferredDays);
+      }
+    });
+
     // ── 6. Run optimization: assign each client's visits ────────────────────
     const proposals = [];
     const conflicts = [];
@@ -239,6 +247,9 @@ router.post('/run', async (req, res) => {
 
           for (const cg of scoredCaregivers) {
             if (cgRemainingHours[cg.id] < hoursPerVisit - 0.01) continue; // not enough hours
+
+            // If caregiver has preferred days set for this run, skip non-preferred days
+            if (cgPreferredDaysMap[cg.id] && !cgPreferredDaysMap[cg.id].has(day)) continue;
 
             // Check caregiver availability
             const cgInfo = cgMap[cg.id];
