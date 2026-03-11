@@ -28,27 +28,6 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       external: ['@capacitor-community/background-geolocation'],
-      output: {
-        manualChunks: {
-          // Split vendor libs into their own chunk
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          // Heavy admin components split separately
-          'admin-scheduling': [
-            './src/components/admin/SchedulingHub',
-            './src/components/admin/DragDropScheduler',
-            './src/components/admin/ScheduleCalendar',
-          ],
-          'admin-billing': [
-            './src/components/admin/BillingDashboard',
-            './src/components/admin/PayrollProcessing',
-            './src/components/admin/ClaimsManagement',
-          ],
-          'admin-reports': [
-            './src/components/admin/ReportsAnalytics',
-            './src/components/admin/AuditLogs',
-          ],
-        },
-      },
     },
   },
   define: {

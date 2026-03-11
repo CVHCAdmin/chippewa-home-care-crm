@@ -1,52 +1,54 @@
 // src/components/AdminDashboard.jsx - Rebuilt with collapsible nav, search, notifications
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { API_BASE_URL } from '../config';
 import { getDashboardSummary } from '../config';
 import { toast } from './Toast';
 import HelpPanel from './HelpPanel';
 import ImpersonationModal from './ImpersonationModal';
-import MessageBoard from './admin/MessageBoard';
-import IntegrationsHub from './admin/IntegrationsHub';
 
-// Admin pages
+// Eagerly loaded (small / always-visible)
 import DashboardOverview from './admin/DashboardOverview';
-import ReferralSources from './admin/ReferralSources';
-import ClientsManagement from './admin/ClientsManagement';
-import CaregiverManagement from './admin/CaregiverManagement';
-import BillingDashboard from './admin/BillingDashboard';
-import ClientOnboarding from './admin/ClientOnboarding';
-import PerformanceRatings from './admin/PerformanceRatings';
-import ExpenseManagement from './admin/ExpenseManagement';
-import CaregiverProfile from './admin/CaregiverProfile';
-import CaregiverHistory from './admin/CaregiverHistory';
-import ApplicationsDashboard from './admin/ApplicationsDashboard';
-import CarePlans from './admin/CarePlans';
-import IncidentReporting from './admin/IncidentReporting';
-import NotificationCenter from './admin/NotificationCenter';
-import ComplianceTracking from './admin/ComplianceTracking';
-import ReportsAnalytics from './admin/ReportsAnalytics';
-import PayrollProcessing from './admin/PayrollProcessing';
-import AuditLogs from './admin/AuditLogs';
-import LoginActivity from './admin/LoginActivity';
-import ClaimsManagement from './admin/ClaimsManagement';
-import MedicationsManagement from './admin/MedicationsManagement';
-import DocumentsManagement from './admin/DocumentsManagement';
-import ADLTracking from './admin/ADLTracking';
-import BackgroundChecks from './admin/BackgroundChecks';
-import SMSManagement from './admin/SMSManagement';
-import FamilyPortalAdmin from './admin/FamilyPortalAdmin';
-import AlertsManagement from './admin/AlertsManagement';
-import SchedulingHub from './admin/SchedulingHub';
-import RouteOptimizer from './admin/RouteOptimizer';
-import CompanyOptimizer from './admin/CompanyOptimizer';
-import EmergencyCoverage from './admin/EmergencyCoverage';
-import CommunicationLog from './admin/CommunicationLog';
-import NoShowAlerts from './admin/NoShowAlerts';
-import FormBuilder from './admin/FormBuilder';
-import RevenueForecast from './admin/RevenueForecast';
-import BillingImport from './admin/BillingImport';
-import BillingEngine from './admin/BillingEngine';
-import ChangePassword from './admin/ChangePassword';
+
+// Lazy-loaded admin pages
+const ReferralSources = React.lazy(() => import('./admin/ReferralSources'));
+const ClientsManagement = React.lazy(() => import('./admin/ClientsManagement'));
+const CaregiverManagement = React.lazy(() => import('./admin/CaregiverManagement'));
+const BillingDashboard = React.lazy(() => import('./admin/BillingDashboard'));
+const ClientOnboarding = React.lazy(() => import('./admin/ClientOnboarding'));
+const PerformanceRatings = React.lazy(() => import('./admin/PerformanceRatings'));
+const ExpenseManagement = React.lazy(() => import('./admin/ExpenseManagement'));
+const CaregiverProfile = React.lazy(() => import('./admin/CaregiverProfile'));
+const CaregiverHistory = React.lazy(() => import('./admin/CaregiverHistory'));
+const ApplicationsDashboard = React.lazy(() => import('./admin/ApplicationsDashboard'));
+const CarePlans = React.lazy(() => import('./admin/CarePlans'));
+const IncidentReporting = React.lazy(() => import('./admin/IncidentReporting'));
+const NotificationCenter = React.lazy(() => import('./admin/NotificationCenter'));
+const ComplianceTracking = React.lazy(() => import('./admin/ComplianceTracking'));
+const ReportsAnalytics = React.lazy(() => import('./admin/ReportsAnalytics'));
+const PayrollProcessing = React.lazy(() => import('./admin/PayrollProcessing'));
+const AuditLogs = React.lazy(() => import('./admin/AuditLogs'));
+const LoginActivity = React.lazy(() => import('./admin/LoginActivity'));
+const ClaimsManagement = React.lazy(() => import('./admin/ClaimsManagement'));
+const MedicationsManagement = React.lazy(() => import('./admin/MedicationsManagement'));
+const DocumentsManagement = React.lazy(() => import('./admin/DocumentsManagement'));
+const ADLTracking = React.lazy(() => import('./admin/ADLTracking'));
+const BackgroundChecks = React.lazy(() => import('./admin/BackgroundChecks'));
+const SMSManagement = React.lazy(() => import('./admin/SMSManagement'));
+const FamilyPortalAdmin = React.lazy(() => import('./admin/FamilyPortalAdmin'));
+const AlertsManagement = React.lazy(() => import('./admin/AlertsManagement'));
+const SchedulingHub = React.lazy(() => import('./admin/SchedulingHub'));
+const RouteOptimizer = React.lazy(() => import('./admin/RouteOptimizer'));
+const CompanyOptimizer = React.lazy(() => import('./admin/CompanyOptimizer'));
+const EmergencyCoverage = React.lazy(() => import('./admin/EmergencyCoverage'));
+const CommunicationLog = React.lazy(() => import('./admin/CommunicationLog'));
+const NoShowAlerts = React.lazy(() => import('./admin/NoShowAlerts'));
+const FormBuilder = React.lazy(() => import('./admin/FormBuilder'));
+const RevenueForecast = React.lazy(() => import('./admin/RevenueForecast'));
+const BillingImport = React.lazy(() => import('./admin/BillingImport'));
+const BillingEngine = React.lazy(() => import('./admin/BillingEngine'));
+const ChangePassword = React.lazy(() => import('./admin/ChangePassword'));
+const MessageBoard = React.lazy(() => import('./admin/MessageBoard'));
+const IntegrationsHub = React.lazy(() => import('./admin/IntegrationsHub'));
 
 const NAV_SECTIONS = [
   {
@@ -500,7 +502,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
               ))}
               <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
             </div>
-          ) : renderPage()}
+          ) : <Suspense fallback={<div style={{ padding: '2rem', textAlign: 'center', color: '#888' }}>Loading...</div>}>{renderPage()}</Suspense>}
         </div>
       </div>
 
