@@ -199,9 +199,21 @@ app.use('/api/payments',          verifyToken, require('./routes/paymentsRoutes'
 // path segment rules, so these live directly on the app instance.
 app.get('/api/schedules-all', verifyToken, async (req, res) => {
   try {
+    // Check if split-shift columns exist (added by migration_v17)
+    const colCheck = await db.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'schedules' AND column_name = 'is_split_shift'`
+    );
+    const hasSplitCols = colCheck.rows.length > 0;
+
     const result = await db.query(
-      `SELECT s.*, s.frequency, s.effective_date, s.anchor_date,
-              s.is_split_shift, s.split_shift_group_id, s.split_segment,
+      `SELECT s.id, s.caregiver_id, s.client_id, s.schedule_type,
+              s.day_of_week, s.date, s.start_time, s.end_time,
+              s.notes, s.is_active, s.status, s.created_at, s.updated_at,
+              s.frequency, s.effective_date, s.anchor_date,
+              ${hasSplitCols
+                ? `s.is_split_shift, s.split_shift_group_id, s.split_segment,`
+                : `false AS is_split_shift, NULL::uuid AS split_shift_group_id, NULL::int AS split_segment,`}
               u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
               c.first_name as client_first_name, c.last_name as client_last_name
        FROM schedules s
@@ -211,7 +223,10 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
        ORDER BY s.day_of_week, s.date, s.start_time`
     );
     res.json(result.rows);
-  } catch (error) { res.status(500).json({ error: error.message }); }
+  } catch (error) {
+    console.error('[schedules-all] GET failed:', error.message, error.stack);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
@@ -231,7 +246,10 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
     res.json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: error.message }); }
+  } catch (error) {
+    console.error('[schedules-all] PUT failed:', error.message, error.stack);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // /api/payroll-periods — path has a hyphen so can't live inside payrollRoutes
