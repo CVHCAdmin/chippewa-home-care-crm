@@ -134,9 +134,13 @@ router.post('/run', async (req, res) => {
               a.monday_available, a.tuesday_available, a.wednesday_available,
               a.thursday_available, a.friday_available, a.saturday_available, a.sunday_available,
               a.monday_start_time, a.tuesday_start_time, a.wednesday_start_time,
-              a.thursday_start_time, a.friday_start_time,
+              a.thursday_start_time, a.friday_start_time, a.saturday_start_time, a.sunday_start_time,
               a.monday_end_time, a.tuesday_end_time, a.wednesday_end_time,
-              a.thursday_end_time, a.friday_end_time
+              a.thursday_end_time, a.friday_end_time, a.saturday_end_time, a.sunday_end_time,
+              a.monday_preferred_start, a.tuesday_preferred_start, a.wednesday_preferred_start,
+              a.thursday_preferred_start, a.friday_preferred_start, a.saturday_preferred_start, a.sunday_preferred_start,
+              a.monday_preferred_end, a.tuesday_preferred_end, a.wednesday_preferred_end,
+              a.thursday_preferred_end, a.friday_preferred_end, a.saturday_preferred_end, a.sunday_preferred_end
        FROM users u
        LEFT JOIN caregiver_availability a ON a.caregiver_id = u.id
        WHERE u.id = ANY($1)`,
@@ -181,7 +185,7 @@ router.post('/run', async (req, res) => {
     const DEFAULT_START = '08:00';
 
     for (const clientCfg of selectedClients) {
-      const { id: clientId, visitsPerWeek, hoursPerWeek } = clientCfg;
+      const { id: clientId, visitsPerWeek, hoursPerWeek, preferredDays: clientPreferredDays, timeWindowStart, timeWindowEnd } = clientCfg;
       const clientInfo = clientMap[clientId];
       if (!clientInfo) continue;
 
@@ -211,8 +215,10 @@ router.post('/run', async (req, res) => {
         };
       }).filter(cg => !cg.isBlocked).sort((a, b) => b.score - a.score);
 
-      // Try to place each visit on a different day
-      const tryDays = [1, 3, 2, 4, 5, 0, 6]; // Mon, Wed, Tue, Thu, Fri, Sun, Sat — prefer weekdays
+      // Use client preferred days if set, otherwise default order
+      const tryDays = (Array.isArray(clientPreferredDays) && clientPreferredDays.length > 0)
+        ? clientPreferredDays
+        : [1, 3, 2, 4, 5, 0, 6]; // Mon, Wed, Tue, Thu, Fri, Sun, Sat — prefer weekdays
 
       for (let visit = 0; visit < visitsPerWeek && visitsPlaced < visitsPerWeek; visit++) {
         let placed = false;
@@ -231,7 +237,7 @@ router.post('/run', async (req, res) => {
 
             // Find a non-conflicting start time for this day
             const daySlots = cgScheduleMap[cg.id][day];
-            const startTime = findAvailableSlot(daySlots, visitDurationMins, cgInfo, day);
+            const startTime = findAvailableSlot(daySlots, visitDurationMins, cgInfo, day, timeWindowStart, timeWindowEnd);
             if (!startTime) continue;
 
             const endTime = addMinutes(startTime, visitDurationMins);
@@ -415,32 +421,70 @@ function timesOverlap(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && aEnd > bStart;
 }
 
-// Find the first non-conflicting start time for a slot of `durationMins` on a given day
-function findAvailableSlot(existingSlots, durationMins, cgInfo, dayOfWeek) {
+// Find the first non-conflicting start time for a slot of `durationMins` on a given day.
+// Priority order:
+//   1) Intersection of client time window + caregiver preferred hours
+//   2) Client time window within caregiver full availability
+//   3) Caregiver preferred hours (if no client window)
+//   4) Full caregiver availability window
+function findAvailableSlot(existingSlots, durationMins, cgInfo, dayOfWeek, clientWindowStart, clientWindowEnd) {
   const AVAIL_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   const dayKey = AVAIL_KEYS[dayOfWeek];
 
-  // Caregiver window for this day (default 08:00–18:00)
-  const windowStart = cgInfo?.[`${dayKey}_start_time`] || '08:00';
-  const windowEnd = cgInfo?.[`${dayKey}_end_time`] || '18:00';
+  // Caregiver full availability window for this day (default 08:00–18:00)
+  const cgStart = cgInfo?.[`${dayKey}_start_time`] || '08:00';
+  const cgEnd = cgInfo?.[`${dayKey}_end_time`] || '18:00';
 
-  // Sort existing slots for this day
+  // Caregiver preferred hours (subset of availability, may be null)
+  const cgPrefStart = cgInfo?.[`${dayKey}_preferred_start`];
+  const cgPrefEnd = cgInfo?.[`${dayKey}_preferred_end`];
+
+  const hasClientWindow = clientWindowStart && clientWindowEnd;
+  const hasCgPref = cgPrefStart && cgPrefEnd;
+
   const sorted = [...existingSlots].sort((a, b) => a.start.localeCompare(b.start));
 
-  // Try starting at windowStart, then after each existing block
-  const candidates = [windowStart, ...sorted.map(s => s.end)];
-
-  for (const candidate of candidates) {
-    if (candidate >= windowEnd) break;
-    const proposed_end = addMinutes(candidate, durationMins);
-    if (proposed_end > windowEnd) break;
-
-    // Check no overlap with existing slots
-    const hasConflict = sorted.some(s => timesOverlap(candidate, proposed_end, s.start, s.end));
-    if (!hasConflict) return candidate;
+  function tryWindow(wStart, wEnd) {
+    if (wStart >= wEnd) return null;
+    const candidates = [wStart, ...sorted.map(s => s.end)];
+    for (const candidate of candidates) {
+      if (candidate < wStart) continue;
+      if (candidate >= wEnd) break;
+      const proposed_end = addMinutes(candidate, durationMins);
+      if (proposed_end > wEnd) break;
+      const hasConflict = sorted.some(s => timesOverlap(candidate, proposed_end, s.start, s.end));
+      if (!hasConflict) return candidate;
+    }
+    return null;
   }
 
-  return null; // no room
+  // Intersect two time windows
+  function intersect(aStart, aEnd, bStart, bEnd) {
+    const s = aStart > bStart ? aStart : bStart;
+    const e = aEnd < bEnd ? aEnd : bEnd;
+    return s < e ? [s, e] : null;
+  }
+
+  // 1) Best case: client window + caregiver preferred
+  if (hasClientWindow && hasCgPref) {
+    const inter = intersect(clientWindowStart, clientWindowEnd, cgPrefStart, cgPrefEnd);
+    if (inter) { const slot = tryWindow(inter[0], inter[1]); if (slot) return slot; }
+  }
+
+  // 2) Client window within caregiver full availability
+  if (hasClientWindow) {
+    const inter = intersect(clientWindowStart, clientWindowEnd, cgStart, cgEnd);
+    if (inter) { const slot = tryWindow(inter[0], inter[1]); if (slot) return slot; }
+  }
+
+  // 3) Caregiver preferred hours (no client constraint)
+  if (hasCgPref) {
+    const slot = tryWindow(cgPrefStart, cgPrefEnd);
+    if (slot) return slot;
+  }
+
+  // 4) Full caregiver availability window
+  return tryWindow(cgStart, cgEnd);
 }
 
 module.exports = router;

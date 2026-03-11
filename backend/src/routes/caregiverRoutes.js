@@ -158,7 +158,11 @@ router.put('/:caregiverId/availability', verifyToken, async (req, res) => {
     const { status, maxHoursPerWeek, mondayAvailable, mondayStartTime, mondayEndTime, tuesdayAvailable, tuesdayStartTime, tuesdayEndTime,
       wednesdayAvailable, wednesdayStartTime, wednesdayEndTime, thursdayAvailable, thursdayStartTime, thursdayEndTime,
       fridayAvailable, fridayStartTime, fridayEndTime, saturdayAvailable, saturdayStartTime, saturdayEndTime,
-      sundayAvailable, sundayStartTime, sundayEndTime } = req.body;
+      sundayAvailable, sundayStartTime, sundayEndTime,
+      mondayPreferredStart, mondayPreferredEnd, tuesdayPreferredStart, tuesdayPreferredEnd,
+      wednesdayPreferredStart, wednesdayPreferredEnd, thursdayPreferredStart, thursdayPreferredEnd,
+      fridayPreferredStart, fridayPreferredEnd, saturdayPreferredStart, saturdayPreferredEnd,
+      sundayPreferredStart, sundayPreferredEnd } = req.body;
     const result = await db.query(
       `UPDATE caregiver_availability SET status=COALESCE($1,status), max_hours_per_week=COALESCE($2,max_hours_per_week),
         monday_available=COALESCE($3,monday_available), monday_start_time=COALESCE($4,monday_start_time), monday_end_time=COALESCE($5,monday_end_time),
@@ -167,12 +171,27 @@ router.put('/:caregiverId/availability', verifyToken, async (req, res) => {
         thursday_available=COALESCE($12,thursday_available), thursday_start_time=COALESCE($13,thursday_start_time), thursday_end_time=COALESCE($14,thursday_end_time),
         friday_available=COALESCE($15,friday_available), friday_start_time=COALESCE($16,friday_start_time), friday_end_time=COALESCE($17,friday_end_time),
         saturday_available=COALESCE($18,saturday_available), saturday_start_time=COALESCE($19,saturday_start_time), saturday_end_time=COALESCE($20,saturday_end_time),
-        sunday_available=COALESCE($21,sunday_available), sunday_start_time=COALESCE($22,sunday_start_time), sunday_end_time=COALESCE($23,sunday_end_time), updated_at=NOW()
+        sunday_available=COALESCE($21,sunday_available), sunday_start_time=COALESCE($22,sunday_start_time), sunday_end_time=COALESCE($23,sunday_end_time),
+        monday_preferred_start=$25, monday_preferred_end=$26,
+        tuesday_preferred_start=$27, tuesday_preferred_end=$28,
+        wednesday_preferred_start=$29, wednesday_preferred_end=$30,
+        thursday_preferred_start=$31, thursday_preferred_end=$32,
+        friday_preferred_start=$33, friday_preferred_end=$34,
+        saturday_preferred_start=$35, saturday_preferred_end=$36,
+        sunday_preferred_start=$37, sunday_preferred_end=$38,
+        updated_at=NOW()
        WHERE caregiver_id = $24 RETURNING *`,
       [status, maxHoursPerWeek, mondayAvailable, mondayStartTime, mondayEndTime, tuesdayAvailable, tuesdayStartTime, tuesdayEndTime,
        wednesdayAvailable, wednesdayStartTime, wednesdayEndTime, thursdayAvailable, thursdayStartTime, thursdayEndTime,
        fridayAvailable, fridayStartTime, fridayEndTime, saturdayAvailable, saturdayStartTime, saturdayEndTime,
-       sundayAvailable, sundayStartTime, sundayEndTime, req.params.caregiverId]
+       sundayAvailable, sundayStartTime, sundayEndTime, req.params.caregiverId,
+       mondayPreferredStart || null, mondayPreferredEnd || null,
+       tuesdayPreferredStart || null, tuesdayPreferredEnd || null,
+       wednesdayPreferredStart || null, wednesdayPreferredEnd || null,
+       thursdayPreferredStart || null, thursdayPreferredEnd || null,
+       fridayPreferredStart || null, fridayPreferredEnd || null,
+       saturdayPreferredStart || null, saturdayPreferredEnd || null,
+       sundayPreferredStart || null, sundayPreferredEnd || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Caregiver availability not found' });
     await auditLog(req.user.id, 'UPDATE', 'caregiver_availability', req.params.caregiverId, null, result.rows[0]);

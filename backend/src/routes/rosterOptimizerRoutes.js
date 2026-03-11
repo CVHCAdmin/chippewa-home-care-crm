@@ -105,9 +105,22 @@ router.post('/run', async (req, res) => {
     const cgIds = inputCaregivers.map(c => c.id);
     const clIds = inputClients.map(c => c.id);
 
-    // ── Load full caregiver data ──────────────────────────────────────────
+    // ── Load full caregiver data (including availability & preferred hours) ─
     const cgDataRes = await db.query(
-      `SELECT id, first_name, last_name FROM users WHERE id = ANY($1)`,
+      `SELECT u.id, u.first_name, u.last_name,
+              a.monday_available, a.tuesday_available, a.wednesday_available,
+              a.thursday_available, a.friday_available, a.saturday_available, a.sunday_available,
+              a.monday_start_time, a.tuesday_start_time, a.wednesday_start_time,
+              a.thursday_start_time, a.friday_start_time, a.saturday_start_time, a.sunday_start_time,
+              a.monday_end_time, a.tuesday_end_time, a.wednesday_end_time,
+              a.thursday_end_time, a.friday_end_time, a.saturday_end_time, a.sunday_end_time,
+              a.monday_preferred_start, a.tuesday_preferred_start, a.wednesday_preferred_start,
+              a.thursday_preferred_start, a.friday_preferred_start, a.saturday_preferred_start, a.sunday_preferred_start,
+              a.monday_preferred_end, a.tuesday_preferred_end, a.wednesday_preferred_end,
+              a.thursday_preferred_end, a.friday_preferred_end, a.saturday_preferred_end, a.sunday_preferred_end
+       FROM users u
+       LEFT JOIN caregiver_availability a ON a.caregiver_id = u.id
+       WHERE u.id = ANY($1)`,
       [cgIds]
     );
     const cgMap = {};
@@ -174,7 +187,7 @@ router.post('/run', async (req, res) => {
     const WEEKDAY_ORDER = [1, 3, 2, 4, 5, 0, 6]; // Mon, Wed, Tue, Thu, Fri, Sun, Sat
 
     for (const clInput of inputClients) {
-      const { id: clId, hoursPerWeek, visitsPerWeek } = clInput;
+      const { id: clId, hoursPerWeek, visitsPerWeek, preferredDays: clientPreferredDays, timeWindowStart, timeWindowEnd } = clInput;
       const clInfo = clMap[clId];
       if (!clInfo) continue;
 
@@ -210,17 +223,33 @@ router.post('/run', async (req, res) => {
         .filter(cg => !cg.isBlocked)
         .sort((a, b) => b.score - a.score);
 
+      // Use client preferred days if set, otherwise default order
+      const tryDays = (Array.isArray(clientPreferredDays) && clientPreferredDays.length > 0)
+        ? clientPreferredDays
+        : WEEKDAY_ORDER;
+
       for (let v = 0; v < visitsPerWeek; v++) {
         let placed = false;
 
-        for (const day of WEEKDAY_ORDER) {
+        for (const day of tryDays) {
           if (placedDays.has(day)) continue;
 
           for (const cg of ranked) {
             if (cgRemaining[cg.id] < hrsPerVisit - 0.01) continue;
 
+            // Check caregiver availability for this day
+            const cgInfo = cgMap[cg.id];
+            const AVAIL_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+            const dayKey = AVAIL_KEYS[day];
+            const isAvailable = cgInfo ? (cgInfo[`${dayKey}_available`] !== false) : true;
+            if (!isAvailable) continue;
+
             const daySlots = cgSlotMap[cg.id][day];
-            const startTime = findSlot(daySlots, visitMins);
+            const windowStart = cgInfo?.[`${dayKey}_start_time`] ? normalizeTime(cgInfo[`${dayKey}_start_time`]) : '08:00';
+            const windowEnd = cgInfo?.[`${dayKey}_end_time`] ? normalizeTime(cgInfo[`${dayKey}_end_time`]) : '18:00';
+            const prefStart = cgInfo?.[`${dayKey}_preferred_start`] ? normalizeTime(cgInfo[`${dayKey}_preferred_start`]) : null;
+            const prefEnd = cgInfo?.[`${dayKey}_preferred_end`] ? normalizeTime(cgInfo[`${dayKey}_preferred_end`]) : null;
+            const startTime = findSlotWithPreferred(daySlots, visitMins, windowStart, windowEnd, prefStart, prefEnd, timeWindowStart || null, timeWindowEnd || null);
             if (!startTime) continue;
 
             const endTime = addMins(startTime, visitMins);
@@ -411,6 +440,56 @@ function findSlot(existingSlots, durationMins, windowStart = '08:00', windowEnd 
     if (!conflict) return candidate;
   }
   return null;
+}
+
+// Try to place a slot respecting both caregiver preferred hours and client time window.
+// Priority: client+cgPref intersection > client+cgFull > cgPref > cgFull
+function findSlotWithPreferred(existingSlots, durationMins, windowStart, windowEnd, prefStart, prefEnd, clientStart, clientEnd) {
+  const sorted = [...existingSlots].sort((a, b) => a.start.localeCompare(b.start));
+
+  function tryWindow(wStart, wEnd) {
+    if (wStart >= wEnd) return null;
+    const candidates = [wStart, ...sorted.map(s => s.end)];
+    for (const candidate of candidates) {
+      if (candidate < wStart) continue;
+      if (candidate >= wEnd) break;
+      const end = addMins(candidate, durationMins);
+      if (end > wEnd) break;
+      const conflict = sorted.some(s => overlaps(candidate, end, s.start, s.end));
+      if (!conflict) return candidate;
+    }
+    return null;
+  }
+
+  function intersect(aS, aE, bS, bE) {
+    const s = aS > bS ? aS : bS;
+    const e = aE < bE ? aE : bE;
+    return s < e ? [s, e] : null;
+  }
+
+  const hasClient = clientStart && clientEnd;
+  const hasPref = prefStart && prefEnd;
+
+  // 1) Client window + caregiver preferred
+  if (hasClient && hasPref) {
+    const inter = intersect(clientStart, clientEnd, prefStart, prefEnd);
+    if (inter) { const slot = tryWindow(inter[0], inter[1]); if (slot) return slot; }
+  }
+
+  // 2) Client window within caregiver full availability
+  if (hasClient) {
+    const inter = intersect(clientStart, clientEnd, windowStart, windowEnd);
+    if (inter) { const slot = tryWindow(inter[0], inter[1]); if (slot) return slot; }
+  }
+
+  // 3) Caregiver preferred hours
+  if (hasPref) {
+    const slot = tryWindow(prefStart, prefEnd);
+    if (slot) return slot;
+  }
+
+  // 4) Full caregiver availability
+  return tryWindow(windowStart, windowEnd);
 }
 
 module.exports = router;

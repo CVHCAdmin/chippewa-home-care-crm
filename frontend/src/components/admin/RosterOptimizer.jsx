@@ -76,6 +76,9 @@ export default function RosterOptimizer({ token }) {
           hoursPerWeek: parseFloat(cl.assigned_hours_per_week) || 0,
           visitsPerWeek: suggestVisits(parseFloat(cl.assigned_hours_per_week)),
           enabled: true,
+          preferredDays: [],
+          timeWindowStart: '',
+          timeWindowEnd: '',
         })));
       } catch (err) {
         setLoadError(err.message);
@@ -96,6 +99,16 @@ export default function RosterOptimizer({ token }) {
   const updateCl = (id, field, value) =>
     setClients(prev => prev.map(c => c.id === id ? { ...c, [field]: parseFloat(value) || 0 } : c));
 
+  const updateClRaw = (id, field, value) =>
+    setClients(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
+
+  const toggleClDay = (id, day) =>
+    setClients(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const days = c.preferredDays || [];
+      return { ...c, preferredDays: days.includes(day) ? days.filter(d => d !== day) : [...days, day].sort((a, b) => a - b) };
+    }));
+
   const toggleAllCl = (val) =>
     setClients(prev => prev.map(c => ({ ...c, enabled: val })));
 
@@ -114,7 +127,12 @@ export default function RosterOptimizer({ token }) {
         method: 'POST',
         body: JSON.stringify({
           caregivers: activeCg.map(c => ({ id: c.id, targetHours: c.targetHours })),
-          clients: activeCl.map(c => ({ id: c.id, hoursPerWeek: c.hoursPerWeek, visitsPerWeek: c.visitsPerWeek })),
+          clients: activeCl.map(c => ({
+            id: c.id, hoursPerWeek: c.hoursPerWeek, visitsPerWeek: c.visitsPerWeek,
+            preferredDays: c.preferredDays?.length ? c.preferredDays : null,
+            timeWindowStart: c.timeWindowStart || null,
+            timeWindowEnd: c.timeWindowEnd || null,
+          })),
         }),
       });
       setResult(data);
@@ -362,28 +380,68 @@ export default function RosterOptimizer({ token }) {
                       </div>
                     </div>
                     {cl.enabled && (
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
-                        <div>
-                          <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.15rem' }}>Hrs / Week</label>
-                          <input type="number" min="0" max="80" step="0.25"
-                            value={cl.hoursPerWeek}
-                            onChange={e => updateCl(cl.id, 'hoursPerWeek', e.target.value)}
-                            style={{ width: '100%', padding: '0.3rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.85rem', boxSizing: 'border-box' }}
-                          />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.15rem' }}>Visits / Week</label>
-                          <input type="number" min="1" max="7"
-                            value={cl.visitsPerWeek}
-                            onChange={e => updateCl(cl.id, 'visitsPerWeek', e.target.value)}
-                            style={{ width: '100%', padding: '0.3rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.85rem', boxSizing: 'border-box' }}
-                          />
-                        </div>
-                        {cl.hoursPerWeek > 0 && cl.visitsPerWeek > 0 && (
-                          <div style={{ gridColumn: '1/-1', fontSize: '0.7rem', color: '#6B7280' }}>
-                            ≈ {(cl.hoursPerWeek / cl.visitsPerWeek).toFixed(1)}h per visit
+                      <div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+                          <div>
+                            <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.15rem' }}>Hrs / Week</label>
+                            <div style={{ padding: '0.3rem', borderRadius: '6px', border: '1px solid #E5E7EB', fontSize: '0.85rem', background: '#F3F4F6', color: '#374151', fontWeight: '600' }}>
+                              {cl.hoursPerWeek}h
+                            </div>
                           </div>
-                        )}
+                          <div>
+                            <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.15rem' }}>Visits / Week</label>
+                            <input type="number" min="1" max="7"
+                              value={cl.visitsPerWeek}
+                              onChange={e => updateCl(cl.id, 'visitsPerWeek', e.target.value)}
+                              style={{ width: '100%', padding: '0.3rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.85rem', boxSizing: 'border-box' }}
+                            />
+                          </div>
+                          {cl.hoursPerWeek > 0 && cl.visitsPerWeek > 0 && (
+                            <div style={{ gridColumn: '1/-1', fontSize: '0.7rem', color: '#6B7280' }}>
+                              ≈ {(cl.hoursPerWeek / cl.visitsPerWeek).toFixed(1)}h per visit
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Preferred Visit Days */}
+                        <div style={{ marginTop: '0.4rem' }}>
+                          <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.2rem' }}>
+                            Visit Days <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(empty = auto)</span>
+                          </label>
+                          <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap' }}>
+                            {DAY_NAMES.map((d, i) => {
+                              const isSel = (cl.preferredDays || []).includes(i);
+                              return (
+                                <button key={i} type="button" onClick={() => toggleClDay(cl.id, i)}
+                                  style={{
+                                    padding: '0.15rem 0.35rem', borderRadius: '4px', fontSize: '0.68rem', fontWeight: '700',
+                                    cursor: 'pointer', border: 'none',
+                                    background: isSel ? DAY_COLORS[i] : '#F3F4F6',
+                                    color: isSel ? '#fff' : '#9CA3AF',
+                                  }}>
+                                  {d}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Visit Time Window */}
+                        <div style={{ marginTop: '0.4rem' }}>
+                          <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.2rem' }}>
+                            Time Window <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(empty = any)</span>
+                          </label>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.3rem' }}>
+                            <input type="time" value={cl.timeWindowStart || ''}
+                              onChange={e => updateClRaw(cl.id, 'timeWindowStart', e.target.value)}
+                              style={{ padding: '0.2rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.78rem', boxSizing: 'border-box' }}
+                            />
+                            <input type="time" value={cl.timeWindowEnd || ''}
+                              onChange={e => updateClRaw(cl.id, 'timeWindowEnd', e.target.value)}
+                              style={{ padding: '0.2rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.78rem', boxSizing: 'border-box' }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>

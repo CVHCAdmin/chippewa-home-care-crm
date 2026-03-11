@@ -12,7 +12,7 @@ const DAY_COLORS = ['#8B5CF6','#3B82F6','#10B981','#F59E0B','#EF4444','#EC4899',
 export default function ScheduleOptimizer({ token, caregivers: allCaregivers, clients: allClients }) {
   // ── State ──────────────────────────────────────────────────────────────────
   const [selectedCaregivers, setSelectedCaregivers] = useState([]); // [{id, name, allocatedHours}]
-  const [selectedClients, setSelectedClients]       = useState([]); // [{id, name, hoursPerWeek, visitsPerWeek, auth}]
+  const [selectedClients, setSelectedClients]       = useState([]); // [{id, name, hoursPerWeek, visitsPerWeek, auth, preferredDays, timeWindowStart, timeWindowEnd}]
   const [cgDropdown, setCgDropdown]   = useState('');
   const [clDropdown, setClDropdown]   = useState('');
   const [loadingClient, setLoadingClient] = useState(null);
@@ -62,22 +62,29 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
     setClDropdown('');
     try {
       const data = await api(`/api/optimizer/client-data/${id}`);
+      const hrs = data.assignedHoursPerWeek || data.authorizedHoursPerWeek || 0;
       setSelectedClients(prev => [...prev, {
         id,
         name: `${cl.first_name} ${cl.last_name}`,
-        hoursPerWeek: data.assignedHoursPerWeek || data.authorizedHoursPerWeek || 0,
-        visitsPerWeek: suggestVisits(data.assignedHoursPerWeek || data.authorizedHoursPerWeek || 0),
+        hoursPerWeek: hrs,
+        visitsPerWeek: suggestVisits(hrs),
         authorizedHoursPerWeek: data.authorizedHoursPerWeek,
         remainingHours: data.remainingHours,
         existingDays: data.existingScheduleDays || [],
-        auth: data.authorization
+        auth: data.authorization,
+        preferredDays: [],
+        timeWindowStart: '',
+        timeWindowEnd: '',
       }]);
     } catch {
       setSelectedClients(prev => [...prev, {
         id, name: `${cl.first_name} ${cl.last_name}`,
         hoursPerWeek: 0, visitsPerWeek: 3,
         authorizedHoursPerWeek: 0, remainingHours: 0,
-        existingDays: [], auth: null
+        existingDays: [], auth: null,
+        preferredDays: [],
+        timeWindowStart: '',
+        timeWindowEnd: '',
       }]);
     } finally {
       setLoadingClient(null);
@@ -88,6 +95,16 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
 
   const updateClientField = (id, field, value) =>
     setSelectedClients(prev => prev.map(c => c.id === id ? { ...c, [field]: parseFloat(value) || 0 } : c));
+
+  const updateClientRaw = (id, field, value) =>
+    setSelectedClients(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
+
+  const toggleClientDay = (id, day) =>
+    setSelectedClients(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const days = c.preferredDays || [];
+      return { ...c, preferredDays: days.includes(day) ? days.filter(d => d !== day) : [...days, day].sort((a, b) => a - b) };
+    }));
 
   // ── Run Optimizer ──────────────────────────────────────────────────────────
   const runOptimizer = async () => {
@@ -101,7 +118,12 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
         method: 'POST',
         body: JSON.stringify({
           caregivers: selectedCaregivers.map(c => ({ id: c.id, allocatedHours: c.allocatedHours })),
-          clients: selectedClients.map(c => ({ id: c.id, visitsPerWeek: c.visitsPerWeek, hoursPerWeek: c.hoursPerWeek }))
+          clients: selectedClients.map(c => ({
+            id: c.id, visitsPerWeek: c.visitsPerWeek, hoursPerWeek: c.hoursPerWeek,
+            preferredDays: c.preferredDays?.length ? c.preferredDays : null,
+            timeWindowStart: c.timeWindowStart || null,
+            timeWindowEnd: c.timeWindowEnd || null,
+          }))
         })
       });
       setResult(data);
@@ -303,16 +325,13 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
                       </div>
                     )}
 
-                    {/* Editable fields */}
+                    {/* Hours (read-only from auth) + Visits (editable) */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                       <div>
                         <label style={{ fontSize: '0.72rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.2rem' }}>Hours/Week</label>
-                        <input
-                          type="number" min="0" max="80" step="0.25"
-                          value={cl.hoursPerWeek}
-                          onChange={e => updateClientField(cl.id, 'hoursPerWeek', e.target.value)}
-                          style={{ width: '100%', padding: '0.35rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.9rem' }}
-                        />
+                        <div style={{ padding: '0.35rem', borderRadius: '6px', border: '1px solid #E5E7EB', fontSize: '0.9rem', background: '#F3F4F6', color: '#374151', fontWeight: '600' }}>
+                          {cl.hoursPerWeek}h
+                        </div>
                       </div>
                       <div>
                         <label style={{ fontSize: '0.72rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.2rem' }}>Visits/Week</label>
@@ -329,6 +348,46 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
                         ≈ {(cl.hoursPerWeek / cl.visitsPerWeek).toFixed(1)}h per visit
                       </div>
                     )}
+
+                    {/* Preferred Visit Days */}
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.25rem' }}>
+                        Visit Days <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(leave empty = auto)</span>
+                      </label>
+                      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                        {DAY_NAMES.map((d, i) => {
+                          const isSelected = (cl.preferredDays || []).includes(i);
+                          return (
+                            <button key={i} type="button" onClick={() => toggleClientDay(cl.id, i)}
+                              style={{
+                                padding: '0.2rem 0.45rem', borderRadius: '5px', fontSize: '0.72rem', fontWeight: '700',
+                                cursor: 'pointer', border: 'none',
+                                background: isSelected ? DAY_COLORS[i] : '#F3F4F6',
+                                color: isSelected ? '#fff' : '#9CA3AF',
+                              }}>
+                              {d}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Visit Time Window */}
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.25rem' }}>
+                        Visit Time Window <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(leave empty = any time)</span>
+                      </label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+                        <input type="time" value={cl.timeWindowStart || ''}
+                          onChange={e => updateClientRaw(cl.id, 'timeWindowStart', e.target.value)}
+                          style={{ padding: '0.25rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.82rem' }}
+                        />
+                        <input type="time" value={cl.timeWindowEnd || ''}
+                          onChange={e => updateClientRaw(cl.id, 'timeWindowEnd', e.target.value)}
+                          style={{ padding: '0.25rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.82rem' }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>

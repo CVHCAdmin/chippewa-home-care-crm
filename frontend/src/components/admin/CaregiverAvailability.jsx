@@ -21,24 +21,38 @@ const CaregiverAvailability = ({ token }) => {
     mondayAvailable: true,
     mondayStartTime: '08:00',
     mondayEndTime: '17:00',
+    mondayPreferredStart: '',
+    mondayPreferredEnd: '',
     tuesdayAvailable: true,
     tuesdayStartTime: '08:00',
     tuesdayEndTime: '17:00',
+    tuesdayPreferredStart: '',
+    tuesdayPreferredEnd: '',
     wednesdayAvailable: true,
     wednesdayStartTime: '08:00',
     wednesdayEndTime: '17:00',
+    wednesdayPreferredStart: '',
+    wednesdayPreferredEnd: '',
     thursdayAvailable: true,
     thursdayStartTime: '08:00',
     thursdayEndTime: '17:00',
+    thursdayPreferredStart: '',
+    thursdayPreferredEnd: '',
     fridayAvailable: true,
     fridayStartTime: '08:00',
     fridayEndTime: '17:00',
+    fridayPreferredStart: '',
+    fridayPreferredEnd: '',
     saturdayAvailable: false,
     saturdayStartTime: '08:00',
     saturdayEndTime: '17:00',
+    saturdayPreferredStart: '',
+    saturdayPreferredEnd: '',
     sundayAvailable: false,
     sundayStartTime: '08:00',
     sundayEndTime: '17:00',
+    sundayPreferredStart: '',
+    sundayPreferredEnd: '',
   });
 
   const days = [
@@ -89,30 +103,45 @@ const CaregiverAvailability = ({ token }) => {
       const blackoutData = await blackoutRes.json();
 
       if (availData) {
+        const normalizeTime = (t) => t ? String(t).slice(0, 5) : '';
         setFormData({
           status: availData.status || 'available',
           maxHoursPerWeek: availData.max_hours_per_week || 40,
           mondayAvailable: availData.monday_available !== false,
           mondayStartTime: availData.monday_start_time || '08:00',
           mondayEndTime: availData.monday_end_time || '17:00',
+          mondayPreferredStart: normalizeTime(availData.monday_preferred_start),
+          mondayPreferredEnd: normalizeTime(availData.monday_preferred_end),
           tuesdayAvailable: availData.tuesday_available !== false,
           tuesdayStartTime: availData.tuesday_start_time || '08:00',
           tuesdayEndTime: availData.tuesday_end_time || '17:00',
+          tuesdayPreferredStart: normalizeTime(availData.tuesday_preferred_start),
+          tuesdayPreferredEnd: normalizeTime(availData.tuesday_preferred_end),
           wednesdayAvailable: availData.wednesday_available !== false,
           wednesdayStartTime: availData.wednesday_start_time || '08:00',
           wednesdayEndTime: availData.wednesday_end_time || '17:00',
+          wednesdayPreferredStart: normalizeTime(availData.wednesday_preferred_start),
+          wednesdayPreferredEnd: normalizeTime(availData.wednesday_preferred_end),
           thursdayAvailable: availData.thursday_available !== false,
           thursdayStartTime: availData.thursday_start_time || '08:00',
           thursdayEndTime: availData.thursday_end_time || '17:00',
+          thursdayPreferredStart: normalizeTime(availData.thursday_preferred_start),
+          thursdayPreferredEnd: normalizeTime(availData.thursday_preferred_end),
           fridayAvailable: availData.friday_available !== false,
           fridayStartTime: availData.friday_start_time || '08:00',
           fridayEndTime: availData.friday_end_time || '17:00',
+          fridayPreferredStart: normalizeTime(availData.friday_preferred_start),
+          fridayPreferredEnd: normalizeTime(availData.friday_preferred_end),
           saturdayAvailable: availData.saturday_available || false,
           saturdayStartTime: availData.saturday_start_time || '08:00',
           saturdayEndTime: availData.saturday_end_time || '17:00',
+          saturdayPreferredStart: normalizeTime(availData.saturday_preferred_start),
+          saturdayPreferredEnd: normalizeTime(availData.saturday_preferred_end),
           sundayAvailable: availData.sunday_available || false,
           sundayStartTime: availData.sunday_start_time || '08:00',
           sundayEndTime: availData.sunday_end_time || '17:00',
+          sundayPreferredStart: normalizeTime(availData.sunday_preferred_start),
+          sundayPreferredEnd: normalizeTime(availData.sunday_preferred_end),
         });
         setAvailability(availData);
       }
@@ -271,7 +300,8 @@ const CaregiverAvailability = ({ token }) => {
           <div className="card">
             <h3>Weekly Availability</h3>
             <p style={{ color: '#666', marginBottom: '1rem' }}>
-              Set the days and hours {getCaregiverName(selectedCaregiverId)} is available each week
+              Set the days and hours {getCaregiverName(selectedCaregiverId)} is available each week.
+              Use <strong>Preferred Hours</strong> to control what hours the optimizer assigns — it will try preferred times first, then fall back to the full availability window.
             </p>
 
             <div style={{ display: 'grid', gap: '1rem' }}>
@@ -279,6 +309,10 @@ const CaregiverAvailability = ({ token }) => {
                 const availKey = `${day.key}Available`;
                 const startKey = `${day.key}StartTime`;
                 const endKey = `${day.key}EndTime`;
+
+                const prefStartKey = `${day.key}PreferredStart`;
+                const prefEndKey = `${day.key}PreferredEnd`;
+                const hasPreferred = formData[prefStartKey] || formData[prefEndKey];
 
                 return (
                   <div key={day.key} style={{ padding: '1rem', background: '#f9f9f9', borderRadius: '4px' }}>
@@ -293,22 +327,84 @@ const CaregiverAvailability = ({ token }) => {
                     </label>
 
                     {formData[availKey] && (
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginLeft: '1.5rem' }}>
-                        <div className="form-group">
-                          <label>Start Time</label>
-                          <input
-                            type="time"
-                            value={formData[startKey]}
-                            onChange={(e) => setFormData({ ...formData, [startKey]: e.target.value })}
-                          />
+                      <div style={{ marginLeft: '1.5rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                          <div className="form-group">
+                            <label>Available From</label>
+                            <input
+                              type="time"
+                              value={formData[startKey]}
+                              onChange={(e) => setFormData({ ...formData, [startKey]: e.target.value })}
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label>Available Until</label>
+                            <input
+                              type="time"
+                              value={formData[endKey]}
+                              onChange={(e) => setFormData({ ...formData, [endKey]: e.target.value })}
+                            />
+                          </div>
                         </div>
-                        <div className="form-group">
-                          <label>End Time</label>
-                          <input
-                            type="time"
-                            value={formData[endKey]}
-                            onChange={(e) => setFormData({ ...formData, [endKey]: e.target.value })}
-                          />
+
+                        <div style={{ marginTop: '0.5rem', padding: '0.75rem', background: '#eef6ff', borderRadius: '4px', borderLeft: '3px solid #2196F3' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: hasPreferred ? '0.5rem' : 0 }}>
+                            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#1565C0' }}>
+                              Preferred Hours
+                            </span>
+                            {!hasPreferred ? (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ fontSize: '0.8rem', padding: '0.2rem 0.5rem', background: '#2196F3', color: '#fff', border: 'none', borderRadius: '3px', cursor: 'pointer' }}
+                                onClick={() => setFormData({
+                                  ...formData,
+                                  [prefStartKey]: formData[startKey],
+                                  [prefEndKey]: formData[endKey]
+                                })}
+                              >
+                                Set Preferred Hours
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ fontSize: '0.8rem', padding: '0.2rem 0.5rem', background: '#999', color: '#fff', border: 'none', borderRadius: '3px', cursor: 'pointer' }}
+                                onClick={() => setFormData({
+                                  ...formData,
+                                  [prefStartKey]: '',
+                                  [prefEndKey]: ''
+                                })}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                          {hasPreferred && (
+                            <>
+                              <p style={{ fontSize: '0.8rem', color: '#666', margin: '0 0 0.5rem 0' }}>
+                                Optimizer will schedule within these hours first, then fall back to the full window.
+                              </p>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                  <label style={{ fontSize: '0.85rem' }}>Prefer From</label>
+                                  <input
+                                    type="time"
+                                    value={formData[prefStartKey]}
+                                    onChange={(e) => setFormData({ ...formData, [prefStartKey]: e.target.value })}
+                                  />
+                                </div>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                  <label style={{ fontSize: '0.85rem' }}>Prefer Until</label>
+                                  <input
+                                    type="time"
+                                    value={formData[prefEndKey]}
+                                    onChange={(e) => setFormData({ ...formData, [prefEndKey]: e.target.value })}
+                                  />
+                                </div>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     )}
