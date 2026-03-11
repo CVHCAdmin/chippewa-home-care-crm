@@ -57,12 +57,10 @@ router.get('/roster', async (req, res) => {
         c.city,
         c.preferred_caregivers,
         c.do_not_use_caregivers,
-        -- Hours from authorizations
-        COALESCE((
-          SELECT authorized_units FROM authorizations
-          WHERE client_id = c.id AND status = 'active'
-          ORDER BY created_at DESC LIMIT 1
-        ), 0) AS assigned_hours_per_week,
+        -- Hours from client record
+        COALESCE(c.weekly_authorized_units, 0) AS assigned_hours_per_week,
+        c.service_days_per_week,
+        c.service_allowed_days,
         -- Days already scheduled (recurring)
         COALESCE((
           SELECT ARRAY_AGG(DISTINCT day_of_week ORDER BY day_of_week)
@@ -125,6 +123,17 @@ router.post('/run', async (req, res) => {
     );
     const cgMap = {};
     cgDataRes.rows.forEach(r => { cgMap[r.id] = r; });
+
+    // Apply per-caregiver preferred shift overrides from request
+    const AVAIL_KEYS_ALL = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    inputCaregivers.forEach(cg => {
+      if (cg.preferredStart && cg.preferredEnd && cgMap[cg.id]) {
+        AVAIL_KEYS_ALL.forEach(dayKey => {
+          cgMap[cg.id][`${dayKey}_preferred_start`] = cg.preferredStart;
+          cgMap[cg.id][`${dayKey}_preferred_end`] = cg.preferredEnd;
+        });
+      }
+    });
 
     // ── Load full client data ─────────────────────────────────────────────
     const clDataRes = await db.query(

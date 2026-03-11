@@ -43,7 +43,7 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
     if (!id || selectedCaregivers.find(c => c.id === id)) return;
     const cg = allCaregivers.find(c => c.id === id);
     if (!cg) return;
-    setSelectedCaregivers(prev => [...prev, { id, name: `${cg.first_name} ${cg.last_name}`, allocatedHours: 40 }]);
+    setSelectedCaregivers(prev => [...prev, { id, name: `${cg.first_name} ${cg.last_name}`, allocatedHours: 40, preferredStart: '', preferredEnd: '' }]);
     setCgDropdown('');
   };
 
@@ -51,6 +51,9 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
 
   const updateCgHours = (id, hours) =>
     setSelectedCaregivers(prev => prev.map(c => c.id === id ? { ...c, allocatedHours: parseFloat(hours) || 0 } : c));
+
+  const updateCgField = (id, field, value) =>
+    setSelectedCaregivers(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
 
   // ── Add / Remove Clients ───────────────────────────────────────────────────
   const addClient = async (id) => {
@@ -63,16 +66,18 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
     try {
       const data = await api(`/api/optimizer/client-data/${id}`);
       const hrs = data.assignedHoursPerWeek || data.authorizedHoursPerWeek || 0;
+      // Pre-populate allowed days from client record if available
+      const allowedDays = Array.isArray(data.serviceAllowedDays) ? data.serviceAllowedDays : [];
       setSelectedClients(prev => [...prev, {
         id,
         name: `${cl.first_name} ${cl.last_name}`,
         hoursPerWeek: hrs,
-        visitsPerWeek: suggestVisits(hrs),
+        visitsPerWeek: data.serviceDaysPerWeek || suggestVisits(hrs),
         authorizedHoursPerWeek: data.authorizedHoursPerWeek,
         remainingHours: data.remainingHours,
         existingDays: data.existingScheduleDays || [],
         auth: data.authorization,
-        preferredDays: [],
+        preferredDays: allowedDays,
         timeWindowStart: '',
         timeWindowEnd: '',
       }]);
@@ -117,7 +122,11 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
       const data = await api('/api/optimizer/run', {
         method: 'POST',
         body: JSON.stringify({
-          caregivers: selectedCaregivers.map(c => ({ id: c.id, allocatedHours: c.allocatedHours })),
+          caregivers: selectedCaregivers.map(c => ({
+            id: c.id, allocatedHours: c.allocatedHours,
+            preferredStart: c.preferredStart || null,
+            preferredEnd: c.preferredEnd || null,
+          })),
           clients: selectedClients.map(c => ({
             id: c.id, visitsPerWeek: c.visitsPerWeek, hoursPerWeek: c.hoursPerWeek,
             preferredDays: c.preferredDays?.length ? c.preferredDays : null,
@@ -241,23 +250,41 @@ export default function ScheduleOptimizer({ token, caregivers: allCaregivers, cl
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                 {selectedCaregivers.map(cg => (
                   <div key={cg.id} style={{
-                    display: 'flex', alignItems: 'center', gap: '0.75rem',
                     padding: '0.75rem', borderRadius: '8px',
                     background: '#F8FAFF', border: `2px solid ${cgColor(cg.id)}30`
                   }}>
-                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: cgColor(cg.id), flexShrink: 0 }} />
-                    <div style={{ flex: 1, fontWeight: '600', fontSize: '0.9rem' }}>{cg.name}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <label style={{ fontSize: '0.78rem', color: '#6B7280', whiteSpace: 'nowrap' }}>Hrs/wk:</label>
-                      <input
-                        type="number" min="1" max="80" step="0.5"
-                        value={cg.allocatedHours}
-                        onChange={e => updateCgHours(cg.id, e.target.value)}
-                        style={{ width: '60px', padding: '0.3rem 0.4rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.9rem', textAlign: 'center' }}
-                      />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: cgColor(cg.id), flexShrink: 0 }} />
+                      <div style={{ flex: 1, fontWeight: '600', fontSize: '0.9rem' }}>{cg.name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <label style={{ fontSize: '0.78rem', color: '#6B7280', whiteSpace: 'nowrap' }}>Hrs/wk:</label>
+                        <input
+                          type="number" min="1" max="80" step="0.5"
+                          value={cg.allocatedHours}
+                          onChange={e => updateCgHours(cg.id, e.target.value)}
+                          style={{ width: '60px', padding: '0.3rem 0.4rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.9rem', textAlign: 'center' }}
+                        />
+                      </div>
+                      <button onClick={() => removeCaregiver(cg.id)}
+                        style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.2rem' }}>✕</button>
                     </div>
-                    <button onClick={() => removeCaregiver(cg.id)}
-                      style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem', padding: '0.2rem' }}>✕</button>
+
+                    {/* Preferred Shift Hours */}
+                    <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid #E5E7EB' }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.25rem' }}>
+                        Preferred Shift <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(empty = any time)</span>
+                      </label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+                        <input type="time" value={cg.preferredStart || ''}
+                          onChange={e => updateCgField(cg.id, 'preferredStart', e.target.value)}
+                          style={{ padding: '0.25rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.82rem' }}
+                        />
+                        <input type="time" value={cg.preferredEnd || ''}
+                          onChange={e => updateCgField(cg.id, 'preferredEnd', e.target.value)}
+                          style={{ padding: '0.25rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.82rem' }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>

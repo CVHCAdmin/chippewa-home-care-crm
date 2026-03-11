@@ -70,16 +70,22 @@ export default function RosterOptimizer({ token }) {
           ...cg,
           targetHours: parseFloat(cg.max_hours_per_week) || 40,
           enabled: true,
+          preferredStart: '',
+          preferredEnd: '',
         })));
-        setClients(data.clients.map(cl => ({
-          ...cl,
-          hoursPerWeek: parseFloat(cl.assigned_hours_per_week) || 0,
-          visitsPerWeek: suggestVisits(parseFloat(cl.assigned_hours_per_week)),
-          enabled: true,
-          preferredDays: [],
-          timeWindowStart: '',
-          timeWindowEnd: '',
-        })));
+        setClients(data.clients.map(cl => {
+          const hrs = parseFloat(cl.assigned_hours_per_week) || 0;
+          const allowedDays = Array.isArray(cl.service_allowed_days) ? cl.service_allowed_days : [];
+          return {
+            ...cl,
+            hoursPerWeek: hrs,
+            visitsPerWeek: cl.service_days_per_week || suggestVisits(hrs),
+            enabled: true,
+            preferredDays: allowedDays,
+            timeWindowStart: '',
+            timeWindowEnd: '',
+          };
+        }));
       } catch (err) {
         setLoadError(err.message);
       } finally {
@@ -90,6 +96,9 @@ export default function RosterOptimizer({ token }) {
 
   // ── Caregiver helpers ─────────────────────────────────────────────────────
   const updateCg = (id, field, value) =>
+    setCaregivers(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
+
+  const updateCgField = (id, field, value) =>
     setCaregivers(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
 
   const toggleAllCg = (val) =>
@@ -126,7 +135,11 @@ export default function RosterOptimizer({ token }) {
       const data = await api('/api/roster-optimizer/run', {
         method: 'POST',
         body: JSON.stringify({
-          caregivers: activeCg.map(c => ({ id: c.id, targetHours: c.targetHours })),
+          caregivers: activeCg.map(c => ({
+            id: c.id, targetHours: c.targetHours,
+            preferredStart: c.preferredStart || null,
+            preferredEnd: c.preferredEnd || null,
+          })),
           clients: activeCl.map(c => ({
             id: c.id, hoursPerWeek: c.hoursPerWeek, visitsPerWeek: c.visitsPerWeek,
             preferredDays: c.preferredDays?.length ? c.preferredDays : null,
@@ -294,35 +307,53 @@ export default function RosterOptimizer({ token }) {
                   .filter(cg => !cgFilter || `${cg.first_name} ${cg.last_name}`.toLowerCase().includes(cgFilter.toLowerCase()))
                   .map((cg, idx) => (
                   <div key={cg.id} style={{
-                    display: 'flex', alignItems: 'center', gap: '0.6rem',
                     padding: '0.6rem 0.75rem', borderRadius: '8px',
                     background: cg.enabled ? '#F0F9FF' : '#F9FAFB',
                     border: `1.5px solid ${cg.enabled ? cgColorFor(cg.id) + '40' : '#E5E7EB'}`,
                     opacity: cg.enabled ? 1 : 0.55,
                   }}>
-                    <input type="checkbox" checked={cg.enabled}
-                      onChange={e => updateCg(cg.id, 'enabled', e.target.checked)}
-                      style={{ cursor: 'pointer', width: 'auto', flexShrink: 0 }} />
-                    <div style={{ width: '9px', height: '9px', borderRadius: '50%', background: cgColorFor(cg.id), flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: '600', fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {cg.first_name} {cg.last_name}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <input type="checkbox" checked={cg.enabled}
+                        onChange={e => updateCg(cg.id, 'enabled', e.target.checked)}
+                        style={{ cursor: 'pointer', width: 'auto', flexShrink: 0 }} />
+                      <div style={{ width: '9px', height: '9px', borderRadius: '50%', background: cgColorFor(cg.id), flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: '600', fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {cg.first_name} {cg.last_name}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#6B7280' }}>
+                          {cg.current_weekly_hours}h existing · {cg.active_client_count} clients
+                        </div>
                       </div>
-                      <div style={{ fontSize: '0.72rem', color: '#6B7280' }}>
-                        {cg.current_weekly_hours}h existing · {cg.active_client_count} clients
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.72rem', color: '#6B7280' }}>Target:</span>
+                        <input
+                          type="number" min="1" max="80" step="0.5"
+                          value={cg.targetHours}
+                          onChange={e => updateCg(cg.id, 'targetHours', parseFloat(e.target.value) || 0)}
+                          disabled={!cg.enabled}
+                          style={{ width: '52px', padding: '0.25rem 0.3rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.85rem', textAlign: 'center' }}
+                        />
+                        <span style={{ fontSize: '0.72rem', color: '#6B7280' }}>h</span>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0 }}>
-                      <span style={{ fontSize: '0.72rem', color: '#6B7280' }}>Target:</span>
-                      <input
-                        type="number" min="1" max="80" step="0.5"
-                        value={cg.targetHours}
-                        onChange={e => updateCg(cg.id, 'targetHours', parseFloat(e.target.value) || 0)}
-                        disabled={!cg.enabled}
-                        style={{ width: '52px', padding: '0.25rem 0.3rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.85rem', textAlign: 'center' }}
-                      />
-                      <span style={{ fontSize: '0.72rem', color: '#6B7280' }}>h</span>
-                    </div>
+                    {cg.enabled && (
+                      <div style={{ marginTop: '0.4rem', paddingTop: '0.4rem', borderTop: '1px solid #E5E7EB' }}>
+                        <label style={{ fontSize: '0.68rem', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '0.2rem' }}>
+                          Preferred Shift <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(empty = any time)</span>
+                        </label>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.3rem' }}>
+                          <input type="time" value={cg.preferredStart || ''}
+                            onChange={e => updateCgField(cg.id, 'preferredStart', e.target.value)}
+                            style={{ padding: '0.2rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.78rem', boxSizing: 'border-box' }}
+                          />
+                          <input type="time" value={cg.preferredEnd || ''}
+                            onChange={e => updateCgField(cg.id, 'preferredEnd', e.target.value)}
+                            style={{ padding: '0.2rem', borderRadius: '5px', border: '1px solid #D1D5DB', fontSize: '0.78rem', boxSizing: 'border-box' }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

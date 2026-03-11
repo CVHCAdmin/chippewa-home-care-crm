@@ -15,7 +15,8 @@ router.get('/client-data/:clientId', async (req, res) => {
 
     // Get client info
     const clientRes = await db.query(
-      `SELECT id, first_name, last_name, preferred_caregivers, do_not_use_caregivers, service_type
+      `SELECT id, first_name, last_name, preferred_caregivers, do_not_use_caregivers, service_type,
+              weekly_authorized_units, service_days_per_week, service_allowed_days
        FROM clients WHERE id = $1`,
       [clientId]
     );
@@ -64,21 +65,18 @@ router.get('/client-data/:clientId', async (req, res) => {
       [clientId]
     );
 
-    // Check authorizations for weekly hours
-    const assignRes = await db.query(
-      `SELECT authorized_units AS hours_per_week FROM authorizations
-       WHERE client_id = $1 AND status = 'active'
-       ORDER BY created_at DESC LIMIT 1`,
-      [clientId]
-    );
-    const assignedHoursPerWeek = assignRes.rows[0]?.hours_per_week || null;
+    // Use weekly_authorized_units from client record as primary source
+    const clientWeeklyUnits = parseFloat(client.weekly_authorized_units) || 0;
+    const assignedHoursPerWeek = clientWeeklyUnits || authorizedHoursPerWeek || null;
 
     res.json({
       client,
       authorization: auth,
-      authorizedHoursPerWeek,
+      authorizedHoursPerWeek: clientWeeklyUnits || authorizedHoursPerWeek,
       remainingHours,
       assignedHoursPerWeek,
+      serviceDaysPerWeek: client.service_days_per_week || null,
+      serviceAllowedDays: client.service_allowed_days || null,
       existingScheduleDays: schedRes.rows.map(r => r.day_of_week),
       existingSchedules: schedRes.rows,
     });
@@ -148,6 +146,19 @@ router.post('/run', async (req, res) => {
     );
     const cgMap = {};
     cgDataRes.rows.forEach(cg => { cgMap[cg.id] = cg; });
+
+    // ── 3b. Apply per-caregiver preferred shift overrides from request ─────
+    // If the admin sets a preferred shift on the optimizer screen, apply it
+    // to all days, overriding the per-day DB values for this run.
+    const AVAIL_KEYS_ALL = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    selectedCaregivers.forEach(cg => {
+      if (cg.preferredStart && cg.preferredEnd && cgMap[cg.id]) {
+        AVAIL_KEYS_ALL.forEach(dayKey => {
+          cgMap[cg.id][`${dayKey}_preferred_start`] = cg.preferredStart;
+          cgMap[cg.id][`${dayKey}_preferred_end`] = cg.preferredEnd;
+        });
+      }
+    });
 
     // ── 4. Build caregiver schedule map: {cgId: {dayOfWeek: [{start, end}]}} ─
     const cgScheduleMap = {};
