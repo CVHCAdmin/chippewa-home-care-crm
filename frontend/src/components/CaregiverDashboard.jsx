@@ -949,68 +949,81 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   );
 
   const renderSchedulePage = () => {
+    // Resolve ALL schedules (recurring + one-time) into concrete dated shifts
+    // for the next 14 days — same logic the admin grid uses
     const today = new Date(); today.setHours(0,0,0,0);
     const todayStr = today.toISOString().split('T')[0];
-    // Show ALL recurring schedules on the schedule page (no biweekly/effective_date filtering
-    // here — caregivers need to see their full weekly assignment; badges indicate biweekly)
-    const recurring = schedules.filter(s => s.day_of_week != null);
-    const allOneTime = schedules.filter(s => s.date && s.day_of_week == null);
-    const upcomingOneTime = allOneTime.filter(s => s.date.split('T')[0] >= todayStr);
-    const pastOneTime = allOneTime.filter(s => s.date.split('T')[0] < todayStr);
-    const grouped = {};
-    recurring.forEach(s => {
-      if (!grouped[s.day_of_week]) grouped[s.day_of_week] = [];
-      grouped[s.day_of_week].push(s);
+    const concreteShifts = [];
+
+    schedules.forEach(s => {
+      if (s.date) {
+        // One-time shift — include if today or future
+        if (s.date.split('T')[0] >= todayStr) {
+          concreteShifts.push({ ...s, resolvedDate: s.date.split('T')[0] });
+        }
+      } else if (s.day_of_week != null) {
+        // Recurring template — expand into concrete dates for next 14 days
+        for (let d = 0; d < 14; d++) {
+          const target = new Date(today);
+          target.setDate(target.getDate() + d);
+          if (target.getDay() !== s.day_of_week) continue;
+          if (!isScheduleActiveForDate(s, target)) continue;
+          const dateStr = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+          concreteShifts.push({ ...s, resolvedDate: dateStr });
+        }
+      }
     });
-    // Sort each day's shifts by start time (earliest first)
-    Object.values(grouped).forEach(arr => arr.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || '')));
+
+    // Sort by date then time
+    concreteShifts.sort((a, b) => a.resolvedDate.localeCompare(b.resolvedDate) || (a.start_time || '').localeCompare(b.start_time || ''));
+
+    // Group by date
+    const byDate = {};
+    concreteShifts.forEach(s => {
+      if (!byDate[s.resolvedDate]) byDate[s.resolvedDate] = [];
+      byDate[s.resolvedDate].push(s);
+    });
+
+    const dateKeys = Object.keys(byDate).sort();
+    const todayShifts = byDate[todayStr] || [];
+    const upcomingKeys = dateKeys.filter(d => d > todayStr);
+
+    const formatDateLabel = (dateStr) => {
+      const d = new Date(dateStr + 'T12:00:00');
+      return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    };
 
     return (
       <>
         <div className="schedule-header"><h3>📅 My Schedule</h3></div>
-        {schedules.length === 0 ? <div className="card text-center"><p className="text-muted">No schedules</p></div> : (
+        {concreteShifts.length === 0 ? (
+          <div className="card text-center"><p className="text-muted">No upcoming shifts</p></div>
+        ) : (
           <div>
-            {Object.keys(grouped).sort().map(day => (
-              <div key={day} className="card" style={{ marginBottom: '0.75rem' }}>
-                <div style={{ fontWeight: '600', color: '#2563eb' }}>{getDayName(parseInt(day))}s</div>
-                {grouped[day].map(s => (
-                  <div key={s.id} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
-                    <div style={{ fontWeight: '500' }}>
-                      {getClientName(s.client_id)}
-                      {s.frequency === 'biweekly' && <span style={{ marginLeft: '0.5rem', padding: '0.1rem 0.4rem', background: '#FFEDD5', color: '#C2410C', borderRadius: '4px', fontSize: '0.72rem' }}>Every Other Week</span>}
-                    </div>
+            {/* Today's shifts */}
+            {todayShifts.length > 0 && (
+              <div className="card" style={{ marginBottom: '0.75rem', borderLeft: '4px solid #2563eb' }}>
+                <div style={{ fontWeight: '600', color: '#2563eb', marginBottom: '0.5rem' }}>Today — {formatDateLabel(todayStr)}</div>
+                {todayShifts.map((s, i) => (
+                  <div key={s.id + '-' + i} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
+                    <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
+                    <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Upcoming shifts grouped by date */}
+            {upcomingKeys.map(dateStr => (
+              <div key={dateStr} className="card" style={{ marginBottom: '0.75rem' }}>
+                <div style={{ fontWeight: '600', color: '#059669' }}>{formatDateLabel(dateStr)}</div>
+                {byDate[dateStr].map((s, i) => (
+                  <div key={s.id + '-' + i} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
+                    <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
                     <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                   </div>
                 ))}
               </div>
             ))}
-            {upcomingOneTime.length > 0 && (
-              <div className="card" style={{ marginBottom: '0.75rem' }}>
-                <div style={{ fontWeight: '600', color: '#059669' }}>Upcoming One-Time Shifts</div>
-                {upcomingOneTime.sort((a,b) => new Date(a.date) - new Date(b.date)).map(s => (
-                  <div key={s.id} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
-                    <div style={{ fontWeight: '500' }}>
-                      {formatDate(s.date)}
-                      {s.date.split('T')[0] === todayStr && <span style={{ marginLeft: '0.5rem', padding: '0.1rem 0.4rem', background: '#DBEAFE', color: '#1D4ED8', borderRadius: '4px', fontSize: '0.72rem' }}>Today</span>}
-                    </div>
-                    <div>{getClientName(s.client_id)}</div>
-                    <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {pastOneTime.length > 0 && (
-              <div className="card" style={{ opacity: 0.7 }}>
-                <div style={{ fontWeight: '600', color: '#6B7280' }}>Past Shifts</div>
-                {pastOneTime.sort((a,b) => new Date(b.date) - new Date(a.date)).map(s => (
-                  <div key={s.id} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
-                    <div style={{ fontWeight: '500', color: '#6B7280' }}>{formatDate(s.date)}</div>
-                    <div style={{ color: '#6B7280' }}>{getClientName(s.client_id)}</div>
-                    <div style={{ fontSize: '0.9rem', color: '#9CA3AF' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
       </>
