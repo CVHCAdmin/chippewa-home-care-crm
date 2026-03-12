@@ -949,19 +949,16 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   );
 
   const renderSchedulePage = () => {
-    // Filter recurring schedules: only show those active this week (effective_date check)
     const today = new Date(); today.setHours(0,0,0,0);
-    const recurring = schedules.filter(s => s.day_of_week != null && !s.date);
-    const allOneTime = schedules.filter(s => s.date);
     const todayStr = today.toISOString().split('T')[0];
+    // Show ALL recurring schedules on the schedule page (no biweekly/effective_date filtering
+    // here — caregivers need to see their full weekly assignment; badges indicate biweekly)
+    const recurring = schedules.filter(s => s.day_of_week != null);
+    const allOneTime = schedules.filter(s => s.date && s.day_of_week == null);
     const upcomingOneTime = allOneTime.filter(s => s.date.split('T')[0] >= todayStr);
     const pastOneTime = allOneTime.filter(s => s.date.split('T')[0] < todayStr);
     const grouped = {};
     recurring.forEach(s => {
-      // Build the actual date for this day_of_week in the current week
-      const dayDate = new Date(today);
-      dayDate.setDate(dayDate.getDate() - dayDate.getDay() + s.day_of_week);
-      if (!isScheduleActiveForDate(s, dayDate)) return;
       if (!grouped[s.day_of_week]) grouped[s.day_of_week] = [];
       grouped[s.day_of_week].push(s);
     });
