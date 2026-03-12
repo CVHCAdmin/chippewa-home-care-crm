@@ -952,7 +952,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     // Filter recurring schedules: only show those active this week (effective_date check)
     const today = new Date(); today.setHours(0,0,0,0);
     const recurring = schedules.filter(s => s.day_of_week != null && !s.date);
-    const oneTime = schedules.filter(s => s.date);
+    const allOneTime = schedules.filter(s => s.date);
+    const todayStr = today.toISOString().split('T')[0];
+    const upcomingOneTime = allOneTime.filter(s => s.date.split('T')[0] >= todayStr);
+    const pastOneTime = allOneTime.filter(s => s.date.split('T')[0] < todayStr);
     const grouped = {};
     recurring.forEach(s => {
       // Build the actual date for this day_of_week in the current week
@@ -984,14 +987,29 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 ))}
               </div>
             ))}
-            {oneTime.length > 0 && (
-              <div className="card">
-                <div style={{ fontWeight: '600', color: '#059669' }}>Upcoming</div>
-                {oneTime.sort((a,b) => new Date(a.date) - new Date(b.date)).map(s => (
+            {upcomingOneTime.length > 0 && (
+              <div className="card" style={{ marginBottom: '0.75rem' }}>
+                <div style={{ fontWeight: '600', color: '#059669' }}>Upcoming One-Time Shifts</div>
+                {upcomingOneTime.sort((a,b) => new Date(a.date) - new Date(b.date)).map(s => (
                   <div key={s.id} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
-                    <div style={{ fontWeight: '500' }}>{formatDate(s.date)}</div>
+                    <div style={{ fontWeight: '500' }}>
+                      {formatDate(s.date)}
+                      {s.date.split('T')[0] === todayStr && <span style={{ marginLeft: '0.5rem', padding: '0.1rem 0.4rem', background: '#DBEAFE', color: '#1D4ED8', borderRadius: '4px', fontSize: '0.72rem' }}>Today</span>}
+                    </div>
                     <div>{getClientName(s.client_id)}</div>
                     <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {pastOneTime.length > 0 && (
+              <div className="card" style={{ opacity: 0.7 }}>
+                <div style={{ fontWeight: '600', color: '#6B7280' }}>Past Shifts</div>
+                {pastOneTime.sort((a,b) => new Date(b.date) - new Date(a.date)).map(s => (
+                  <div key={s.id} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
+                    <div style={{ fontWeight: '500', color: '#6B7280' }}>{formatDate(s.date)}</div>
+                    <div style={{ color: '#6B7280' }}>{getClientName(s.client_id)}</div>
+                    <div style={{ fontSize: '0.9rem', color: '#9CA3AF' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                   </div>
                 ))}
               </div>

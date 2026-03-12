@@ -71,6 +71,10 @@ router.get('/caregiver/:caregiverId', verifyToken, async (req, res) => {
 // GET /api/schedules/:caregiverId - Get schedules for a specific caregiver (caregiver dashboard)
 router.get('/:caregiverId', verifyToken, async (req, res) => {
   try {
+    // Caregivers can only view their own schedules; admins can view any
+    if (req.user.role !== 'admin' && req.user.id !== req.params.caregiverId) {
+      return res.status(403).json({ error: 'You can only view your own schedules' });
+    }
     const result = await db.query(`
       SELECT s.*,
         c.first_name as client_first_name, c.last_name as client_last_name,
