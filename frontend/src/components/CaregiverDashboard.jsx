@@ -316,9 +316,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
     // Prefer clients scheduled for today; fall back to ALL assigned clients
     // so geofence works even when no schedule entry exists yet
+    const todayDate = new Date(now); todayDate.setHours(0,0,0,0);
     const scheduledToday = (currentSchedules || [])
-      .filter(s => s.day_of_week === todayDay ||
-        (s.date && new Date(s.date).toDateString() === now.toDateString()))
+      .filter(s => {
+        if (s.date) return new Date(s.date).toDateString() === now.toDateString();
+        if (s.day_of_week === todayDay) return isScheduleActiveForDate(s, todayDate);
+        return false;
+      })
       .map(s => s.client_id)
       .filter(Boolean);
 
@@ -579,17 +583,36 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
   const getDayName = (n) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][n] || '';
 
+  // Check if a recurring schedule is active for a given date (respects effective_date & biweekly)
+  const isScheduleActiveForDate = (schedule, targetDate) => {
+    if (schedule.effective_date) {
+      const effDate = new Date(schedule.effective_date);
+      effDate.setHours(0,0,0,0);
+      const target = new Date(targetDate);
+      target.setHours(0,0,0,0);
+      if (target < effDate) return false;
+    }
+    if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
+      const anchor = new Date(schedule.anchor_date);
+      const target = new Date(targetDate);
+      const diffWeeks = Math.round((target - anchor) / (7 * 24 * 60 * 60 * 1000));
+      if (diffWeeks % 2 !== 0) return false;
+    }
+    return true;
+  };
+
   // Get today's appointments from schedules
   const getTodaysAppointments = () => {
     const today = new Date();
+    today.setHours(0,0,0,0);
     const dayOfWeek = today.getDay();
     const todayStr = today.toISOString().split('T')[0];
-    
-    // Get recurring schedules for today's day of week
-    const recurring = schedules.filter(s => s.day_of_week === dayOfWeek);
+
+    // Get recurring schedules for today's day of week (respecting frequency & effective_date)
+    const recurring = schedules.filter(s => s.day_of_week === dayOfWeek && s.day_of_week !== null && !s.date && isScheduleActiveForDate(s, today));
     // Get one-time schedules for today's date
     const oneTime = schedules.filter(s => s.date && s.date.split('T')[0] === todayStr);
-    
+
     return [...recurring, ...oneTime].sort((a, b) => {
       const timeA = a.start_time || '00:00';
       const timeB = b.start_time || '00:00';
@@ -926,10 +949,21 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   );
 
   const renderSchedulePage = () => {
-    const recurring = schedules.filter(s => s.day_of_week != null);
+    // Filter recurring schedules: only show those active this week (effective_date check)
+    const today = new Date(); today.setHours(0,0,0,0);
+    const recurring = schedules.filter(s => s.day_of_week != null && !s.date);
     const oneTime = schedules.filter(s => s.date);
     const grouped = {};
-    recurring.forEach(s => { if (!grouped[s.day_of_week]) grouped[s.day_of_week] = []; grouped[s.day_of_week].push(s); });
+    recurring.forEach(s => {
+      // Build the actual date for this day_of_week in the current week
+      const dayDate = new Date(today);
+      dayDate.setDate(dayDate.getDate() - dayDate.getDay() + s.day_of_week);
+      if (!isScheduleActiveForDate(s, dayDate)) return;
+      if (!grouped[s.day_of_week]) grouped[s.day_of_week] = [];
+      grouped[s.day_of_week].push(s);
+    });
+    // Sort each day's shifts by start time (earliest first)
+    Object.values(grouped).forEach(arr => arr.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || '')));
 
     return (
       <>
@@ -941,7 +975,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 <div style={{ fontWeight: '600', color: '#2563eb' }}>{getDayName(parseInt(day))}s</div>
                 {grouped[day].map(s => (
                   <div key={s.id} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
-                    <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
+                    <div style={{ fontWeight: '500' }}>
+                      {getClientName(s.client_id)}
+                      {s.frequency === 'biweekly' && <span style={{ marginLeft: '0.5rem', padding: '0.1rem 0.4rem', background: '#FFEDD5', color: '#C2410C', borderRadius: '4px', fontSize: '0.72rem' }}>Every Other Week</span>}
+                    </div>
                     <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                   </div>
                 ))}

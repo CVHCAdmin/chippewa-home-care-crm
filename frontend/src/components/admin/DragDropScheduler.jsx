@@ -105,7 +105,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       // One-off
       if (s.date) return s.date.slice(0,10) === dateStr;
 
-      // Recurring — only show from creation week forward
+      // Recurring — only show from effective date forward, respect biweekly
       if (s.day_of_week !== null && s.day_of_week !== undefined) {
         if (Number(s.day_of_week) !== dayIndex) return false;
         const effectiveFrom = s.effective_date || s.anchor_date || s.created_at;
@@ -114,10 +114,15 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           from.setHours(0,0,0,0);
           if (cellDate < from) return false;
         }
+        if (s.frequency === 'biweekly' && s.anchor_date) {
+          const anchor = new Date(s.anchor_date);
+          const diffWeeks = Math.round((cellDate - anchor) / (7 * 24 * 60 * 60 * 1000));
+          if (diffWeeks % 2 !== 0) return false;
+        }
         return true;
       }
       return false;
-    });
+    }).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   }
 
   function weeklyHours(caregiverId) {
