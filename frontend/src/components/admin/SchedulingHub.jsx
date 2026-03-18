@@ -367,7 +367,7 @@ const SchedulingHub = ({ token }) => {
             await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
               caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'recurring',
               dayOfWeek, date: null, startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes,
-              frequency: freq, effectiveDate: today, anchorDate: anchorStr
+              frequency: freq, effectiveDate: formData.date || today, anchorDate: anchorStr
             })});
             created++;
           } catch { failed++; }
@@ -1263,11 +1263,21 @@ const SchedulingHub = ({ token }) => {
                       ))}
                     </div>
                     {formData.scheduleType === 'bi-weekly' && (
-                      <div style={{ padding: '0.6rem', background: '#fff', borderRadius: '6px', border: '1px solid #FED7AA' }}>
+                      <div style={{ padding: '0.6rem', background: '#fff', borderRadius: '6px', border: '1px solid #FED7AA', marginBottom: '0.75rem' }}>
                         <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.3rem' }}>📅 "ON" Week Start *</label>
                         <input type='date' value={biWeeklyAnchorDate} onChange={e => setBiWeeklyAnchorDate(e.target.value)} style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '6px', fontSize: '0.88rem' }} />
                       </div>
                     )}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.82rem' }}>Start Date *</label>
+                        <input type='date' value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.88rem' }} />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.82rem' }}>End Date <span style={{ color: '#9CA3AF', fontWeight: '400' }}>(optional)</span></label>
+                        <input type='date' value={formData.endDate || ''} onChange={(e) => setFormData(prev => ({ ...prev, endDate: e.target.value }))} min={formData.date || undefined} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.88rem' }} />
+                      </div>
+                    </div>
                   </div>
                 )}
 
