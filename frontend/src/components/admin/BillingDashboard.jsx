@@ -379,6 +379,34 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     }
   };
 
+  const [sendingInvoiceEmail, setSendingInvoiceEmail] = useState(false);
+
+  const handleSendInvoiceEmail = async (invoice) => {
+    if (!invoice?.id) return;
+    const clientEmail = invoice.email || invoice.client_email;
+    const emailTo = clientEmail || prompt('No email on file. Enter email address:');
+    if (!emailTo) return;
+
+    const ok = await confirm(`Send invoice #${invoice.invoice_number} to ${emailTo}?`);
+    if (!ok) return;
+
+    setSendingInvoiceEmail(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoice.id}/send-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ email: emailTo })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to send');
+      toast(`Invoice emailed to ${data.sentTo}`, 'success');
+    } catch (error) {
+      toast('Failed to send: ' + error.message, 'error');
+    } finally {
+      setSendingInvoiceEmail(false);
+    }
+  };
+
   const handleRecordPayment = async (e) => {
     e.preventDefault();
     try {
@@ -1629,6 +1657,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   <button className="btn btn-warning" onClick={() => handleMarkPaid(selectedInvoice.id)}>✓ Mark Paid</button>
                 </>
               )}
+              <button className="btn btn-info" onClick={() => handleSendInvoiceEmail(selectedInvoice)} disabled={sendingInvoiceEmail}>
+                {sendingInvoiceEmail ? '📧 Sending...' : '📧 Send Invoice'}
+              </button>
               <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Print Invoice</button>
               <button className="btn btn-secondary" onClick={() => setShowInvoiceModal(false)}>Close</button>
             </div>

@@ -10,16 +10,19 @@ router.post('/', verifyToken, async (req, res) => {
   try {
     const { firstName, lastName, dateOfBirth, phone, email, address, city, state, zip,
       referredBy, serviceType, referralSourceId, careTypeId,
-      isPrivatePay, privatePayRate, privatePayRateType, weeklyAuthorizedUnits } = req.body;
+      isPrivatePay, privatePayRate, privatePayRateType, weeklyAuthorizedUnits,
+      medicaidId, mcoMemberId } = req.body;
     const clientId = uuidv4();
     const result = await db.query(
       `INSERT INTO clients (id, first_name, last_name, date_of_birth, phone, email, address, city, state, zip,
         referred_by, service_type, start_date, referral_source_id, care_type_id,
-        is_private_pay, private_pay_rate, private_pay_rate_type, weekly_authorized_units)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_DATE,$13,$14,$15,$16,$17,$18) RETURNING *`,
+        is_private_pay, private_pay_rate, private_pay_rate_type, weekly_authorized_units,
+        medicaid_id, mco_member_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_DATE,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
       [clientId, firstName, lastName, dateOfBirth, phone, email, address, city, state, zip,
        referredBy || referralSourceId, serviceType, referralSourceId, careTypeId,
-       isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly', weeklyAuthorizedUnits || null]
+       isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly', weeklyAuthorizedUnits || null,
+       medicaidId || null, mcoMemberId || null]
     );
     await db.query(`INSERT INTO client_onboarding (client_id) VALUES ($1)`, [clientId]);
     await auditLog(req.user.id, 'CREATE', 'clients', clientId, null, result.rows[0]);
@@ -62,7 +65,8 @@ router.put('/:id', verifyToken, async (req, res) => {
       emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
       medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
       referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
-      weeklyAuthorizedUnits, serviceDaysPerWeek, serviceAllowedDays } = req.body;
+      weeklyAuthorizedUnits, serviceDaysPerWeek, serviceAllowedDays,
+      medicaidId, mcoMemberId } = req.body;
     const result = await db.query(
       `UPDATE clients SET
         first_name=COALESCE($1,first_name), last_name=COALESCE($2,last_name), date_of_birth=$3,
@@ -75,8 +79,9 @@ router.put('/:id', verifyToken, async (req, res) => {
         is_private_pay=COALESCE($29,is_private_pay), private_pay_rate=$30,
         private_pay_rate_type=COALESCE($31,private_pay_rate_type), billing_notes=$32,
         weekly_authorized_units=$33, service_days_per_week=COALESCE($34,service_days_per_week),
-        service_allowed_days=COALESCE($35,service_allowed_days), updated_at=NOW()
-       WHERE id=$36 RETURNING *`,
+        service_allowed_days=COALESCE($35,service_allowed_days),
+        medicaid_id=$36, mco_member_id=$37, updated_at=NOW()
+       WHERE id=$38 RETURNING *`,
       [firstName, lastName, dateOfBirth, phone, email, address, city, state, zip,
        serviceType, medicalConditions, allergies, medications, notes,
        insuranceProvider, insuranceId, insuranceGroup, gender, preferredCaregivers,
@@ -84,12 +89,77 @@ router.put('/:id', verifyToken, async (req, res) => {
        medicalNotes, doNotUseCaregivers, carePreferences, mobilityAssistanceNeeds,
        referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
        weeklyAuthorizedUnits, serviceDaysPerWeek || null,
-       serviceAllowedDays ? JSON.stringify(serviceAllowedDays) : null, req.params.id]
+       serviceAllowedDays ? JSON.stringify(serviceAllowedDays) : null,
+       medicaidId || null, mcoMemberId || null, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
     await auditLog(req.user.id, 'UPDATE', 'clients', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /api/clients/bulk-assign-medicaid-ids
+// Takes array of {medicaidId, name} from CSV, matches by name, updates medicaid_id
+router.post('/bulk-assign-medicaid-ids', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { entries } = req.body; // [{medicaidId, name}]
+    if (!entries || !entries.length) return res.status(400).json({ error: 'No entries provided' });
+
+    const clientsResult = await db.query(
+      `SELECT id, first_name, last_name, medicaid_id FROM clients WHERE is_active = true`
+    );
+    const clients = clientsResult.rows;
+
+    const results = { updated: 0, skipped: 0, alreadySet: 0, notFound: [], details: [] };
+
+    for (const entry of entries) {
+      const { medicaidId, name } = entry;
+      if (!medicaidId || !name) { results.skipped++; continue; }
+
+      // Parse "Last, First" or "First Last" format
+      let firstName, lastName;
+      const cleaned = name.replace(/"/g, '').trim();
+      if (cleaned.includes(',')) {
+        const parts = cleaned.split(',').map(s => s.trim());
+        lastName = parts[0];
+        firstName = parts[1] || '';
+      } else {
+        const parts = cleaned.split(/\s+/);
+        firstName = parts[0] || '';
+        lastName = parts.slice(1).join(' ') || '';
+      }
+
+      // Find matching client (case-insensitive)
+      const match = clients.find(c => {
+        const fMatch = c.first_name && firstName && c.first_name.toLowerCase() === firstName.toLowerCase();
+        const lMatch = c.last_name && lastName && c.last_name.toLowerCase() === lastName.toLowerCase();
+        return fMatch && lMatch;
+      });
+
+      if (!match) {
+        results.notFound.push({ medicaidId, name: cleaned });
+        continue;
+      }
+
+      if (match.medicaid_id === medicaidId.trim()) {
+        results.alreadySet++;
+        results.details.push({ name: cleaned, medicaidId, status: 'already_set' });
+        continue;
+      }
+
+      await db.query(
+        `UPDATE clients SET medicaid_id = $1, updated_at = NOW() WHERE id = $2`,
+        [medicaidId.trim(), match.id]
+      );
+      results.updated++;
+      results.details.push({ name: `${match.first_name} ${match.last_name}`, medicaidId, status: 'updated' });
+    }
+
+    res.json(results);
+  } catch (error) {
+    console.error('Bulk assign error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // DELETE /api/clients/:id

@@ -396,9 +396,16 @@ const SchedulingHub = ({ token }) => {
     finally { setSaving(false); }
   };
 
-  const handleDeleteSchedule = async (scheduleId) => {
-    const _cok = await confirm('Delete this schedule?', {danger: true}); if (!_cok) return;
-    try { await api(`/api/schedules/${scheduleId}`, { method: 'DELETE' }); showMsg('Schedule deleted'); loadCaregiverSchedules(selectedCaregiverId); }
+  const handleDeleteSchedule = async (scheduleId, schedule) => {
+    const isRecurring = schedule && schedule.day_of_week !== null && schedule.day_of_week !== undefined;
+    if (isRecurring) {
+      // For recurring schedules, default to deleting all occurrences (same as before)
+      // The DragDropScheduler handles per-occurrence deletion via its scope UI
+      const _cok = await confirm('Delete all occurrences of this recurring schedule?', {danger: true}); if (!_cok) return;
+    } else {
+      const _cok = await confirm('Delete this schedule?', {danger: true}); if (!_cok) return;
+    }
+    try { await api(`/api/schedules/${scheduleId}?scope=all`, { method: 'DELETE' }); showMsg('Schedule deleted'); loadCaregiverSchedules(selectedCaregiverId); }
     catch (e) { showMsg('Error: ' + e.message, 'error'); }
   };
 
@@ -448,19 +455,39 @@ const SchedulingHub = ({ token }) => {
     const target  = new Date(calCurrentDate.getFullYear(), calCurrentDate.getMonth(), day);
     const dow     = target.getDay();
     const dateStr = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    let filtered  = calSchedules.filter(s => {
-      if (s.date) return s.date.split('T')[0] === dateStr;
+    const results = [];
+    calSchedules.forEach(s => {
+      if (s.date) {
+        if (s.date.split('T')[0] === dateStr) results.push(s);
+        return;
+      }
       if (s.day_of_week !== null && s.day_of_week !== undefined) {
-        if (s.day_of_week !== dow) return false;
-        if (s.effective_date && target < new Date(s.effective_date + 'T00:00:00')) return false;
+        if (s.day_of_week !== dow) return;
+        if (s.effective_date && target < new Date(s.effective_date + 'T00:00:00')) return;
+        // Respect end_date
+        if (s.end_date && target > new Date(s.end_date + 'T23:59:59')) return;
         if (s.frequency === 'biweekly' && s.anchor_date) {
           const diffWeeks = Math.floor((target - new Date(s.anchor_date + 'T00:00:00')) / (7*24*60*60*1000));
-          if (diffWeeks % 2 !== 0) return false;
+          if (diffWeeks % 2 !== 0) return;
         }
-        return true;
+        // Check exceptions
+        const exceptions = s.exceptions || [];
+        const exc = exceptions.find(e => (e.exception_date || '').slice(0,10) === dateStr);
+        if (exc && exc.exception_type === 'cancelled') return;
+        if (exc && exc.exception_type === 'modified') {
+          results.push({
+            ...s,
+            start_time: exc.override_start_time || s.start_time,
+            end_time: exc.override_end_time || s.end_time,
+            client_id: exc.override_client_id || s.client_id,
+            notes: exc.override_notes != null ? exc.override_notes : s.notes,
+          });
+          return;
+        }
+        results.push(s);
       }
-      return false;
     });
+    let filtered = results;
     if (calFilterCaregiver) filtered = filtered.filter(s => s.caregiver_id === calFilterCaregiver);
     return filtered.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   };

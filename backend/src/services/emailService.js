@@ -161,11 +161,106 @@ const sendPasswordReset = async ({ to, userName, resetUrl }) => {
   });
 };
 
+// ── Invoice Email with Pay Now Button ────────────────────────
+const sendInvoiceEmail = async ({ to, clientName, invoiceNumber, invoiceId, total, amountDue, billingPeriodStart, billingPeriodEnd, dueDate, lineItems }) => {
+  const payUrl = `${FRONTEND_URL}/pay/${invoiceId}`;
+  const periodStart = new Date(billingPeriodStart).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const periodEnd   = new Date(billingPeriodEnd).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const dueDateStr  = new Date(dueDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const totalStr    = Number(parseFloat(total)).toFixed(2);
+  const dueStr      = Number(parseFloat(amountDue)).toFixed(2);
+
+  // Build line items table rows
+  let lineItemRows = '';
+  if (lineItems && lineItems.length > 0) {
+    lineItemRows = lineItems.slice(0, 20).map(item => {
+      const svcDate = item.service_date ? new Date(item.service_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      const hrs = parseFloat(item.hours || 0).toFixed(1);
+      const amt = Number(parseFloat(item.amount || 0)).toFixed(2);
+      const desc = item.description || 'Home Care Services';
+      return `<tr>
+        <td style="padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 0.85rem; color: #555;">${svcDate}</td>
+        <td style="padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 0.85rem; color: #555;">${desc}</td>
+        <td style="padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 0.85rem; color: #555; text-align: right;">${hrs}</td>
+        <td style="padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 0.85rem; color: #555; text-align: right;">$${amt}</td>
+      </tr>`;
+    }).join('');
+    if (lineItems.length > 20) {
+      lineItemRows += `<tr><td colspan="4" style="padding: 6px 8px; font-size: 0.8rem; color: #999; text-align: center;">...and ${lineItems.length - 20} more items</td></tr>`;
+    }
+  }
+
+  const lineItemsTable = lineItemRows ? `
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+      <thead>
+        <tr style="background: #f8f9fa;">
+          <th style="padding: 8px; text-align: left; font-size: 0.8rem; color: #666; border-bottom: 2px solid #ddd;">Date</th>
+          <th style="padding: 8px; text-align: left; font-size: 0.8rem; color: #666; border-bottom: 2px solid #ddd;">Description</th>
+          <th style="padding: 8px; text-align: right; font-size: 0.8rem; color: #666; border-bottom: 2px solid #ddd;">Hours</th>
+          <th style="padding: 8px; text-align: right; font-size: 0.8rem; color: #666; border-bottom: 2px solid #ddd;">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${lineItemRows}</tbody>
+    </table>
+  ` : '';
+
+  return sendEmail({
+    to,
+    subject: `Invoice #${invoiceNumber} from ${AGENCY_NAME} — $${dueStr} Due`,
+    html: wrap(`
+      <p style="color: #333; font-size: 1rem;">Hello ${clientName},</p>
+      <p style="color: #555; font-size: 0.95rem;">
+        Please find your invoice details below for home care services provided during
+        <strong>${periodStart} — ${periodEnd}</strong>.
+      </p>
+
+      <div style="background: #f8f9fa; border-radius: 8px; padding: 16px 20px; margin: 20px 0;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 4px 0; color: #666; font-size: 0.9rem;">Invoice Number:</td>
+            <td style="padding: 4px 0; color: #333; font-weight: 600; text-align: right; font-size: 0.9rem;">#${invoiceNumber}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0; color: #666; font-size: 0.9rem;">Invoice Total:</td>
+            <td style="padding: 4px 0; color: #333; font-weight: 600; text-align: right; font-size: 0.9rem;">$${totalStr}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0; color: #666; font-size: 0.9rem;">Amount Due:</td>
+            <td style="padding: 4px 0; color: #1a5276; font-weight: 700; text-align: right; font-size: 1.1rem;">$${dueStr}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0; color: #666; font-size: 0.9rem;">Due Date:</td>
+            <td style="padding: 4px 0; color: #333; font-weight: 600; text-align: right; font-size: 0.9rem;">${dueDateStr}</td>
+          </tr>
+        </table>
+      </div>
+
+      ${lineItemsTable}
+
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${payUrl}" style="background: #27ae60; color: #fff; padding: 14px 40px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 1.1rem; display: inline-block;">
+          Pay Now — $${dueStr}
+        </a>
+      </div>
+
+      <p style="color: #888; font-size: 0.85rem; text-align: center;">
+        Click the button above to make a secure payment via credit or debit card.
+      </p>
+
+      <p style="color: #555; font-size: 0.9rem; margin-top: 24px;">
+        If you have questions about this invoice, please contact us at
+        <strong>support@chippewavalleyhomecare.com</strong> or call our office.
+      </p>
+    `),
+  });
+};
+
 module.exports = {
   sendEmail,
   sendClientPortalInvite,
   sendFamilyPortalWelcome,
   sendFamilyPasswordReset,
   sendPasswordReset,
+  sendInvoiceEmail,
   isConfigured,
 };

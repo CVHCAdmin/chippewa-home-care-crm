@@ -185,12 +185,16 @@ router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
 // directly in server.js — do not add them here (Express router path boundaries
 // prevent router.get('-all') from ever matching /api/schedules-all).
 
-// DELETE /api/schedules/:scheduleId - Delete a schedule (soft delete)
-// If the shift is part of a split shift and ?deletePair=true, both segments are deleted
+// DELETE /api/schedules/:scheduleId - Delete a schedule
+// Query params:
+//   ?scope=this&date=YYYY-MM-DD  — cancel this single occurrence (creates exception)
+//   ?scope=following&date=YYYY-MM-DD — end recurring pattern before this date
+//   ?scope=all (default) — soft delete entire pattern
+//   ?deletePair=true — also delete split shift partner
 router.delete('/:scheduleId', verifyToken, async (req, res) => {
   try {
     const { scheduleId } = req.params;
-    const deletePair = req.query.deletePair === 'true';
+    const { scope = 'all', date, deletePair } = req.query;
 
     const current = await db.query('SELECT * FROM schedules WHERE id = $1', [scheduleId]);
     if (current.rows.length === 0) {
@@ -198,9 +202,55 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
     }
 
     const shift = current.rows[0];
+    const isRecurring = shift.day_of_week !== null && shift.day_of_week !== undefined;
+
+    // ── Scope: cancel this single occurrence ──
+    if (scope === 'this' && date && isRecurring) {
+      try {
+        await db.query(
+          `INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
+           VALUES ($1, $2, 'cancelled', $3)
+           ON CONFLICT (schedule_id, exception_date) DO UPDATE SET exception_type = 'cancelled'`,
+          [scheduleId, date, req.user.id]
+        );
+      } catch (e) {
+        // Table might not exist yet
+        if (e.message.includes('does not exist')) {
+          return res.status(500).json({ error: 'Please run migration_v20 first' });
+        }
+        throw e;
+      }
+      await auditLog(req.user.id, 'CANCEL_OCCURRENCE', 'schedules', scheduleId, null, { date });
+      return res.json({ message: 'Occurrence cancelled', date, scheduleId });
+    }
+
+    // ── Scope: end pattern from this date forward ──
+    if (scope === 'following' && date && isRecurring) {
+      // Set end_date on the recurring pattern to the day before
+      const endDate = new Date(date + 'T12:00:00');
+      endDate.setDate(endDate.getDate() - 1);
+      const endDateStr = endDate.toISOString().split('T')[0];
+
+      try {
+        const result = await db.query(
+          `UPDATE schedules SET end_date = $1, updated_at = NOW() WHERE id = $2 AND is_active = true RETURNING *`,
+          [endDateStr, scheduleId]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
+        await auditLog(req.user.id, 'END_PATTERN', 'schedules', scheduleId, shift, result.rows[0]);
+        return res.json({ message: 'Recurring pattern ended', endDate: endDateStr, schedule: result.rows[0] });
+      } catch (e) {
+        if (e.message.includes('end_date')) {
+          return res.status(500).json({ error: 'Please run migration_v20 first' });
+        }
+        throw e;
+      }
+    }
+
+    // ── Scope: all — delete entire pattern (original behavior) ──
 
     // If split shift and deletePair requested, delete both segments
-    if (shift.is_split_shift && shift.split_shift_group_id && deletePair) {
+    if (shift.is_split_shift && shift.split_shift_group_id && deletePair === 'true') {
       const result = await db.query(
         `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE split_shift_group_id = $1 AND is_active = true RETURNING *`,
         [shift.split_shift_group_id]

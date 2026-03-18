@@ -98,36 +98,58 @@ const ScheduleCalendar = ({ token }) => {
     return colors[index % colors.length];
   };
 
-  // Get schedules for a specific day - FIXED logic
+  // Get schedules for a specific day — exception-aware
   const getSchedulesForDay = (day) => {
     const targetDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
     const targetDayOfWeek = targetDate.getDay();
-    
-    // Format date for comparison (YYYY-MM-DD)
+
     const year = targetDate.getFullYear();
     const month = String(targetDate.getMonth() + 1).padStart(2, '0');
     const dayStr = String(day).padStart(2, '0');
     const dateStr = `${year}-${month}-${dayStr}`;
 
-    let filtered = schedules.filter(schedule => {
-      // Check one-time schedules (specific date)
+    const results = [];
+    schedules.forEach(schedule => {
+      // One-time schedules
       if (schedule.date) {
-        const scheduleDate = schedule.date.split('T')[0]; // Handle ISO format
-        return scheduleDate === dateStr;
+        if (schedule.date.split('T')[0] === dateStr) results.push(schedule);
+        return;
       }
-      // Check recurring schedules (day of week)
+      // Recurring schedules
       if (schedule.day_of_week !== null && schedule.day_of_week !== undefined) {
-        return schedule.day_of_week === targetDayOfWeek;
+        if (schedule.day_of_week !== targetDayOfWeek) return;
+        // Respect effective_date
+        if (schedule.effective_date && targetDate < new Date(schedule.effective_date + 'T00:00:00')) return;
+        // Respect end_date
+        if (schedule.end_date && targetDate > new Date(schedule.end_date + 'T23:59:59')) return;
+        // Biweekly check
+        if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
+          const diffWeeks = Math.floor((targetDate - new Date(schedule.anchor_date + 'T00:00:00')) / (7*24*60*60*1000));
+          if (diffWeeks % 2 !== 0) return;
+        }
+        // Check exceptions
+        const exceptions = schedule.exceptions || [];
+        const exc = exceptions.find(e => (e.exception_date || '').slice(0,10) === dateStr);
+        if (exc && exc.exception_type === 'cancelled') return;
+        if (exc && exc.exception_type === 'modified') {
+          results.push({
+            ...schedule,
+            start_time: exc.override_start_time || schedule.start_time,
+            end_time: exc.override_end_time || schedule.end_time,
+            client_id: exc.override_client_id || schedule.client_id,
+            notes: exc.override_notes != null ? exc.override_notes : schedule.notes,
+          });
+          return;
+        }
+        results.push(schedule);
       }
-      return false;
     });
 
-    // Apply caregiver filter if set
+    let filtered = results;
     if (filterCaregiver) {
       filtered = filtered.filter(s => s.caregiver_id === filterCaregiver);
     }
 
-    // Sort by start time
     return filtered.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   };
 

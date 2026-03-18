@@ -7,6 +7,7 @@ const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
 const { requireAdmin } = require('../middleware/shared');
+const { sendInvoiceEmail, isConfigured: emailConfigured } = require('../services/emailService');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -627,6 +628,77 @@ router.delete('/invoices/:id', auth, async (req, res) => {
     res.json({ message: `Invoice ${invoiceNumber} deleted successfully` });
   } catch (error) {
     console.error('Error deleting invoice:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== SEND INVOICE EMAIL ====================
+
+// Send invoice to client via email with Pay Now link
+router.post('/invoices/:id/send-email', auth, async (req, res) => {
+  try {
+    const invoiceResult = await db.query(`
+      SELECT i.*,
+        c.first_name, c.last_name, c.email as client_email
+      FROM invoices i
+      JOIN clients c ON i.client_id = c.id
+      WHERE i.id = $1
+    `, [req.params.id]);
+
+    if (invoiceResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const invoice = invoiceResult.rows[0];
+
+    // Use override email from request body, or fall back to client email
+    const recipientEmail = req.body.email || invoice.client_email;
+    if (!recipientEmail) {
+      return res.status(400).json({ error: 'No email address found for this client. Please provide an email.' });
+    }
+
+    if (!emailConfigured) {
+      return res.status(503).json({ error: 'Email service not configured. Set SENDGRID_API_KEY in environment.' });
+    }
+
+    const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0) - parseFloat(invoice.amount_adjusted || 0);
+
+    // Get line items
+    const lineItemsResult = await db.query(`
+      SELECT ili.*, u.first_name as caregiver_first_name, u.last_name as caregiver_last_name
+      FROM invoice_line_items ili
+      LEFT JOIN users u ON ili.caregiver_id = u.id
+      WHERE ili.invoice_id = $1
+      ORDER BY ili.service_date, u.last_name
+    `, [req.params.id]);
+
+    const sent = await sendInvoiceEmail({
+      to: recipientEmail,
+      clientName: `${invoice.first_name} ${invoice.last_name}`,
+      invoiceNumber: invoice.invoice_number,
+      invoiceId: invoice.id,
+      total: invoice.total,
+      amountDue,
+      billingPeriodStart: invoice.billing_period_start,
+      billingPeriodEnd: invoice.billing_period_end,
+      dueDate: invoice.payment_due_date,
+      lineItems: lineItemsResult.rows,
+    });
+
+    if (!sent) {
+      return res.status(500).json({ error: 'Failed to send email. Check SendGrid configuration.' });
+    }
+
+    // Track that the invoice was emailed
+    await db.query(`
+      UPDATE invoices
+      SET notes = COALESCE(notes, '') || $1, updated_at = NOW()
+      WHERE id = $2
+    `, [`\nEmailed to ${recipientEmail} on ${new Date().toLocaleDateString()}`, req.params.id]);
+
+    res.json({ success: true, sentTo: recipientEmail });
+  } catch (error) {
+    console.error('Error sending invoice email:', error);
     res.status(500).json({ error: error.message });
   }
 });

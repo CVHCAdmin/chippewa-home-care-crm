@@ -96,6 +96,10 @@ const ClientsManagement = ({ token }) => {
   const [filterReferral, setFilterReferral] = useState('');
   const [filterCareType, setFilterCareType] = useState('');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showMedicaidImport, setShowMedicaidImport] = useState(false);
+  const [medicaidImportResults, setMedicaidImportResults] = useState(null);
+  const [medicaidImporting, setMedicaidImporting] = useState(false);
+  const medicaidFileRef = React.useRef();
   
   // Listen for window resize
   useEffect(() => {
@@ -121,6 +125,8 @@ const ClientsManagement = ({ token }) => {
     privatePayRate: '',
     privatePayRateType: 'hourly',
     weeklyAuthorizedUnits: '',
+    medicaidId: '',
+    mcoMemberId: '',
     emergencyContactName: '',
     emergencyContactPhone: '',
     emergencyContactRelationship: '',
@@ -171,6 +177,8 @@ const ClientsManagement = ({ token }) => {
         privatePayRate: formData.isPrivatePay ? parseFloat(formData.privatePayRate) : null,
         privatePayRateType: formData.privatePayRateType,
         weeklyAuthorizedUnits: formData.weeklyAuthorizedUnits ? parseInt(formData.weeklyAuthorizedUnits) : null,
+        medicaidId: formData.medicaidId || null,
+        mcoMemberId: formData.mcoMemberId || null,
         emergencyContactName: formData.emergencyContactName || null,
         emergencyContactPhone: formData.emergencyContactPhone || null,
         emergencyContactRelationship: formData.emergencyContactRelationship || null,
@@ -212,6 +220,64 @@ const ClientsManagement = ({ token }) => {
     return ct ? ct.name : '-';
   };
 
+  const handleMedicaidCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      let text = ev.target.result;
+      // Handle UTF-16 encoding (double-spaced chars from WPS/Midas exports)
+      if (text.charCodeAt(0) === 0xFFFE || text.charCodeAt(0) === 0xFEFF || text.includes('\x00')) {
+        const decoder = new TextDecoder('utf-16le');
+        text = decoder.decode(await file.arrayBuffer());
+      }
+      // Parse tab-separated or comma-separated
+      const sep = text.includes('\t') ? '\t' : ',';
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) { toast('No data rows found', 'error'); return; }
+
+      const headers = lines[0].split(sep).map(h => h.trim().replace(/"/g, ''));
+      // Find Member ID and Member Name columns
+      const idCol = headers.findIndex(h => /member\s*id|medicaid\s*id/i.test(h));
+      const nameCol = headers.findIndex(h => /member\s*name|client\s*name|patient\s*name/i.test(h));
+
+      if (idCol === -1) { toast('Could not find "Member ID" column in CSV', 'error'); return; }
+      if (nameCol === -1) { toast('Could not find "Member Name" column in CSV', 'error'); return; }
+
+      const entries = [];
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(sep).map(c => c.trim().replace(/"/g, ''));
+        const medicaidId = cols[idCol];
+        const name = cols[nameCol];
+        if (medicaidId && name && !entries.find(e => e.medicaidId === medicaidId)) {
+          entries.push({ medicaidId, name });
+        }
+      }
+
+      if (!entries.length) { toast('No valid entries found', 'error'); return; }
+
+      setMedicaidImporting(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/clients/bulk-assign-medicaid-ids`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ entries })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        setMedicaidImportResults(data);
+        toast(`Updated ${data.updated} clients with Medicaid IDs`, 'success');
+        loadData();
+      } catch (err) {
+        toast('Import failed: ' + err.message, 'error');
+      } finally {
+        setMedicaidImporting(false);
+        if (medicaidFileRef.current) medicaidFileRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const filteredClients = clients.filter(client => {
     const matchesSearch = !searchTerm || 
       `${client.first_name} ${client.last_name}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -228,13 +294,67 @@ const ClientsManagement = ({ token }) => {
     <div>
       <div className="page-header">
         <h2>👥 Clients</h2>
-        <button 
-          className="btn btn-primary"
-          onClick={() => setShowForm(!showForm)}
-        >
-          {showForm ? '✕ Cancel' : '➕ Add'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => { setShowMedicaidImport(!showMedicaidImport); setMedicaidImportResults(null); }}
+          >
+            {showMedicaidImport ? '✕ Close' : '🔗 Import Medicaid IDs'}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowForm(!showForm)}
+          >
+            {showForm ? '✕ Cancel' : '➕ Add'}
+          </button>
+        </div>
       </div>
+
+      {showMedicaidImport && (
+        <div className="card" style={{ marginBottom: '1rem', padding: '1.5rem' }}>
+          <h3 style={{ marginBottom: '0.5rem' }}>Import Medicaid IDs from CSV</h3>
+          <p style={{ color: '#6B7280', fontSize: '0.9rem', marginBottom: '1rem' }}>
+            Upload a Midas or WPS CSV. The system will match Member Names to existing clients and assign their Medicaid IDs automatically.
+          </p>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1rem' }}>
+            <input
+              ref={medicaidFileRef}
+              type="file"
+              accept=".csv,.txt"
+              onChange={handleMedicaidCSV}
+              disabled={medicaidImporting}
+            />
+            {medicaidImporting && <span style={{ color: '#6B7280' }}>Processing...</span>}
+          </div>
+
+          {medicaidImportResults && (
+            <div style={{ background: '#F9FAFB', borderRadius: 8, padding: '1rem' }}>
+              <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+                <span style={{ color: '#059669', fontWeight: 600 }}>{medicaidImportResults.updated} updated</span>
+                <span style={{ color: '#2563EB', fontWeight: 600 }}>{medicaidImportResults.alreadySet} already set</span>
+                <span style={{ color: '#DC2626', fontWeight: 600 }}>{medicaidImportResults.notFound?.length || 0} not found</span>
+              </div>
+              {medicaidImportResults.details?.length > 0 && (
+                <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                  {medicaidImportResults.details.map((d, i) => (
+                    <div key={i} style={{ padding: '3px 0', color: d.status === 'updated' ? '#059669' : '#6B7280' }}>
+                      {d.status === 'updated' ? '✓' : '—'} {d.name} → {d.medicaidId}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {medicaidImportResults.notFound?.length > 0 && (
+                <div style={{ fontSize: '0.85rem', color: '#DC2626' }}>
+                  <strong>No match found:</strong>
+                  {medicaidImportResults.notFound.map((nf, i) => (
+                    <div key={i} style={{ padding: '2px 0' }}>✕ {nf.name} (ID: {nf.medicaidId})</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {showForm && (
         <div className="card card-form">
@@ -317,6 +437,14 @@ const ClientsManagement = ({ token }) => {
                       <option value="">Select care type...</option>
                       {careTypes.map(ct => (<option key={ct.id} value={ct.id}>{ct.name}</option>))}
                     </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Medicaid ID (Member ID)</label>
+                    <input type="text" value={formData.medicaidId} onChange={(e) => setFormData({ ...formData, medicaidId: e.target.value })} placeholder="e.g., 3886255573" />
+                  </div>
+                  <div className="form-group">
+                    <label>MCO Member ID</label>
+                    <input type="text" value={formData.mcoMemberId} onChange={(e) => setFormData({ ...formData, mcoMemberId: e.target.value })} placeholder="MCO-specific member ID" />
                   </div>
                 </>
               ) : (

@@ -55,10 +55,12 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
         allergies: client.allergies || '',
         medicalNotes: client.medical_notes || '',
         mobilityAssistanceNeeds: client.mobility_assistance_needs || '',
-        // Insurance
+        // Insurance / Medicaid
         insuranceProvider: client.insurance_provider || '',
         insuranceId: client.insurance_id || '',
         insuranceGroup: client.insurance_group || '',
+        medicaidId: client.medicaid_id || '',
+        mcoMemberId: client.mco_member_id || '',
         // Caregiver Preferences
         carePreferences: client.care_preferences || '',
         preferredCaregivers: client.preferred_caregivers || '',
@@ -133,6 +135,8 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
           insuranceProvider: formData.insuranceProvider || null,
           insuranceId: formData.insuranceId || null,
           insuranceGroup: formData.insuranceGroup || null,
+          medicaidId: formData.medicaidId || null,
+          mcoMemberId: formData.mcoMemberId || null,
           carePreferences: formData.carePreferences || null,
           preferredCaregivers: formData.preferredCaregivers || null,
           doNotUseCaregivers: formData.doNotUseCaregivers || null,
@@ -549,6 +553,24 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                     type="text"
                     value={formData.insuranceGroup}
                     onChange={(e) => setFormData({ ...formData, insuranceGroup: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Medicaid ID (Member ID)</label>
+                  <input
+                    type="text"
+                    value={formData.medicaidId}
+                    onChange={(e) => setFormData({ ...formData, medicaidId: e.target.value })}
+                    placeholder="e.g., 3886255573"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>MCO Member ID</label>
+                  <input
+                    type="text"
+                    value={formData.mcoMemberId}
+                    onChange={(e) => setFormData({ ...formData, mcoMemberId: e.target.value })}
+                    placeholder="MCO-specific member ID"
                   />
                 </div>
               </div>

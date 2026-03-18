@@ -192,7 +192,8 @@ app.use('/api/communication-log', verifyToken, require('./routes/communicationRo
 app.use('/api/no-show',           verifyToken, require('./routes/noShowRoutes'));
 app.use('/api/forms',             verifyToken, require('./routes/formBuilderRoutes'));
 app.use('/api/forecast',          verifyToken, require('./routes/forecastRoutes'));
-app.use('/api/payments',          verifyToken, require('./routes/paymentsRoutes'));
+app.use('/api/payments',              verifyToken, require('./routes/paymentsRoutes'));
+app.use('/api/schedule-exceptions',  verifyToken, require('./routes/scheduleExceptionsRoutes'));
 
 // ── EXPLICIT ROUTES (Express path-boundary workarounds) ──────────────────────
 
@@ -207,11 +208,19 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
     );
     const hasSplitCols = colCheck.rows.length > 0;
 
+    // Check if end_date column exists (added by migration_v20)
+    const endDateCheck = await db.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'schedules' AND column_name = 'end_date'`
+    );
+    const hasEndDate = endDateCheck.rows.length > 0;
+
     const result = await db.query(
       `SELECT s.id, s.caregiver_id, s.client_id, s.schedule_type,
               s.day_of_week, s.date, s.start_time, s.end_time,
               s.notes, s.is_active, s.status, s.created_at, s.updated_at,
               s.frequency, s.effective_date, s.anchor_date,
+              ${hasEndDate ? `s.end_date,` : `NULL::date AS end_date,`}
               ${hasSplitCols
                 ? `s.is_split_shift, s.split_shift_group_id, s.split_segment,`
                 : `false AS is_split_shift, NULL::uuid AS split_shift_group_id, NULL::int AS split_segment,`}
@@ -223,7 +232,39 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
        WHERE s.is_active = true
        ORDER BY s.day_of_week, s.date, s.start_time`
     );
-    res.json(result.rows);
+
+    // Also fetch all exceptions for recurring schedules
+    const recurringIds = result.rows
+      .filter(s => s.day_of_week !== null && s.day_of_week !== undefined)
+      .map(s => s.id);
+
+    let exceptions = [];
+    if (recurringIds.length > 0) {
+      try {
+        const excResult = await db.query(
+          `SELECT * FROM schedule_exceptions WHERE schedule_id = ANY($1) ORDER BY exception_date`,
+          [recurringIds]
+        );
+        exceptions = excResult.rows;
+      } catch (e) {
+        // schedule_exceptions table may not exist yet — gracefully skip
+        if (!e.message.includes('does not exist')) throw e;
+      }
+    }
+
+    // Attach exceptions to their parent schedules as a map
+    const excMap = {};
+    exceptions.forEach(ex => {
+      if (!excMap[ex.schedule_id]) excMap[ex.schedule_id] = [];
+      excMap[ex.schedule_id].push(ex);
+    });
+
+    const enriched = result.rows.map(s => ({
+      ...s,
+      exceptions: excMap[s.id] || []
+    }));
+
+    res.json(enriched);
   } catch (error) {
     console.error('[schedules-all] GET failed:', error.message, error.stack);
     res.status(500).json({ error: error.message });
@@ -233,17 +274,30 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
 app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
   try {
     const { scheduleId } = req.params;
-    const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate } = req.body;
+    const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, endDate } = req.body;
     const normalize = t => String(t).split(':').map(n => n.padStart(2, '0')).join(':');
     if (startTime && endTime && normalize(startTime) >= normalize(endTime)) return res.status(400).json({ error: 'End time must be after start time' });
+
+    // Check if end_date column exists
+    const colCheck = await db.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'schedules' AND column_name = 'end_date'`
+    );
+    const hasEndDate = colCheck.rows.length > 0;
+
     const result = await db.query(
       `UPDATE schedules SET client_id=COALESCE($1,client_id), day_of_week=$2, date=$3,
         start_time=COALESCE($4,start_time), end_time=COALESCE($5,end_time), notes=$6,
         frequency=COALESCE($7,frequency), effective_date=COALESCE($8,effective_date),
-        anchor_date=COALESCE($9,anchor_date), updated_at=NOW()
+        anchor_date=COALESCE($9,anchor_date),
+        ${hasEndDate ? 'end_date=$11,' : ''}
+        updated_at=NOW()
        WHERE id=$10 AND is_active=true RETURNING *`,
-      [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
-       notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId]
+      hasEndDate
+        ? [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
+           notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId,
+           endDate || null]
+        : [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
+           notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
     res.json(result.rows[0]);

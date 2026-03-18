@@ -1076,12 +1076,61 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     );
   };
 
+  // ── Change Password state ──
+  const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' });
+  const [pwLoading, setPwLoading] = useState(false);
+  const [pwMsg, setPwMsg] = useState({ text: '', type: '' });
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPwMsg({ text: '', type: '' });
+    if (pwForm.newPw !== pwForm.confirm) { setPwMsg({ text: 'Passwords do not match', type: 'error' }); return; }
+    if (pwForm.newPw.length < 8) { setPwMsg({ text: 'Password must be at least 8 characters', type: 'error' }); return; }
+    setPwLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/change-password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.newPw }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to change password');
+      setPwMsg({ text: 'Password changed successfully!', type: 'success' });
+      setPwForm({ current: '', newPw: '', confirm: '' });
+    } catch (err) {
+      setPwMsg({ text: err.message, type: 'error' });
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
   const renderSettingsPage = () => (
     <>
       <div className="card">
         <div className="card-title">Profile</div>
         <div className="form-group"><label>Name</label><input type="text" value={user.name || `${user.first_name} ${user.last_name}`} disabled /></div>
         <div className="form-group"><label>Email</label><input type="text" value={user.email} disabled /></div>
+      </div>
+      <div className="card">
+        <div className="card-title">Change Password</div>
+        {pwMsg.text && <div className={`alert ${pwMsg.type === 'error' ? 'alert-error' : 'alert-success'}`}>{pwMsg.text}</div>}
+        <form onSubmit={handleChangePassword}>
+          <div className="form-group">
+            <label>Current Password</label>
+            <input type="password" value={pwForm.current} onChange={e => setPwForm(f => ({ ...f, current: e.target.value }))} required placeholder="Enter current password" />
+          </div>
+          <div className="form-group">
+            <label>New Password</label>
+            <input type="password" value={pwForm.newPw} onChange={e => setPwForm(f => ({ ...f, newPw: e.target.value }))} required placeholder="Min. 8 characters" minLength={8} />
+          </div>
+          <div className="form-group">
+            <label>Confirm New Password</label>
+            <input type="password" value={pwForm.confirm} onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))} required placeholder="Confirm new password" minLength={8} />
+          </div>
+          <button type="submit" className="btn btn-primary btn-block" disabled={pwLoading}>
+            {pwLoading ? 'Changing...' : 'Change Password'}
+          </button>
+        </form>
       </div>
       <div className="card">
         <div className="card-title">GPS Status</div>
