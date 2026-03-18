@@ -48,7 +48,7 @@ const SchedulingHub = ({ token }) => {
   const [formData, setFormData] = useState({
     caregiverId: '', clientId: '', scheduleType: 'one-time',
     dayOfWeek: '', date: new Date().toISOString().split('T')[0],
-    startTime: '09:00', endTime: '13:00', notes: ''
+    startTime: '09:00', endTime: '13:00', notes: '', endDate: ''
   });
   const [selectedDays, setSelectedDays]             = useState([]);
   const [conflicts, setConflicts]                   = useState([]);
@@ -377,7 +377,7 @@ const SchedulingHub = ({ token }) => {
         await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
           caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'recurring',
           dayOfWeek: parseInt(formData.dayOfWeek), date: null, startTime: formData.startTime, endTime: formData.endTime,
-          notes: formData.notes, frequency: 'weekly', effectiveDate: today, anchorDate: null
+          notes: formData.notes, frequency: 'weekly', effectiveDate: formData.date || today, anchorDate: null
         })});
         showMsg('Schedule created!');
       } else {
@@ -387,7 +387,7 @@ const SchedulingHub = ({ token }) => {
         })});
         showMsg('Schedule created!');
       }
-      setFormData(prev => ({ ...prev, clientId: '', scheduleType: 'one-time', dayOfWeek: '', date: new Date().toISOString().split('T')[0], startTime: '09:00', endTime: '13:00', notes: '' }));
+      setFormData(prev => ({ ...prev, clientId: '', scheduleType: 'one-time', dayOfWeek: '', date: new Date().toISOString().split('T')[0], startTime: '09:00', endTime: '13:00', notes: '', endDate: '' }));
       setSelectedDays([]);
       loadCaregiverSchedules(selectedCaregiverId);
       if (scheduleView === 'week') loadWeekView();
@@ -705,18 +705,8 @@ const SchedulingHub = ({ token }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: '0.35rem' }}>
           <button style={viewBtn(scheduleView === 'grid')}  onClick={() => setScheduleView('grid')}>📋 Grid</button>
-          <button style={viewBtn(scheduleView === 'week')}  onClick={() => setScheduleView('week')}>📅 Week</button>
           <button style={viewBtn(scheduleView === 'month')} onClick={() => setScheduleView('month')}>📆 Month</button>
         </div>
-        {scheduleView === 'week' && (
-          <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', marginLeft: 'auto' }}>
-            <button className='btn btn-secondary btn-sm' onClick={() => navigateWeek(-1)}>◀</button>
-            <strong style={{ fontSize: '0.88rem' }}>Week of {new Date(weekOf + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</strong>
-            <button className='btn btn-secondary btn-sm' onClick={() => navigateWeek(1)}>▶</button>
-            <button className='btn btn-sm btn-primary' onClick={() => setWeekOf(getWeekStart(new Date()).toISOString().split('T')[0])}>Today</button>
-            <AutoFillButton weekOf={weekOf} token={token} onComplete={loadWeekView} />
-          </div>
-        )}
         {scheduleView === 'month' && (
           <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', marginLeft: 'auto' }}>
             <button className='btn btn-secondary btn-sm' onClick={() => setCalCurrentDate(new Date(calCurrentDate.getFullYear(), calCurrentDate.getMonth() - 1))}>‹</button>
@@ -1282,16 +1272,26 @@ const SchedulingHub = ({ token }) => {
                 )}
 
                 {formData.scheduleType === 'recurring' && (
-                  <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ marginBottom: '1rem', background: '#EFF6FF', padding: '0.85rem', borderRadius: '8px', border: '1px solid #BFDBFE' }}>
                     <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Day of Week *</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.35rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.35rem', marginBottom: '0.75rem' }}>
                       {['Su','Mo','Tu','We','Th','Fr','Sa'].map((day, idx) => (
                         <button key={day} type='button' onClick={() => setFormData(prev => ({ ...prev, dayOfWeek: idx.toString() }))}
                           style={{ padding: '0.5rem 0.1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem',
                             border: formData.dayOfWeek === idx.toString() ? '2px solid #3B82F6' : '2px solid #E5E7EB',
-                            background: formData.dayOfWeek === idx.toString() ? '#EFF6FF' : '#fff',
-                            color: formData.dayOfWeek === idx.toString() ? '#1D4ED8' : '#374151' }}>{day}</button>
+                            background: formData.dayOfWeek === idx.toString() ? '#3B82F6' : '#fff',
+                            color: formData.dayOfWeek === idx.toString() ? '#fff' : '#374151' }}>{day}</button>
                       ))}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.82rem' }}>Start Date *</label>
+                        <input type='date' value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.88rem' }} />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.82rem' }}>End Date <span style={{ color: '#9CA3AF', fontWeight: '400' }}>(optional)</span></label>
+                        <input type='date' value={formData.endDate || ''} onChange={(e) => setFormData(prev => ({ ...prev, endDate: e.target.value }))} min={formData.date || undefined} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.88rem' }} />
+                      </div>
                     </div>
                   </div>
                 )}
