@@ -12,7 +12,7 @@ router.get('/summary', verifyToken, requireAdmin, async (req, res) => {
       db.query('SELECT COUNT(*) as count FROM clients WHERE is_active = true'),
       db.query("SELECT COUNT(*) as count FROM users WHERE role = 'caregiver' AND is_active = true"),
       db.query("SELECT COUNT(*) as count, SUM(total) as amount FROM invoices WHERE payment_status = 'pending'"),
-      db.query(`SELECT SUM(total) as amount FROM invoices WHERE billing_period_start >= date_trunc('month', CURRENT_DATE) AND payment_status = 'paid'`),
+      db.query(`SELECT COALESCE(SUM(amount_paid), 0) as amount FROM invoices WHERE billing_period_start >= date_trunc('month', CURRENT_DATE) AND payment_status IN ('paid', 'partial')`),
       // Caregivers currently clocked in (open time entry today)
       db.query(`SELECT COUNT(DISTINCT caregiver_id) as count FROM time_entries WHERE end_time IS NULL AND DATE(start_time) = CURRENT_DATE`),
       // Shifts today

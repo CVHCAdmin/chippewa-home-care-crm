@@ -34,6 +34,22 @@ const AuditLogs = ({ token }) => {
     applyFilters();
   }, [logs, filters]);
 
+  // Convert action strings like "POST /api/clients [201]" to simple types
+  const normalizeAction = (action) => {
+    if (!action) return 'access';
+    const lower = action.toLowerCase();
+    if (lower === 'security_alert') return 'failed_login';
+    if (lower.startsWith('post')) return 'create';
+    if (lower.startsWith('put') || lower.startsWith('patch')) return 'update';
+    if (lower.startsWith('delete')) return 'delete';
+    if (lower.startsWith('get')) return 'read';
+    if (lower.includes('login')) return 'login';
+    if (lower.includes('export') || lower.includes('download')) return 'export';
+    // Already a simple action word
+    if (['create', 'update', 'delete', 'login', 'access', 'export', 'failed_login'].includes(lower)) return lower;
+    return 'access';
+  };
+
   const loadLogs = async () => {
     setLoading(true);
     try {
@@ -44,14 +60,23 @@ const AuditLogs = ({ token }) => {
         }
       );
       const data = response.ok ? await response.json() : {};
-      const logsList = Array.isArray(data.logs) ? data.logs : [];
+      const rawLogs = Array.isArray(data.logs) ? data.logs : [];
+      // Normalize backend field names to what the UI expects
+      const logsList = rawLogs.map(log => ({
+        ...log,
+        timestamp: log.created_at || log.timestamp,
+        entity_id: log.record_id || log.entity_id || '',
+        entity_type: log.table_name || log.entity_type || '',
+        user_name: log.user_name || [log.first_name, log.last_name].filter(Boolean).join(' ') || 'System',
+        normalized_action: normalizeAction(log.action),
+      }));
       setLogs(logsList);
 
-      // Calculate stats
+      // Calculate stats using normalized action
       const uniqueUsers = new Set(logsList.map(log => log.user_id)).size;
-      const dataChanges = logsList.filter(log => log.action === 'update' || log.action === 'create' || log.action === 'delete').length;
-      const accessEvents = logsList.filter(log => log.action === 'login' || log.action === 'access').length;
-      const suspiciousActivity = logsList.filter(log => log.flags && log.flags.length > 0).length;
+      const dataChanges = logsList.filter(log => ['create', 'update', 'delete'].includes(log.normalized_action)).length;
+      const accessEvents = logsList.filter(log => ['login', 'access', 'read'].includes(log.normalized_action)).length;
+      const suspiciousActivity = logsList.filter(log => log.is_sensitive || (log.flags && log.flags.length > 0)).length;
 
       setStats({
         totalEvents: logsList.length,
@@ -93,24 +118,27 @@ const AuditLogs = ({ token }) => {
     }
 
     if (filters.action) {
-      filtered = filtered.filter(log => log.action === filters.action);
+      filtered = filtered.filter(log => log.normalized_action === filters.action);
     }
 
     if (filters.entityType) {
-      filtered = filtered.filter(log => log.entity_type === filters.entityType);
+      filtered = filtered.filter(log => {
+        const type = (log.entity_type || '').replace(/s$/, '').replace(/-/g, '_');
+        return type === filters.entityType;
+      });
     }
 
     if (filters.searchTerm) {
       const term = filters.searchTerm.toLowerCase();
       filtered = filtered.filter(log =>
         (log.user_name || '').toLowerCase().includes(term) ||
-        (log.entity_id || '').includes(term) ||
-        (log.change_description && log.change_description.toLowerCase().includes(term))
+        (log.entity_id || '').toString().includes(term) ||
+        (log.action || '').toLowerCase().includes(term)
       );
     }
 
     // Sort by timestamp descending
-    filtered.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    filtered.sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at));
     setFilteredLogs(filtered);
   };
 
@@ -126,6 +154,8 @@ const AuditLogs = ({ token }) => {
         return { class: 'badge-primary', label: 'Login' };
       case 'access':
         return { class: 'badge-secondary', label: 'Access' };
+      case 'read':
+        return { class: 'badge-secondary', label: 'Read' };
       case 'export':
         return { class: 'badge-warning', label: 'Export' };
       case 'failed_login':
@@ -166,13 +196,12 @@ const AuditLogs = ({ token }) => {
         },
         body: JSON.stringify({
           logs: filteredLogs.map(log => ({
-            timestamp: log.timestamp,
+            timestamp: log.timestamp || log.created_at,
             user: log.user_name,
-            action: log.action,
+            action: log.normalized_action || log.action,
+            raw_action: log.action,
             entity: `${log.entity_type}:${log.entity_id}`,
-            changes: log.changes,
             ipAddress: log.ip_address,
-            userAgent: log.user_agent
           })),
           format
         })
@@ -304,6 +333,7 @@ const AuditLogs = ({ token }) => {
             >
               <option value="">All Actions</option>
               <option value="create">Create</option>
+              <option value="read">Read</option>
               <option value="update">Update</option>
               <option value="delete">Delete</option>
               <option value="login">Login</option>
@@ -359,7 +389,7 @@ const AuditLogs = ({ token }) => {
           
           <div style={{ display: 'grid', gap: '1rem' }}>
             {filteredLogs.map(log => {
-              const actionBadge = getActionBadge(log.action);
+              const actionBadge = getActionBadge(log.normalized_action);
               const hasSuspiciousFlags = log.flags && log.flags.length > 0;
 
               return (

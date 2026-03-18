@@ -7,7 +7,7 @@ import ApplicationDetail from './ApplicationDetail';
 const ApplicationsDashboard = ({ token }) => {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('applied');
+  const [filter, setFilter] = useState('new');
   const [selectedApp, setSelectedApp] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [hireModal, setHireModal] = useState(null);
@@ -87,7 +87,7 @@ const ApplicationsDashboard = ({ token }) => {
       case 'interviewed': return 'badge-info';
       case 'reviewing': return 'badge-warning';
       case 'rejected': return 'badge-danger';
-      case 'applied': return 'badge-secondary';
+      case 'new': return 'badge-secondary';
       default: return 'badge-secondary';
     }
   };
@@ -134,7 +134,7 @@ const ApplicationsDashboard = ({ token }) => {
         </div>
 
         <div className="filter-tabs">
-          {['all', 'applied', 'reviewing', 'interviewed', 'offered', 'hired', 'rejected'].map(f => (
+          {['all', 'new', 'reviewing', 'interviewed', 'offered', 'hired', 'rejected'].map(f => (
             <button
               key={f}
               className={`filter-tab ${filter === f ? 'active' : ''}`}
@@ -170,7 +170,7 @@ const ApplicationsDashboard = ({ token }) => {
                   <p className="app-date">{new Date(app.created_at).toLocaleDateString()}</p>
                 </div>
                 <span className={`badge ${getStatusColor(app.status)}`}>
-                  {(app.status || 'applied').toUpperCase()}
+                  {(app.status || 'new').toUpperCase()}
                 </span>
               </div>
 

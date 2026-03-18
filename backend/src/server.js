@@ -158,6 +158,7 @@ app.use('/api/open-shifts',       verifyToken, require('./routes/openShiftsRoute
 app.use('/api/medications',       verifyToken, require('./routes/medicationsRoutes'));
 app.use('/api/documents',         verifyToken, require('./routes/documentsRoutes'));
 app.use('/api/adl',               verifyToken, require('./routes/adlRoutes'));
+app.use('/api/performance-reviews', verifyToken, require('./routes/performanceReviewsRoutes'));
 app.use('/api/background-checks', verifyToken, require('./routes/backgroundChecksRoutes'));
 app.use('/api/family-portal', (req, res, next) => {
   // Defense-in-depth: admin sub-routes require a valid admin token even though
