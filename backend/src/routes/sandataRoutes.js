@@ -72,7 +72,7 @@ async function createEVVFromTimeEntry(timeEntryId) {
       JOIN clients c ON te.client_id = c.id
       JOIN users u ON te.caregiver_id = u.id
       LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
-      LEFT JOIN care_types ct ON te.care_type_id = ct.id
+      LEFT JOIN care_types ct ON c.care_type_id = ct.id
       LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
       WHERE te.id = $1
     `, [timeEntryId]);
