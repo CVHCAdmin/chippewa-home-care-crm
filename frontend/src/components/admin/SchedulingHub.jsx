@@ -52,6 +52,9 @@ const SchedulingHub = ({ token }) => {
   });
   const [selectedDays, setSelectedDays]             = useState([]);
   const [conflicts, setConflicts]                   = useState([]);
+  const [authBalance, setAuthBalance]               = useState(null);
+  const [otWarning, setOtWarning]                   = useState(null);
+  const [travelWarning, setTravelWarning]           = useState(null);
   const [biWeeklyAnchorDate, setBiWeeklyAnchorDate] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() - d.getDay()); return d.toISOString().split('T')[0];
   });
@@ -146,6 +149,32 @@ const SchedulingHub = ({ token }) => {
   useEffect(() => { if (mainTab === 'tools' && toolsTab === 'coverage') loadCoverage(); }, [mainTab, toolsTab, coverageWeekOf]);
   useEffect(() => { if (mainTab === 'staffing' && staffingTab === 'open-shifts') loadOpenShifts(); }, [mainTab, staffingTab, openShiftFilter]);
   useEffect(() => { if (mainTab === 'staffing' && staffingTab === 'swaps') { loadSwaps(); loadAbsences(); } }, [mainTab, staffingTab, swapFilter]);
+
+  // Scheduling warnings: auth balance, OT, travel time
+  useEffect(() => {
+    if (!formData.clientId || !showForm) { setAuthBalance(null); return; }
+    const hours = (new Date(`2000-01-01T${formData.endTime}`) - new Date(`2000-01-01T${formData.startTime}`)) / (1000*60*60);
+    if (hours <= 0) return;
+    fetch(`${API_BASE_URL}/api/authorizations/check/${formData.clientId}?hours=${hours}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    }).then(r => r.ok ? r.json() : null).then(d => setAuthBalance(d)).catch(() => setAuthBalance(null));
+  }, [formData.clientId, formData.startTime, formData.endTime, showForm]);
+
+  useEffect(() => {
+    if (!formData.caregiverId || !formData.date || !formData.startTime || !formData.endTime || !showForm) { setOtWarning(null); setTravelWarning(null); return; }
+    // OT check
+    fetch(`${API_BASE_URL}/api/scheduling/check-weekly-hours`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ caregiverId: formData.caregiverId, date: formData.date, startTime: formData.startTime, endTime: formData.endTime })
+    }).then(r => r.ok ? r.json() : null).then(d => setOtWarning(d)).catch(() => setOtWarning(null));
+    // Travel time check
+    if (formData.clientId) {
+      fetch(`${API_BASE_URL}/api/scheduling/check-travel-time`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ caregiverId: formData.caregiverId, clientId: formData.clientId, date: formData.date, startTime: formData.startTime, endTime: formData.endTime })
+      }).then(r => r.ok ? r.json() : null).then(d => setTravelWarning(d)).catch(() => setTravelWarning(null));
+    }
+  }, [formData.caregiverId, formData.clientId, formData.date, formData.startTime, formData.endTime, showForm]);
 
   const api = async (url, opts = {}) => {
     const res = await fetch(`${API_BASE_URL}${url}`, {
@@ -439,8 +468,9 @@ const SchedulingHub = ({ token }) => {
     finally { setEditSaving(false); }
   };
 
-  const handleReassign = async (scheduleId, newCaregiverId) => {
-    try { await api(`/api/schedules/${scheduleId}/reassign`, { method: 'PUT', body: JSON.stringify({ newCaregiverId }) }); showMsg('Reassigned!'); loadWeekView(); }
+  const [reassignReason, setReassignReason] = useState('admin_decision');
+  const handleReassign = async (scheduleId, newCaregiverId, reason) => {
+    try { await api(`/api/schedules/${scheduleId}/reassign`, { method: 'PUT', body: JSON.stringify({ newCaregiverId, reason: reason || reassignReason }) }); showMsg('Reassigned!'); loadWeekView(); setReassignReason('admin_decision'); }
     catch (e) { showMsg('Failed to reassign', 'error'); }
   };
 
@@ -1315,6 +1345,40 @@ const SchedulingHub = ({ token }) => {
                   </select>
                 </div>
 
+                {/* ── Scheduling Warnings ── */}
+                {authBalance && (
+                  <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.8rem', borderRadius: 8, fontSize: '0.82rem', fontWeight: 600,
+                    background: !authBalance.hasActiveAuth ? '#F3F4F6' : !authBalance.allowed ? '#FEE2E2' : authBalance.health_status === 'low' ? '#FEF3C7' : authBalance.health_status === 'expiring_soon' ? '#FEF3C7' : '#D1FAE5',
+                    color: !authBalance.hasActiveAuth ? '#6B7280' : !authBalance.allowed ? '#991B1B' : authBalance.health_status === 'low' || authBalance.health_status === 'expiring_soon' ? '#92400E' : '#065F46',
+                    border: `1px solid ${!authBalance.hasActiveAuth ? '#D1D5DB' : !authBalance.allowed ? '#FECACA' : authBalance.health_status === 'low' || authBalance.health_status === 'expiring_soon' ? '#FCD34D' : '#A7F3D0'}`
+                  }}>
+                    {!authBalance.hasActiveAuth ? 'No active authorization on file'
+                      : !authBalance.allowed ? `Authorization: ${authBalance.error}`
+                      : `Auth: ${authBalance.remaining_hours}h remaining (${authBalance.pct_used}% used)${authBalance.end_date ? ` — expires ${authBalance.end_date}` : ''}`}
+                    {authBalance.warnings?.map((w, i) => <div key={i} style={{ fontWeight: 400, marginTop: 2, fontSize: '0.78rem' }}>{w}</div>)}
+                  </div>
+                )}
+                {otWarning && otWarning.warnings?.length > 0 && (
+                  <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.8rem', borderRadius: 8, fontSize: '0.82rem',
+                    background: otWarning.overtimeHours > 0 ? '#FEF3C7' : '#FFFBEB',
+                    border: `1px solid ${otWarning.overtimeHours > 0 ? '#FCD34D' : '#FDE68A'}`,
+                    color: otWarning.overtimeHours > 0 ? '#92400E' : '#78350F' }}>
+                    {otWarning.warnings.map((w, i) => <div key={i} style={{ fontWeight: 600 }}>{w}</div>)}
+                    <div style={{ fontSize: '0.75rem', marginTop: 2, fontWeight: 400 }}>Current: {otWarning.currentWeeklyHours}h + This shift: {otWarning.proposedHours}h = {otWarning.projectedHours}h</div>
+                  </div>
+                )}
+                {travelWarning && travelWarning.hasTravelConflict && (
+                  <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.8rem', borderRadius: 8, fontSize: '0.82rem',
+                    background: '#FFF7ED', border: '1px solid #FDBA74', color: '#9A3412' }}>
+                    <div style={{ fontWeight: 600 }}>Travel time warning</div>
+                    {travelWarning.adjacentShifts.filter(s => s.isInsufficient).map((s, i) => (
+                      <div key={i} style={{ fontSize: '0.78rem', marginTop: 2 }}>
+                        {s.gapMinutes} min gap to {s.clientName} but ~{s.estimatedDriveMinutes} min drive ({s.distanceMiles} mi)
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div style={{ marginBottom: '1rem' }}>
                   <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Quick Presets</label>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
@@ -1426,8 +1490,20 @@ const SchedulingHub = ({ token }) => {
               <div style={{ fontSize: '0.82rem', color: '#6B7280', marginTop: '0.4rem' }}>Currently: <strong>{reassignModal.currentCaregiver.first_name} {reassignModal.currentCaregiver.last_name}</strong></div>
             </div>
             <div className='form-group'>
+              <label>Reason *</label>
+              <select value={reassignReason} onChange={(e) => setReassignReason(e.target.value)}
+                style={{ width: '100%', padding: '0.5rem', borderRadius: 8, border: '1px solid #D1D5DB', marginBottom: '0.75rem' }}>
+                <option value='admin_decision'>Admin Decision</option>
+                <option value='caregiver_request'>Caregiver Request</option>
+                <option value='client_request'>Client Request</option>
+                <option value='call_out'>Call Out / Absence</option>
+                <option value='schedule_optimization'>Schedule Optimization</option>
+                <option value='other'>Other</option>
+              </select>
+            </div>
+            <div className='form-group'>
               <label>Reassign to:</label>
-              <select onChange={(e) => { if (e.target.value) { handleReassign(reassignModal.schedule.id, e.target.value); setReassignModal(null); } }} defaultValue=''>
+              <select onChange={(e) => { if (e.target.value) { handleReassign(reassignModal.schedule.id, e.target.value, reassignReason); setReassignModal(null); } }} defaultValue=''>
                 <option value=''>Select caregiver...</option>
                 {caregivers.filter(cg => cg.id !== reassignModal.currentCaregiver.id).map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
               </select>

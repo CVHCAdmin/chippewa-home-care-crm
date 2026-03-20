@@ -94,7 +94,15 @@ router.get('/:caregiverId', verifyToken, async (req, res) => {
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes } = req.body;
-    
+
+    // Authorization enforcement
+    const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+    const shiftHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
+    const authCheck = await checkAuthorizationBalance(clientId, shiftHours);
+    if (!authCheck.allowed && req.query.force !== 'true') {
+      return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
+    }
+
     const scheduleId = uuidv4();
     const result = await db.query(
       `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes)
@@ -104,7 +112,7 @@ router.post('/', verifyToken, async (req, res) => {
     );
 
     await auditLog(req.user.id, 'CREATE', 'schedules', scheduleId, null, result.rows[0]);
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({ ...result.rows[0], authWarnings: authCheck.warnings });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -112,7 +120,7 @@ router.post('/', verifyToken, async (req, res) => {
 
 // PUT /api/schedules/:id/reassign - Admin reassigns schedule to different caregiver
 router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
-  const { newCaregiverId } = req.body;
+  const { newCaregiverId, reason } = req.body;
   const scheduleId = req.params.id;
 
   try {
@@ -165,8 +173,8 @@ router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
       RETURNING *
     `, [newCaregiverId, scheduleId]);
 
-    // Audit log the change
-    await auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, oldData, result.rows[0]);
+    // Audit log the change with reason code
+    await auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, oldData, result.rows[0], reason || null);
 
     console.log(`Schedule ${scheduleId} reassigned from caregiver ${oldData.caregiver_id} to ${newCaregiverId} by admin ${req.user.id}`);
 
@@ -194,7 +202,7 @@ router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
 router.delete('/:scheduleId', verifyToken, async (req, res) => {
   try {
     const { scheduleId } = req.params;
-    const { scope = 'all', date, deletePair } = req.query;
+    const { scope = 'all', date, deletePair, reason } = req.query;
 
     const current = await db.query('SELECT * FROM schedules WHERE id = $1', [scheduleId]);
     if (current.rows.length === 0) {
@@ -220,7 +228,7 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
         }
         throw e;
       }
-      await auditLog(req.user.id, 'CANCEL_OCCURRENCE', 'schedules', scheduleId, null, { date });
+      await auditLog(req.user.id, 'CANCEL_OCCURRENCE', 'schedules', scheduleId, null, { date }, reason || null);
       return res.json({ message: 'Occurrence cancelled', date, scheduleId });
     }
 
@@ -237,7 +245,7 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
           [endDateStr, scheduleId]
         );
         if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
-        await auditLog(req.user.id, 'END_PATTERN', 'schedules', scheduleId, shift, result.rows[0]);
+        await auditLog(req.user.id, 'END_PATTERN', 'schedules', scheduleId, shift, result.rows[0], reason || null);
         return res.json({ message: 'Recurring pattern ended', endDate: endDateStr, schedule: result.rows[0] });
       } catch (e) {
         if (e.message.includes('end_date')) {
@@ -256,7 +264,7 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
         [shift.split_shift_group_id]
       );
       for (const row of result.rows) {
-        await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row);
+        await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
       }
       return res.json({ message: 'Split shift pair deleted', deletedCount: result.rows.length });
     }
@@ -266,7 +274,7 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
       `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
       [scheduleId]
     );
-    await auditLog(req.user.id, 'DELETE', 'schedules', scheduleId, null, result.rows[0]);
+    await auditLog(req.user.id, 'DELETE', 'schedules', scheduleId, null, result.rows[0], reason || null);
     res.json({
       message: 'Schedule deleted',
       wasSplitShift: shift.is_split_shift || false,

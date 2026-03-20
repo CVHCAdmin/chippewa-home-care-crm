@@ -213,6 +213,10 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
         const wouldExceedOvertime = (projectedHours + shiftHours) > 40;
         const distance = calculateDistance(cg.latitude, cg.longitude, shift.client_lat, shift.client_lng);
         const hasCerts = hasRequiredCerts(cg.active_certifications, requiredCerts);
+        // Auth check — skip clients with exhausted authorizations
+        const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+        const shiftAuthCheck = await checkAuthorizationBalance(shift.client_id, shiftHours);
+        if (!shiftAuthCheck.allowed) return { ...cg, score: -1000, disqualified: true, reason: 'auth_exhausted' };
         if (hasConflict || wouldExceedHours || !hasCerts) return { ...cg, score: -1000, disqualified: true, reason: hasConflict ? 'conflict' : !hasCerts ? 'missing_certs' : 'exceeds_hours' };
         let score = 100 + Math.min(visitCount*3,30) - (projectedHours/maxHours)*20;
         if (wouldExceedOvertime) score -= 15;
@@ -264,6 +268,113 @@ router.post('/check-conflicts', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// POST /api/scheduling/check-weekly-hours — OT warning at schedule time
+router.post('/check-weekly-hours', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, date, startTime, endTime } = req.body;
+    if (!caregiverId || !startTime || !endTime) return res.status(400).json({ error: 'Missing required fields' });
+
+    const targetDate = date ? new Date(date + 'T12:00:00') : new Date();
+    const weekStart = new Date(targetDate); weekStart.setDate(targetDate.getDate() - targetDate.getDay()); weekStart.setHours(0,0,0,0);
+    const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 6); weekEnd.setHours(23,59,59,999);
+    const wsStr = weekStart.toISOString().split('T')[0];
+    const weStr = weekEnd.toISOString().split('T')[0];
+
+    const [oneTime, recurring, avail, cgName] = await Promise.all([
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date>=$2 AND date<=$3`, [caregiverId, wsStr, weStr]),
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL`, [caregiverId]),
+      db.query(`SELECT max_hours_per_week FROM caregiver_availability WHERE caregiver_id=$1`, [caregiverId]),
+      db.query(`SELECT first_name, last_name FROM users WHERE id=$1`, [caregiverId]),
+    ]);
+
+    const currentHours = (parseFloat(oneTime.rows[0]?.hours) || 0) + (parseFloat(recurring.rows[0]?.hours) || 0);
+    const proposedHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
+    const projectedHours = currentHours + proposedHours;
+    const maxHours = avail.rows[0]?.max_hours_per_week || 40;
+    const overtimeHours = Math.max(0, projectedHours - 40);
+    const name = cgName.rows[0] ? `${cgName.rows[0].first_name} ${cgName.rows[0].last_name}` : 'Caregiver';
+
+    const warnings = [];
+    if (projectedHours > maxHours) {
+      warnings.push(`${name} will exceed max hours: ${projectedHours.toFixed(1)}h / ${maxHours}h limit`);
+    }
+    if (overtimeHours > 0) {
+      warnings.push(`This puts ${name} at ${projectedHours.toFixed(1)}h this week (${overtimeHours.toFixed(1)}h overtime)`);
+    } else if (projectedHours > 35) {
+      warnings.push(`${name} approaching overtime: ${projectedHours.toFixed(1)}h this week`);
+    }
+
+    res.json({ currentWeeklyHours: parseFloat(currentHours.toFixed(2)), proposedHours: parseFloat(proposedHours.toFixed(2)), projectedHours: parseFloat(projectedHours.toFixed(2)), maxHours, overtimeHours: parseFloat(overtimeHours.toFixed(2)), warnings, caregiverName: name });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /api/scheduling/check-travel-time — Travel time warning for back-to-back shifts
+router.post('/check-travel-time', verifyToken, async (req, res) => {
+  try {
+    const { caregiverId, clientId, date, startTime, endTime } = req.body;
+    if (!caregiverId || !clientId || !date || !startTime || !endTime) return res.status(400).json({ error: 'Missing required fields' });
+
+    // Get proposed client location
+    const proposedClient = await db.query(`SELECT first_name, last_name, latitude, longitude FROM clients WHERE id=$1`, [clientId]);
+    if (!proposedClient.rows[0]?.latitude) return res.json({ hasTravelConflict: false, adjacentShifts: [], note: 'Client has no GPS coordinates set' });
+
+    const pLat = parseFloat(proposedClient.rows[0].latitude);
+    const pLng = parseFloat(proposedClient.rows[0].longitude);
+
+    // Get all caregiver shifts on same day
+    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+    const dayShifts = await db.query(`
+      SELECT s.start_time, s.end_time, s.client_id,
+        c.first_name as client_first, c.last_name as client_last,
+        c.latitude as client_lat, c.longitude as client_lng
+      FROM schedules s JOIN clients c ON s.client_id = c.id
+      WHERE s.caregiver_id = $1 AND s.is_active = true
+        AND (s.date = $2 OR s.day_of_week = $3)
+        AND s.client_id != $4
+      ORDER BY s.start_time
+    `, [caregiverId, date, dayOfWeek, clientId]);
+
+    const adjacentShifts = [];
+    for (const shift of dayShifts.rows) {
+      if (!shift.client_lat || !shift.client_lng) continue;
+
+      const sLat = parseFloat(shift.client_lat);
+      const sLng = parseFloat(shift.client_lng);
+      const distance = calculateDistance(pLat, pLng, sLat, sLng);
+      if (distance === null) continue;
+
+      const estimatedDriveMinutes = Math.round(distance * 2); // rough estimate
+
+      // Check if this shift is adjacent (ends before proposed starts, or starts after proposed ends)
+      let gapMinutes = null;
+      if (shift.end_time <= startTime) {
+        // This shift ends before proposed starts
+        gapMinutes = (new Date(`2000-01-01T${startTime}`) - new Date(`2000-01-01T${shift.end_time}`)) / 60000;
+      } else if (shift.start_time >= endTime) {
+        // This shift starts after proposed ends
+        gapMinutes = (new Date(`2000-01-01T${shift.start_time}`) - new Date(`2000-01-01T${endTime}`)) / 60000;
+      }
+
+      if (gapMinutes !== null && gapMinutes < 120) { // only flag if gap < 2 hours
+        adjacentShifts.push({
+          clientName: `${shift.client_first} ${shift.client_last}`,
+          startTime: shift.start_time,
+          endTime: shift.end_time,
+          distanceMiles: parseFloat(distance.toFixed(1)),
+          estimatedDriveMinutes,
+          gapMinutes: Math.round(gapMinutes),
+          isInsufficient: estimatedDriveMinutes > gapMinutes
+        });
+      }
+    }
+
+    res.json({
+      hasTravelConflict: adjacentShifts.some(s => s.isInsufficient),
+      adjacentShifts
+    });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // GET /api/scheduling/week-view
 router.get('/week-view', verifyToken, async (req, res) => {
   try {
@@ -297,6 +408,17 @@ router.post('/bulk-create', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { caregiverId, clientId, template, weeks, startDate, notes } = req.body;
     if (!caregiverId || !clientId || !template?.length) return res.status(400).json({ error: 'Missing required fields' });
+
+    // Authorization check for total weekly hours
+    const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+    const weeklyHours = template.reduce((sum, slot) => {
+      return sum + (new Date(`2000-01-01T${slot.endTime}`) - new Date(`2000-01-01T${slot.startTime}`)) / (1000*60*60);
+    }, 0);
+    const authCheck = await checkAuthorizationBalance(clientId, weeklyHours);
+    if (!authCheck.allowed && req.query.force !== 'true') {
+      return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
+    }
+
     const numWeeks = Math.min(Math.max(parseInt(weeks)||4, 1), 12);
     const start = startDate ? new Date(startDate) : new Date();
     start.setDate(start.getDate() - start.getDay());
@@ -313,7 +435,7 @@ router.post('/bulk-create', verifyToken, requireAdmin, async (req, res) => {
         created.push(result.rows[0]);
       }
     }
-    res.json({ success: true, created: created.length, skippedConflicts: conflicts.length, conflicts });
+    res.json({ success: true, created: created.length, skippedConflicts: conflicts.length, conflicts, authWarnings: authCheck.warnings });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

@@ -10,6 +10,11 @@ const CarePlans = ({ token }) => {
   const [isDirty, setIsDirty] = useState(false);
   const [expandedClient, setExpandedClient] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [showGenModal, setShowGenModal] = useState(null);
+  const [caregivers, setCaregivers] = useState([]);
+  const [genForm, setGenForm] = useState({
+    caregiverId: '', startTime: '09:00', endTime: '13:00', daysOfWeek: [], startDate: '', endDate: ''
+  });
   const [message, setMessage] = useState('');
   const [formData, setFormData] = useState({
     clientId: '',
@@ -35,7 +40,43 @@ const CarePlans = ({ token }) => {
 
   useEffect(() => {
     loadData();
+    loadCaregivers();
   }, []);
+
+  const loadCaregivers = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (r.ok) setCaregivers(await r.json());
+    } catch (e) {}
+  };
+
+  const handleGenerateSchedule = async (e) => {
+    e.preventDefault();
+    if (!genForm.caregiverId || !genForm.daysOfWeek.length) {
+      setMessage('Select a caregiver and at least one day'); return;
+    }
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/care-plans/${showGenModal.id}/generate-schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(genForm)
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Failed');
+      setMessage(`Created ${data.created} recurring schedule(s)${data.warnings?.length ? '. Warnings: ' + data.warnings.join(', ') : ''}`);
+      setShowGenModal(null);
+      setTimeout(() => setMessage(''), 5000);
+    } catch (err) {
+      setMessage('Error: ' + err.message);
+    }
+  };
+
+  const toggleGenDay = (day) => {
+    setGenForm(prev => ({
+      ...prev,
+      daysOfWeek: prev.daysOfWeek.includes(day) ? prev.daysOfWeek.filter(d => d !== day) : [...prev.daysOfWeek, day]
+    }));
+  };
 
   const loadData = async () => {
     try {
@@ -412,6 +453,12 @@ const CarePlans = ({ token }) => {
                                   {active && <span className="badge badge-success">Active</span>}
                                   {!active && <span className="badge badge-secondary">Archived</span>}
                                   <button
+                                    className="btn btn-sm btn-primary"
+                                    onClick={(e) => { e.stopPropagation(); setShowGenModal(plan); setGenForm({ caregiverId: '', startTime: '09:00', endTime: '13:00', daysOfWeek: [], startDate: plan.start_date?.split('T')[0] || '', endDate: plan.end_date?.split('T')[0] || '' }); }}
+                                  >
+                                    Generate Schedule
+                                  </button>
+                                  <button
                                     className="btn btn-sm btn-danger"
                                     onClick={() => handleDeletePlan(plan.id)}
                                   >
@@ -507,6 +554,56 @@ const CarePlans = ({ token }) => {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Generate Schedule Modal */}
+      {showGenModal && (
+        <div className="modal active">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h2>Generate Schedule from Care Plan</h2>
+              <button className="close-btn" onClick={() => setShowGenModal(null)}>x</button>
+            </div>
+            <div style={{ background: '#EFF6FF', borderRadius: 8, padding: '0.75rem', marginBottom: '1rem', fontSize: '0.85rem', color: '#1E40AF' }}>
+              <strong>{getServiceLabel(showGenModal.service_type)}</strong>
+              {showGenModal.frequency && <span> — {showGenModal.frequency}</span>}
+            </div>
+            <form onSubmit={handleGenerateSchedule}>
+              <div className="form-group">
+                <label>Caregiver *</label>
+                <select value={genForm.caregiverId} onChange={e => setGenForm(p => ({ ...p, caregiverId: e.target.value }))} required>
+                  <option value="">Select caregiver...</option>
+                  {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Days of Week *</label>
+                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                  {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((day, i) => (
+                    <button key={i} type="button" onClick={() => toggleGenDay(i)}
+                      style={{ padding: '0.4rem 0.7rem', borderRadius: 8, border: '1px solid #D1D5DB', cursor: 'pointer',
+                        background: genForm.daysOfWeek.includes(i) ? '#2ABBA7' : '#fff',
+                        color: genForm.daysOfWeek.includes(i) ? '#fff' : '#374151', fontWeight: 600, fontSize: '0.82rem' }}>
+                      {day}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="form-grid-2">
+                <div className="form-group"><label>Start Time *</label><input type="time" value={genForm.startTime} onChange={e => setGenForm(p => ({ ...p, startTime: e.target.value }))} required /></div>
+                <div className="form-group"><label>End Time *</label><input type="time" value={genForm.endTime} onChange={e => setGenForm(p => ({ ...p, endTime: e.target.value }))} required /></div>
+              </div>
+              <div className="form-grid-2">
+                <div className="form-group"><label>Effective Date</label><input type="date" value={genForm.startDate} onChange={e => setGenForm(p => ({ ...p, startDate: e.target.value }))} /></div>
+                <div className="form-group"><label>End Date</label><input type="date" value={genForm.endDate} onChange={e => setGenForm(p => ({ ...p, endDate: e.target.value }))} /></div>
+              </div>
+              <div className="modal-actions">
+                <button type="submit" className="btn btn-primary">Generate {genForm.daysOfWeek.length} Schedule{genForm.daysOfWeek.length !== 1 ? 's' : ''}</button>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowGenModal(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

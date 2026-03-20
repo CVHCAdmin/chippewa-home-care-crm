@@ -202,4 +202,62 @@ router.post('/mark-read', auth, async (req, res) => {
   }
 });
 
+// POST /api/push/shift-reminder-1hr — Send push reminders for shifts starting in ~1 hour
+// Designed to be called by external cron every 15 minutes
+router.post('/shift-reminder-1hr', auth, async (req, res) => {
+  try {
+    // Find shifts starting in 45-75 minutes from now
+    const result = await db.query(`
+      WITH upcoming AS (
+        SELECT s.id, s.caregiver_id, s.client_id, s.start_time, s.end_time,
+          c.first_name AS client_first, c.last_name AS client_last,
+          u.first_name AS cg_first, u.last_name AS cg_last
+        FROM schedules s
+        JOIN clients c ON s.client_id = c.id
+        JOIN users u ON s.caregiver_id = u.id
+        WHERE s.is_active = true
+          AND (
+            (s.date = CURRENT_DATE AND s.start_time BETWEEN (NOW()::time + INTERVAL '45 minutes') AND (NOW()::time + INTERVAL '75 minutes'))
+            OR (s.day_of_week = EXTRACT(DOW FROM NOW())::int AND s.date IS NULL
+                AND s.start_time BETWEEN (NOW()::time + INTERVAL '45 minutes') AND (NOW()::time + INTERVAL '75 minutes'))
+          )
+      )
+      SELECT * FROM upcoming
+      WHERE NOT EXISTS (
+        SELECT 1 FROM notifications n
+        WHERE n.user_id = upcoming.caregiver_id
+          AND n.type = 'shift_reminder_1hr'
+          AND n.created_at::date = CURRENT_DATE
+          AND n.message LIKE '%' || upcoming.client_first || ' ' || upcoming.client_last || '%'
+      )
+    `);
+
+    let sent = 0;
+    for (const shift of result.rows) {
+      const startFormatted = shift.start_time.substring(0, 5);
+      await sendPushToUser(shift.caregiver_id, {
+        title: 'Upcoming Shift - 1 Hour',
+        body: `You have a shift with ${shift.client_first} ${shift.client_last} at ${startFormatted}`,
+        icon: '/icon-192.png',
+        tag: `shift-reminder-${shift.id}-${new Date().toISOString().split('T')[0]}`,
+        data: { type: 'shift_reminder', scheduleId: shift.id }
+      });
+
+      // Also create in-app notification
+      await db.query(
+        `INSERT INTO notifications (id, user_id, type, title, message) VALUES ($1, $2, $3, $4, $5)`,
+        [uuidv4(), shift.caregiver_id, 'shift_reminder_1hr',
+         'Upcoming Shift',
+         `Shift with ${shift.client_first} ${shift.client_last} starts at ${startFormatted}`]
+      );
+      sent++;
+    }
+
+    res.json({ success: true, sent, total: result.rows.length });
+  } catch (error) {
+    console.error('Shift reminder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = { router, sendPushToUser };

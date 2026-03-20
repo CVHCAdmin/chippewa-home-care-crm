@@ -1,14 +1,16 @@
 // src/components/admin/DashboardOverview.jsx
 import React, { useState, useEffect } from 'react';
-import { getDashboardReferrals, getDashboardHours } from '../../config';
+import { getDashboardReferrals, getDashboardHours, API_BASE_URL } from '../../config';
 
 const DashboardOverview = ({ summary, token, onNavigate }) => {
   const [referrals, setReferrals] = useState([]);
   const [caregiverHours, setCaregiverHours] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [noShowStats, setNoShowStats] = useState(null);
 
   useEffect(() => {
     loadAnalytics();
+    loadNoShowStats();
   }, []);
 
   const loadAnalytics = async () => {
@@ -41,8 +43,32 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
     </div>
   );
 
+  const loadNoShowStats = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/no-show/stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.ok) setNoShowStats(await r.json());
+    } catch (e) { /* ignore */ }
+  };
+
   return (
     <>
+      {/* No-Show Alert Banner */}
+      {noShowStats && parseInt(noShowStats.open_count) > 0 && (
+        <div onClick={() => onNavigate && onNavigate('no-show-alerts')}
+          style={{ background: '#FEE2E2', border: '1px solid #FECACA', borderRadius: 12, padding: '0.75rem 1.25rem',
+            marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+          <span style={{ fontSize: '1.5rem' }}>&#x1F6A8;</span>
+          <div>
+            <strong style={{ color: '#991B1B' }}>{noShowStats.open_count} active no-show alert{parseInt(noShowStats.open_count) !== 1 ? 's' : ''}</strong>
+            <span style={{ color: '#B91C1C', marginLeft: 8, fontSize: '0.85rem' }}>
+              ({noShowStats.today_count} today) — Click to review
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Key Metrics */}
       <div className="grid">
         <div className="stat-card">

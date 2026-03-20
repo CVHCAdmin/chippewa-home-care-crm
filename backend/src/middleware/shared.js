@@ -24,13 +24,13 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-const auditLog = async (userId, action, tableName, recordId, oldData, newData) => {
+const auditLog = async (userId, action, tableName, recordId, oldData, newData, reasonCode) => {
   try {
     if (recordId && typeof recordId === 'string' && !recordId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) return;
     await db.query(
-      `INSERT INTO audit_logs (user_id, action, table_name, record_id, old_data, new_data)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [userId || '00000000-0000-0000-0000-000000000000', action, tableName, recordId, JSON.stringify(oldData), JSON.stringify(newData)]
+      `INSERT INTO audit_logs (user_id, action, table_name, record_id, old_data, new_data, reason_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [userId || '00000000-0000-0000-0000-000000000000', action, tableName, recordId, JSON.stringify(oldData), JSON.stringify(newData), reasonCode || null]
     );
   } catch (e) {
     console.error('Audit log error:', e.message);

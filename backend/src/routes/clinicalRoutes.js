@@ -109,6 +109,59 @@ router.delete('/care-plans/:id', verifyToken, requireAdmin, async (req, res) => 
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// ─── CARE PLAN → SCHEDULE GENERATION ─────────────────────────────────────────
+
+router.post('/care-plans/:id/generate-schedule', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { caregiverId, startTime, endTime, daysOfWeek, startDate, endDate } = req.body;
+    if (!caregiverId || !startTime || !endTime || !daysOfWeek?.length) {
+      return res.status(400).json({ error: 'caregiverId, startTime, endTime, and daysOfWeek are required' });
+    }
+
+    // Fetch care plan
+    const planResult = await db.query('SELECT * FROM care_plans WHERE id = $1', [req.params.id]);
+    if (planResult.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
+    const plan = planResult.rows[0];
+
+    // Authorization check
+    const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+    const shiftHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
+    const weeklyHours = shiftHours * daysOfWeek.length;
+    const authCheck = await checkAuthorizationBalance(plan.client_id, weeklyHours);
+    const warnings = [...(authCheck.warnings || [])];
+    if (!authCheck.allowed) {
+      warnings.push(authCheck.error);
+    }
+
+    // Create recurring schedules for each day
+    const created = [];
+    for (const dayOfWeek of daysOfWeek) {
+      const scheduleId = require('uuid').v4();
+      const result = await db.query(
+        `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, start_time, end_time, notes, frequency, effective_date, end_date)
+         VALUES ($1, $2, $3, 'recurring', $4, $5, $6, $7, 'weekly', $8, $9) RETURNING *`,
+        [scheduleId, caregiverId, plan.client_id, dayOfWeek, startTime, endTime,
+         `Generated from care plan: ${plan.service_type || 'General'}`,
+         startDate || plan.start_date || null,
+         endDate || plan.end_date || null]
+      );
+      created.push(result.rows[0]);
+      await auditLog(req.user.id, 'CREATE', 'schedules', scheduleId, null, result.rows[0], 'care_plan_generation');
+    }
+
+    res.status(201).json({
+      success: true,
+      created: created.length,
+      schedules: created,
+      carePlanId: req.params.id,
+      warnings
+    });
+  } catch (error) {
+    console.error('Generate schedule from care plan error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── INCIDENTS ────────────────────────────────────────────────────────────────
 
 router.get('/incidents/summary', verifyToken, requireAdmin, async (req, res) => {
@@ -225,6 +278,17 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
   try {
     const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, splitShift } = req.body;
     if (!caregiverId || !clientId || !startTime || !endTime) return res.status(400).json({ error: 'Missing required fields' });
+
+    // Authorization enforcement
+    const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+    let totalShiftHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
+    if (splitShift?.startTime && splitShift?.endTime) {
+      totalShiftHours += (new Date(`2000-01-01T${splitShift.endTime}`) - new Date(`2000-01-01T${splitShift.startTime}`)) / (1000 * 60 * 60);
+    }
+    const authCheck = await checkAuthorizationBalance(clientId, totalShiftHours);
+    if (!authCheck.allowed && req.query.force !== 'true') {
+      return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
+    }
 
     // ── Split shift handling ──
     if (splitShift) {

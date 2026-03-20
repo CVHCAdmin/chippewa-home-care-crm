@@ -165,6 +165,28 @@ router.post('/run-check', auth, async (req, res) => {
           [row.caregiver_id, row.client_id, row.shift_date]);
       }
 
+      // Push notify all active admins + create in-app notifications
+      try {
+        const { sendPushToUser } = require('./pushNotificationRoutes');
+        const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
+        for (const admin of admins.rows) {
+          await sendPushToUser(admin.id, {
+            title: 'No-Show Alert',
+            body: `${row.caregiver_name} missed shift with ${row.client_name} (scheduled ${row.expected_start})`,
+            icon: '/icon-192.png',
+            tag: `no-show-${row.schedule_id}-${row.shift_date}`,
+            data: { type: 'no_show_alert', scheduleId: row.schedule_id }
+          });
+          await db.query(
+            `INSERT INTO notifications (id, user_id, type, title, message) VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT DO NOTHING`,
+            [require('uuid').v4(), admin.id, 'no_show_alert',
+             'No-Show Alert',
+             `${row.caregiver_name} has not clocked in for ${row.client_name} (scheduled ${row.expected_start})`]
+          );
+        }
+      } catch (pushErr) { console.error('[No-show push]', pushErr.message); }
+
       alertsCreated++;
     }
 

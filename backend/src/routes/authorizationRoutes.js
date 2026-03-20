@@ -97,6 +97,36 @@ router.post('/', auth, requireAdmin, async (req, res) => {
   }
 });
 
+// ─── CHECK AUTHORIZATION BALANCE (for schedule creation) ─────────────────────
+router.get('/check/:clientId', auth, async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const hours = parseFloat(req.query.hours) || 0;
+    const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+    const result = await checkAuthorizationBalance(clientId, hours);
+    res.json({
+      hasActiveAuth: !!result.authorization,
+      allowed: result.allowed,
+      error: result.error,
+      warnings: result.warnings,
+      remaining_units: result.authorization ? parseFloat(result.authorization.remaining_units) : null,
+      remaining_hours: result.authorization
+        ? (result.authorization.unit_type === 'hourly'
+          ? parseFloat(result.authorization.remaining_units)
+          : parseFloat(result.authorization.remaining_units) / 4).toFixed(2)
+        : null,
+      authorized_units: result.authorization?.authorized_units || null,
+      used_units: result.authorization?.used_units || null,
+      pct_used: result.authorization?.pct_used || null,
+      end_date: result.authorization?.end_date || null,
+      health_status: result.authorization?.health_status || 'none',
+      unit_type: result.authorization?.unit_type || null
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── IMPORT FROM MIDAS CSV ────────────────────────────────────────────────────
 // MIDAS doesn't have an API - export CSV from portal, import here
 // Expected columns: MemberID, AuthNumber, ServiceCode, AuthorizedUnits, StartDate, EndDate
