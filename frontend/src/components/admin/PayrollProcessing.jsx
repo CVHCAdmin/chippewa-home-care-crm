@@ -516,7 +516,7 @@ const PayrollProcessing = ({ token }) => {
                         <td style={{ fontWeight: 600 }}>{shift.caregiver_first} {shift.caregiver_last}</td>
                         <td>{shift.client_first} {shift.client_last}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
-                          {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                          {new Date(String(shift.shift_date).split('T')[0] + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                         </td>
                         <td>
                           {shift.scheduled_start ? (
@@ -722,7 +722,7 @@ const PayrollProcessing = ({ token }) => {
             <div style={{ background: '#FEF3C7', borderRadius: 8, padding: '0.75rem', marginBottom: '1rem', fontSize: '0.85rem' }}>
               <strong>{resolveShift.caregiver_first} {resolveShift.caregiver_last}</strong> was scheduled for{' '}
               <strong>{resolveShift.client_first} {resolveShift.client_last}</strong> on{' '}
-              <strong>{new Date(resolveShift.shift_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</strong>
+              <strong>{new Date(String(resolveShift.shift_date).split('T')[0] + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</strong>
               {resolveShift.scheduled_start && <> ({formatTime(resolveShift.scheduled_start)} - {formatTime(resolveShift.scheduled_end)}, {formatMinutes(resolveShift.scheduled_minutes)})</>}
               {' '}but did not clock in.
             </div>
