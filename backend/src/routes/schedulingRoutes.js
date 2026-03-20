@@ -202,6 +202,15 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
       const existingConflicts = await db.query(`SELECT DISTINCT caregiver_id FROM schedules WHERE is_active=true AND date=$1 AND NOT (end_time<=$2 OR start_time>=$3)`, [shift.shift_date, shift.start_time, shift.end_time]);
       const conflictingIds = existingConflicts.rows.map(r => r.caregiver_id);
 
+      // Auth check — once per shift (per client), not per caregiver
+      const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+      const shiftAuthCheck = await checkAuthorizationBalance(shift.client_id, shiftHours);
+      if (!shiftAuthCheck.allowed) {
+        results.push({ shiftId: shift.id, client: `${shift.client_first} ${shift.client_last}`, date: shift.shift_date, time: `${shift.start_time} - ${shift.end_time}`, status: 'unfilled', reason: 'Authorization exhausted' });
+        failed++;
+        continue;
+      }
+
       const scored = caregivers.rows.map(cg => {
         const weeklyHours = hoursMap[cg.id] || 0;
         const maxHours = cg.max_hours_per_week || 40;
@@ -213,10 +222,6 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
         const wouldExceedOvertime = (projectedHours + shiftHours) > 40;
         const distance = calculateDistance(cg.latitude, cg.longitude, shift.client_lat, shift.client_lng);
         const hasCerts = hasRequiredCerts(cg.active_certifications, requiredCerts);
-        // Auth check — skip clients with exhausted authorizations
-        const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
-        const shiftAuthCheck = await checkAuthorizationBalance(shift.client_id, shiftHours);
-        if (!shiftAuthCheck.allowed) return { ...cg, score: -1000, disqualified: true, reason: 'auth_exhausted' };
         if (hasConflict || wouldExceedHours || !hasCerts) return { ...cg, score: -1000, disqualified: true, reason: hasConflict ? 'conflict' : !hasCerts ? 'missing_certs' : 'exceeds_hours' };
         let score = 100 + Math.min(visitCount*3,30) - (projectedHours/maxHours)*20;
         if (wouldExceedOvertime) score -= 15;
