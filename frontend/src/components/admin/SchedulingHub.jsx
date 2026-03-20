@@ -67,6 +67,7 @@ const SchedulingHub = ({ token }) => {
   const [weekOf, setWeekOf]               = useState(getWeekStart(new Date()).toISOString().split('T')[0]);
   const [weekData, setWeekData]           = useState(null);
   const [reassignModal, setReassignModal] = useState(null);
+  const [reassignReason, setReassignReason] = useState('admin_decision');
 
   // ── Calendar state ──
   const [calCurrentDate, setCalCurrentDate]         = useState(new Date());
@@ -468,7 +469,6 @@ const SchedulingHub = ({ token }) => {
     finally { setEditSaving(false); }
   };
 
-  const [reassignReason, setReassignReason] = useState('admin_decision');
   const handleReassign = async (scheduleId, newCaregiverId, reason) => {
     try { await api(`/api/schedules/${scheduleId}/reassign`, { method: 'PUT', body: JSON.stringify({ newCaregiverId, reason: reason || reassignReason }) }); showMsg('Reassigned!'); loadWeekView(); setReassignReason('admin_decision'); }
     catch (e) { showMsg('Failed to reassign', 'error'); }
