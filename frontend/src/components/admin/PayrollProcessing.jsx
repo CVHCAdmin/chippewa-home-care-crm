@@ -126,18 +126,21 @@ const PayrollProcessing = ({ token }) => {
     }
   };
 
-  const handleBulkApproveShifts = async () => {
+  const handleBulkApproveShifts = async (mode = 'clocked') => {
     try {
       const r = await fetch(`${API_BASE_URL}/api/payroll/shifts/approve-all`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ startDate: payPeriod.startDate, endDate: payPeriod.endDate })
+        body: JSON.stringify({ startDate: payPeriod.startDate, endDate: payPeriod.endDate, mode })
       });
       if (!r.ok) throw new Error('Failed to bulk approve');
       const result = await r.json();
       await loadShifts();
-      setMessage(`Approved ${result.approvedCount} shifts`);
-      setTimeout(() => setMessage(''), 3000);
+      const msg = mode === 'all'
+        ? `Approved ${result.approvedCount} shifts (${result.approvedClocked} clocked + ${result.approvedScheduled} at scheduled hours)`
+        : `Approved ${result.approvedCount} clocked shifts`;
+      setMessage(msg);
+      setTimeout(() => setMessage(''), 5000);
     } catch (error) {
       toast('Failed: ' + error.message, 'error');
     }
@@ -472,9 +475,13 @@ const PayrollProcessing = ({ token }) => {
                   <option value="all">All Caregivers</option>
                   {shiftCaregivers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
-                <button className="btn btn-sm btn-success" onClick={handleBulkApproveShifts}
+                <button className="btn btn-sm btn-success" onClick={() => handleBulkApproveShifts('clocked')}
                   disabled={!shiftData.shifts.some(s => ['verified', 'pending'].includes(s.status) && s.time_entry_id)}>
-                  Approve All Clocked Shifts
+                  Approve Clocked Shifts
+                </button>
+                <button className="btn btn-sm btn-warning" onClick={() => handleBulkApproveShifts('all')}
+                  disabled={!shiftData.shifts.some(s => ['verified', 'pending', 'missing_punch'].includes(s.status))}>
+                  Approve All at Scheduled Hours
                 </button>
               </div>
             </div>

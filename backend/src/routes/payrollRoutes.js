@@ -259,16 +259,26 @@ router.patch('/shifts/:id', auth, async (req, res) => {
 
 // ==================== BULK APPROVE SHIFTS ====================
 // POST /api/payroll/shifts/approve-all
-// Approves all verified/pending shifts that have matching clock-ins
+// mode: 'clocked' (default) — only shifts with clock-ins
+//        'all' — all shifts including missing punches (uses scheduled hours)
 
 router.post('/shifts/approve-all', auth, async (req, res) => {
-  const { startDate, endDate, caregiverId } = req.body;
+  const { startDate, endDate, caregiverId, mode = 'clocked' } = req.body;
   if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required' });
 
   try {
-    let query = `
+    const params = [req.user.id, startDate, endDate];
+    let approvedClocked = 0, approvedScheduled = 0;
+
+    // Step 1: Approve clocked shifts (discard junk <2 min clock-ins by using scheduled hours instead)
+    let clockedQuery = `
       UPDATE payroll_shift_reviews SET
         status = 'approved',
+        payable_minutes = CASE
+          WHEN actual_minutes IS NOT NULL AND actual_minutes >= 2 THEN payable_minutes
+          WHEN scheduled_minutes IS NOT NULL THEN scheduled_minutes
+          ELSE payable_minutes
+        END,
         reviewed_by = $1,
         reviewed_at = NOW(),
         updated_at = NOW()
@@ -276,12 +286,31 @@ router.post('/shifts/approve-all', auth, async (req, res) => {
         AND status IN ('verified', 'pending')
         AND time_entry_id IS NOT NULL
     `;
-    const params = [req.user.id, startDate, endDate];
+    if (caregiverId) { params.push(caregiverId); clockedQuery += ` AND caregiver_id = $${params.length}`; }
+    const clockedResult = await db.query(clockedQuery + ' RETURNING id', params);
+    approvedClocked = clockedResult.rows.length;
 
-    if (caregiverId) { params.push(caregiverId); query += ` AND caregiver_id = $${params.length}`; }
+    // Step 2: If mode is 'all', also approve missing punches using scheduled hours
+    if (mode === 'all') {
+      const schedParams = [req.user.id, startDate, endDate];
+      let schedQuery = `
+        UPDATE payroll_shift_reviews SET
+          status = 'approved',
+          payable_minutes = scheduled_minutes,
+          resolution_notes = 'Bulk approved at scheduled hours',
+          reviewed_by = $1,
+          reviewed_at = NOW(),
+          updated_at = NOW()
+        WHERE pay_period_start = $2 AND pay_period_end = $3
+          AND status = 'missing_punch'
+          AND scheduled_minutes IS NOT NULL
+      `;
+      if (caregiverId) { schedParams.push(caregiverId); schedQuery += ` AND caregiver_id = $${schedParams.length}`; }
+      const schedResult = await db.query(schedQuery + ' RETURNING id', schedParams);
+      approvedScheduled = schedResult.rows.length;
+    }
 
-    const result = await db.query(query + ' RETURNING id', params);
-    res.json({ success: true, approvedCount: result.rows.length });
+    res.json({ success: true, approvedCount: approvedClocked + approvedScheduled, approvedClocked, approvedScheduled });
   } catch (error) {
     console.error('Bulk approve error:', error);
     res.status(500).json({ error: error.message });
