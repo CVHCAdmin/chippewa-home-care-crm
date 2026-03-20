@@ -28,6 +28,15 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
     }
   };
 
+  const loadNoShowStats = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/no-show/stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.ok) setNoShowStats(await r.json());
+    } catch (e) { /* ignore */ }
+  };
+
   // Helper to safely format currency (handles strings from PostgreSQL)
   const formatCurrency = (value) => {
     const num = parseFloat(value) || 0;
@@ -42,15 +51,6 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
       <style>{"@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }"}</style>
     </div>
   );
-
-  const loadNoShowStats = async () => {
-    try {
-      const r = await fetch(`${API_BASE_URL}/api/no-show/stats`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (r.ok) setNoShowStats(await r.json());
-    } catch (e) { /* ignore */ }
-  };
 
   return (
     <>
