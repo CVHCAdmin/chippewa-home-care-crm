@@ -10,7 +10,7 @@ router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate,
-              address, city, state, zip, latitude, longitude
+              address, city, state, zip, latitude, longitude, ivr_pin
        FROM users WHERE role = 'caregiver' AND is_active = true ORDER BY first_name`
     );
     res.json(result.rows);

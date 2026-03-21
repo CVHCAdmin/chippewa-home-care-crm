@@ -1076,6 +1076,18 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     );
   };
 
+  // ── IVR PIN state ──
+  const [ivrPin, setIvrPin] = useState(null);
+  useEffect(() => {
+    if (user?.id && token) {
+      fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } })
+        .then(r => r.ok ? r.json() : []).then(list => {
+          const me = Array.isArray(list) ? list.find(c => c.id === user.id) : null;
+          if (me?.ivr_pin) setIvrPin(me.ivr_pin);
+        }).catch(() => {});
+    }
+  }, [user?.id]);
+
   // ── Change Password state ──
   const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' });
   const [pwLoading, setPwLoading] = useState(false);
@@ -1138,6 +1150,21 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           {location ? <>GPS Active (±{location.accuracy?.toFixed(0)}m)</> : <>{locationError || 'Location unavailable'} - Clock in still works</>}
         </div>
       </div>
+      {ivrPin && (
+        <div className="card">
+          <div className="card-title">Phone Clock-In (IVR)</div>
+          <div style={{ fontSize: '0.88rem', color: '#374151', marginBottom: '0.5rem' }}>
+            Can't use the app? Call in to clock in/out by phone.
+          </div>
+          <div style={{ background: '#EFF6FF', borderRadius: 8, padding: '0.75rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.78rem', color: '#6B7280', marginBottom: '0.25rem' }}>Your PIN</div>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: '#1E40AF', letterSpacing: '0.3rem' }}>{ivrPin}</div>
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#9CA3AF', marginTop: '0.5rem', textAlign: 'center' }}>
+            Call your office Twilio number, enter this PIN, then the client's 3-digit code.
+          </div>
+        </div>
+      )}
       <button className="btn btn-danger btn-block" onClick={onLogout}>Log Out</button>
     </>
   );
