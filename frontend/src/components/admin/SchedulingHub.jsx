@@ -55,6 +55,7 @@ const SchedulingHub = ({ token }) => {
   const [authBalance, setAuthBalance]               = useState(null);
   const [otWarning, setOtWarning]                   = useState(null);
   const [travelWarning, setTravelWarning]           = useState(null);
+  const [cgPatterns, setCgPatterns]                  = useState(null);
   const [biWeeklyAnchorDate, setBiWeeklyAnchorDate] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() - d.getDay()); return d.toISOString().split('T')[0];
   });
@@ -369,6 +370,12 @@ const SchedulingHub = ({ token }) => {
     setSelectedCaregiverId(cgId);
     setFormData(prev => ({ ...prev, caregiverId: cgId }));
     loadCaregiverSchedules(cgId);
+    // Load reliability patterns
+    if (cgId) {
+      fetch(`${API_BASE_URL}/api/dashboard/caregiver-patterns/${cgId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      }).then(r => r.ok ? r.json() : null).then(d => setCgPatterns(d)).catch(() => setCgPatterns(null));
+    } else { setCgPatterns(null); }
   };
 
   const toggleDaySelection = (idx) => setSelectedDays(prev => prev.includes(idx) ? prev.filter(d => d !== idx) : [...prev, idx].sort((a, b) => a - b));
@@ -1243,6 +1250,18 @@ const SchedulingHub = ({ token }) => {
                 {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
               </select>
             </div>
+
+            {cgPatterns && cgPatterns.riskDays?.length > 0 && (
+              <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.8rem', borderRadius: 8, fontSize: '0.82rem',
+                background: '#FFF7ED', border: '1px solid #FDBA74', color: '#9A3412' }}>
+                <div style={{ fontWeight: 700, marginBottom: 2 }}>Reliability alert ({cgPatterns.overallReliability}% overall)</div>
+                {cgPatterns.riskDays.map((d, i) => (
+                  <div key={i} style={{ fontSize: '0.78rem' }}>
+                    {d.day}: {d.reliabilityPct}% reliable ({d.absences} absences, {d.noShows} no-shows, {d.lateArrivals} late in {cgPatterns.periodMonths}mo)
+                  </div>
+                ))}
+              </div>
+            )}
 
             {conflicts.length > 0 && (
               <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px' }}>

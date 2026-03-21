@@ -71,4 +71,161 @@ router.get('/caregiver-hours', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// GET /api/dashboard/live-board — Real-time shift status for today
+router.get('/live-board', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        s.id AS schedule_id,
+        s.caregiver_id,
+        s.client_id,
+        s.start_time AS scheduled_start,
+        s.end_time AS scheduled_end,
+        u.first_name AS caregiver_first,
+        u.last_name AS caregiver_last,
+        u.phone AS caregiver_phone,
+        u.latitude AS caregiver_lat,
+        u.longitude AS caregiver_lng,
+        c.first_name AS client_first,
+        c.last_name AS client_last,
+        c.address AS client_address,
+        c.city AS client_city,
+        c.latitude AS client_lat,
+        c.longitude AS client_lng,
+        te.id AS time_entry_id,
+        te.start_time AS clock_in_time,
+        te.end_time AS clock_out_time,
+        te.clock_in_location,
+        te.clock_out_location,
+        te.duration_minutes,
+        CASE
+          WHEN te.end_time IS NOT NULL THEN 'completed'
+          WHEN te.start_time IS NOT NULL AND te.end_time IS NULL THEN 'clocked_in'
+          WHEN s.start_time <= NOW()::time AND (NOW()::time - s.start_time) > INTERVAL '15 minutes' AND te.id IS NULL THEN 'late'
+          WHEN s.start_time <= NOW()::time AND te.id IS NULL THEN 'starting'
+          ELSE 'upcoming'
+        END AS shift_status,
+        CASE
+          WHEN te.start_time IS NOT NULL AND te.end_time IS NULL
+          THEN ROUND(EXTRACT(EPOCH FROM (NOW() - te.start_time)) / 60)
+          ELSE NULL
+        END AS minutes_elapsed,
+        (
+          SELECT jsonb_agg(jsonb_build_object('lat', gt.latitude, 'lng', gt.longitude, 'ts', gt.timestamp))
+          FROM gps_tracking gt
+          WHERE gt.time_entry_id = te.id
+          ORDER BY gt.timestamp DESC
+          LIMIT 20
+        ) AS gps_trail
+      FROM schedules s
+      JOIN users u ON s.caregiver_id = u.id
+      JOIN clients c ON s.client_id = c.id
+      LEFT JOIN time_entries te
+        ON te.caregiver_id = s.caregiver_id
+        AND te.client_id = s.client_id
+        AND DATE(te.start_time) = CURRENT_DATE
+      WHERE s.is_active = true
+        AND u.is_active = true
+        AND (
+          s.date = CURRENT_DATE
+          OR (s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::int
+              AND s.date IS NULL
+              AND (s.effective_date IS NULL OR s.effective_date <= CURRENT_DATE))
+        )
+      ORDER BY s.start_time ASC
+    `);
+
+    const shifts = result.rows;
+    const stats = {
+      total: shifts.length,
+      clocked_in: shifts.filter(s => s.shift_status === 'clocked_in').length,
+      completed: shifts.filter(s => s.shift_status === 'completed').length,
+      late: shifts.filter(s => s.shift_status === 'late').length,
+      upcoming: shifts.filter(s => s.shift_status === 'upcoming').length,
+      starting: shifts.filter(s => s.shift_status === 'starting').length,
+    };
+
+    res.json({ shifts, stats, asOf: new Date().toISOString() });
+  } catch (error) {
+    console.error('Live board error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/dashboard/caregiver-patterns/:caregiverId — Predictive scheduling data
+router.get('/caregiver-patterns/:caregiverId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { caregiverId } = req.params;
+    const months = parseInt(req.query.months) || 6;
+
+    const [absences, noShows, lateClockIns, totalShifts] = await Promise.all([
+      // Absences by day of week
+      db.query(`
+        SELECT EXTRACT(DOW FROM date)::int AS day_of_week, type, COUNT(*) AS count
+        FROM absences WHERE caregiver_id = $1 AND date >= CURRENT_DATE - ($2 || ' months')::interval
+        GROUP BY day_of_week, type ORDER BY day_of_week
+      `, [caregiverId, months]),
+
+      // No-shows by day of week
+      db.query(`
+        SELECT EXTRACT(DOW FROM shift_date)::int AS day_of_week, COUNT(*) AS count
+        FROM noshow_alerts WHERE caregiver_id = $1 AND shift_date >= CURRENT_DATE - ($2 || ' months')::interval
+        GROUP BY day_of_week ORDER BY day_of_week
+      `, [caregiverId, months]),
+
+      // Late clock-ins (>15 min after scheduled start) by day of week
+      db.query(`
+        SELECT EXTRACT(DOW FROM DATE(te.start_time))::int AS day_of_week, COUNT(*) AS count,
+          ROUND(AVG(EXTRACT(EPOCH FROM (te.start_time::time - s.start_time)) / 60)) AS avg_minutes_late
+        FROM time_entries te
+        JOIN schedules s ON te.schedule_id = s.id
+        WHERE te.caregiver_id = $1
+          AND te.is_complete = true
+          AND DATE(te.start_time) >= CURRENT_DATE - ($2 || ' months')::interval
+          AND (te.start_time::time - s.start_time) > INTERVAL '15 minutes'
+        GROUP BY day_of_week ORDER BY day_of_week
+      `, [caregiverId, months]),
+
+      // Total shifts by day of week (for percentages)
+      db.query(`
+        SELECT EXTRACT(DOW FROM DATE(te.start_time))::int AS day_of_week, COUNT(*) AS count
+        FROM time_entries te
+        WHERE te.caregiver_id = $1 AND te.is_complete = true
+          AND DATE(te.start_time) >= CURRENT_DATE - ($2 || ' months')::interval
+        GROUP BY day_of_week ORDER BY day_of_week
+      `, [caregiverId, months]),
+    ]);
+
+    // Build day-of-week reliability map
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const patterns = dayNames.map((name, dow) => {
+      const total = totalShifts.rows.find(r => r.day_of_week === dow)?.count || 0;
+      const absent = absences.rows.filter(r => r.day_of_week === dow).reduce((s, r) => s + parseInt(r.count), 0);
+      const noShow = noShows.rows.find(r => r.day_of_week === dow)?.count || 0;
+      const late = lateClockIns.rows.find(r => r.day_of_week === dow)?.count || 0;
+      const avgLate = lateClockIns.rows.find(r => r.day_of_week === dow)?.avg_minutes_late || 0;
+      const issues = absent + noShow + late;
+      const reliability = total > 0 ? Math.round(((total - issues) / total) * 100) : 100;
+
+      return { day: name, dayOfWeek: dow, totalShifts: parseInt(total), absences: parseInt(absent), noShows: parseInt(noShow), lateArrivals: parseInt(late), avgMinutesLate: parseInt(avgLate), reliabilityPct: reliability };
+    });
+
+    // Flag problematic days
+    const riskDays = patterns.filter(p => p.totalShifts >= 3 && p.reliabilityPct < 80);
+
+    res.json({
+      caregiverId,
+      periodMonths: months,
+      patterns,
+      riskDays,
+      overallReliability: patterns.reduce((s, p) => s + p.totalShifts, 0) > 0
+        ? Math.round(patterns.reduce((s, p) => s + (p.reliabilityPct * p.totalShifts), 0) / Math.max(1, patterns.reduce((s, p) => s + p.totalShifts, 0)))
+        : 100
+    });
+  } catch (error) {
+    console.error('Caregiver patterns error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

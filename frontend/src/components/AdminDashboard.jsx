@@ -10,6 +10,7 @@ import ImpersonationModal from './ImpersonationModal';
 import DashboardOverview from './admin/DashboardOverview';
 
 // Lazy-loaded admin pages
+const LiveBoard = React.lazy(() => import('./admin/LiveBoard'));
 const ReferralSources = React.lazy(() => import('./admin/ReferralSources'));
 const ClientsManagement = React.lazy(() => import('./admin/ClientsManagement'));
 const CaregiverManagement = React.lazy(() => import('./admin/CaregiverManagement'));
@@ -65,6 +66,7 @@ const NAV_SECTIONS = [
     id: 'scheduling', label: 'Scheduling', icon: '📅',
     items: [
       { id: 'scheduling', label: 'Schedule Hub', icon: '📅' },
+      { id: 'live-board', label: 'Live Board', icon: '📡' },
       { id: 'emergency-coverage', label: 'Emergency Coverage', icon: '🚨' },
       { id: 'no-show-alerts', label: 'No-Show Alerts', icon: '⏰' },
       { id: 'route-optimizer', label: 'Route Optimizer', icon: '🗺️' },
@@ -284,6 +286,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'family-portal': return <FamilyPortalAdmin token={token} />;
       case 'alerts': return <AlertsManagement token={token} />;
       case 'communication-log': return <CommunicationLog token={token} entityType='client' entityId={null} entityName='All Entries' />;
+      case 'live-board': return <LiveBoard token={token} />;
       case 'no-show-alerts': return <NoShowAlerts token={token} />;
       case 'form-builder': return <FormBuilder token={token} />;
       case 'revenue-forecast': return <RevenueForecast token={token} />;

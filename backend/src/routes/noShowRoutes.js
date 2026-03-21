@@ -187,6 +187,29 @@ router.post('/run-check', auth, async (req, res) => {
         }
       } catch (pushErr) { console.error('[No-show push]', pushErr.message); }
 
+      // SMS client/family when caregiver is late (if config allows)
+      if (config.notify_client_family) {
+        try {
+          // Notify client directly
+          const clientInfo = await db.query(`SELECT phone, first_name FROM clients WHERE id = $1 AND phone IS NOT NULL`, [row.client_id]);
+          if (clientInfo.rows[0]?.phone) {
+            await sendSMS(clientInfo.rows[0].phone,
+              `CVHC Update: Your caregiver ${row.caregiver_name} is running late for today's visit (scheduled ${row.expected_start}). Our office has been notified and is working on it. We apologize for the inconvenience.`
+            );
+          }
+          // Notify family members
+          const familyMembers = await db.query(
+            `SELECT fm.phone, fm.first_name FROM family_members fm WHERE fm.client_id = $1 AND fm.is_active = true AND fm.phone IS NOT NULL`,
+            [row.client_id]
+          );
+          for (const fm of familyMembers.rows) {
+            await sendSMS(fm.phone,
+              `CVHC Update: ${row.caregiver_name} is running late for ${row.client_name}'s visit today (scheduled ${row.expected_start}). Our office is following up. Call us with questions.`
+            );
+          }
+        } catch (famErr) { console.error('[No-show family SMS]', famErr.message); }
+      }
+
       alertsCreated++;
     }
 
