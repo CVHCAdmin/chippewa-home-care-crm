@@ -422,7 +422,7 @@ router.post('/admin/invite', auth, async (req, res) => {
         updated_at        = NOW()
     `, [clientId, email, inviteToken, inviteExpires]);
 
-    const inviteUrl = `${process.env.FRONTEND_URL || 'https://cvhc-crm.netlify.app'}/portal/setup?token=${inviteToken}`;
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com'}/portal/setup?token=${inviteToken}`;
     const clientName = `${client.rows[0].first_name} ${client.rows[0].last_name}`;
 
     // Send invite email (non-blocking — still returns success if email fails)

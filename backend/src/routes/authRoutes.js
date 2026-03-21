@@ -273,7 +273,7 @@ router.post('/forgot-password', async (req, res) => {
 
     // Send reset email
     const { sendPasswordReset } = require('../services/emailService');
-    const frontendUrl = process.env.FRONTEND_URL || 'https://cvhc-crm.netlify.app';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com';
     const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
 
     await sendPasswordReset({ to: user.email, userName: user.first_name, resetUrl });

@@ -5,7 +5,7 @@ const sgMail = require('@sendgrid/mail');
 const SENDGRID_API_KEY  = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL        = process.env.SENDGRID_FROM_EMAIL || 'noreply@chippewahomecare.com';
 const AGENCY_NAME       = process.env.AGENCY_NAME || 'Chippewa Valley Home Care';
-const FRONTEND_URL      = process.env.FRONTEND_URL || 'https://cvhc-crm.netlify.app';
+const FRONTEND_URL      = process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com';
 
 const isConfigured = SENDGRID_API_KEY && SENDGRID_API_KEY !== 'optional';
 
