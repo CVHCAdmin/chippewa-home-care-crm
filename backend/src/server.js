@@ -196,6 +196,7 @@ app.use('/api/forms',             verifyToken, require('./routes/formBuilderRout
 app.use('/api/forecast',          verifyToken, require('./routes/forecastRoutes'));
 app.use('/api/payments',              verifyToken, require('./routes/paymentsRoutes'));
 app.use('/api/schedule-exceptions',  verifyToken, require('./routes/scheduleExceptionsRoutes'));
+app.use('/api/time-off',            verifyToken, require('./routes/timeOffRoutes'));
 app.use('/api/ivr',                 require('./routes/ivrRoutes')); // No auth — Twilio webhooks are public
 
 // ── EXPLICIT ROUTES (Express path-boundary workarounds) ──────────────────────

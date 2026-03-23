@@ -50,6 +50,7 @@ const BillingEngine = React.lazy(() => import('./admin/BillingEngine'));
 const ChangePassword = React.lazy(() => import('./admin/ChangePassword'));
 const MessageBoard = React.lazy(() => import('./admin/MessageBoard'));
 const IntegrationsHub = React.lazy(() => import('./admin/IntegrationsHub'));
+const TimeOffManagement = React.lazy(() => import('./admin/TimeOffManagement'));
 
 const NAV_SECTIONS = [
   {
@@ -88,6 +89,7 @@ const NAV_SECTIONS = [
       { id: 'caregivers', label: 'Caregivers', icon: '👥' },
       { id: 'performance', label: 'Performance', icon: '⭐' },
       { id: 'applications', label: 'Job Applications', icon: '📝' },
+      { id: 'time-off', label: 'Time Off Requests', icon: '🏖️' },
     ]
   },
   {
@@ -290,6 +292,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'no-show-alerts': return <NoShowAlerts token={token} />;
       case 'form-builder': return <FormBuilder token={token} />;
       case 'revenue-forecast': return <RevenueForecast token={token} />;
+      case 'time-off': return <TimeOffManagement token={token} />;
       default: return <DashboardOverview summary={summary} token={token} onNavigate={handlePageClick} />;
     }
   };

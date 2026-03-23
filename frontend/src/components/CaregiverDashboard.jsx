@@ -71,7 +71,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     notes: ''
   });
   const [timeOffRequests, setTimeOffRequests] = useState([]);
-  const [newTimeOff, setNewTimeOff] = useState({ startDate: '', endDate: '', reason: '' });
+  const [newTimeOff, setNewTimeOff] = useState({ startDate: '', endDate: '', type: 'vacation', reason: '' });
   const [message, setMessage] = useState({ text: '', type: '' });
   const [showMissReport, setShowMissReport] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -224,7 +224,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const loadTimeOffRequests = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/absences/my`, {
+      const res = await fetch(`${API_BASE_URL}/api/time-off/my`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) setTimeOffRequests(await res.json());
@@ -535,21 +535,34 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     if (!newTimeOff.startDate || !newTimeOff.endDate) return showMsg('Select dates', 'error');
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/absences`, {
+      const res = await fetch(`${API_BASE_URL}/api/time-off`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
-          caregiverId: user.id,
-          absenceType: 'time_off_request',
           startDate: newTimeOff.startDate,
           endDate: newTimeOff.endDate,
-          reason: newTimeOff.reason,
-          status: 'pending'
+          type: newTimeOff.type,
+          reason: newTimeOff.reason
         })
       });
       if (!res.ok) throw new Error('Failed');
       showMsg('Request submitted!');
-      setNewTimeOff({ startDate: '', endDate: '', reason: '' });
+      setNewTimeOff({ startDate: '', endDate: '', type: 'vacation', reason: '' });
+      loadTimeOffRequests();
+    } catch (error) {
+      showMsg(error.message, 'error');
+    }
+  };
+
+  const handleCancelTimeOff = async (id) => {
+    if (!confirm('Cancel this time-off request?')) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/time-off/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed');
+      showMsg('Request cancelled');
       loadTimeOffRequests();
     } catch (error) {
       showMsg(error.message, 'error');
@@ -921,25 +934,42 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             </div>
           </div>
           <div className="form-group">
-            <label>Reason</label>
-            <input type="text" value={newTimeOff.reason} onChange={(e) => setNewTimeOff({ ...newTimeOff, reason: e.target.value })} placeholder="Vacation, etc." />
+            <label>Type</label>
+            <select value={newTimeOff.type} onChange={(e) => setNewTimeOff({ ...newTimeOff, type: e.target.value })}>
+              <option value="vacation">Vacation</option>
+              <option value="sick">Sick Leave</option>
+              <option value="personal">Personal</option>
+              <option value="other">Other</option>
+            </select>
           </div>
-          <button type="submit" className="btn btn-primary">Submit</button>
+          <div className="form-group">
+            <label>Reason</label>
+            <input type="text" value={newTimeOff.reason} onChange={(e) => setNewTimeOff({ ...newTimeOff, reason: e.target.value })} placeholder="Optional details..." />
+          </div>
+          <button type="submit" className="btn btn-primary">Submit Request</button>
         </form>
       </div>
       <div className="card">
         <h4 style={{ margin: '0 0 1rem 0' }}>My Requests</h4>
-        {timeOffRequests.length === 0 ? <p className="text-muted text-center">None</p> : (
+        {timeOffRequests.length === 0 ? <p className="text-muted text-center">No time-off requests</p> : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {timeOffRequests.map(r => (
               <div key={r.id} style={{ padding: '0.75rem', borderRadius: '6px', background: r.status === 'approved' ? '#D1FAE5' : r.status === 'denied' ? '#FEE2E2' : '#FEF3C7', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ fontWeight: '500' }}>{formatDate(r.start_date)} - {formatDate(r.end_date)}</div>
-                  {r.reason && <div style={{ fontSize: '0.85rem', color: '#666' }}>{r.reason}</div>}
+                  <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                    {(r.type || 'other').charAt(0).toUpperCase() + (r.type || 'other').slice(1)}
+                    {r.reason ? ` — ${r.reason}` : ''}
+                  </div>
                 </div>
-                <span style={{ padding: '0.25rem 0.75rem', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '600', background: r.status === 'approved' ? '#059669' : r.status === 'denied' ? '#DC2626' : '#D97706', color: '#fff' }}>
-                  {(r.status || 'pending').toUpperCase()}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ padding: '0.25rem 0.75rem', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '600', background: r.status === 'approved' ? '#059669' : r.status === 'denied' ? '#DC2626' : '#D97706', color: '#fff' }}>
+                    {(r.status || 'pending').toUpperCase()}
+                  </span>
+                  {r.status === 'pending' && (
+                    <button onClick={() => handleCancelTimeOff(r.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#DC2626', padding: '0.25rem' }} title="Cancel request">✕</button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
