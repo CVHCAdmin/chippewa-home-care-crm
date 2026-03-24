@@ -192,6 +192,11 @@ router.get('/portal/me', clientAuth, async (req, res) => {
 // PORTAL: GET UPCOMING SCHEDULED VISITS
 // GET /api/client-portal/portal/visits
 // Query: ?limit=20&offset=0&past=false
+//
+// Merges two sources:
+//  1. scheduled_visits  — one-off visits created by admin via portal
+//  2. schedules         — recurring/one-off shifts from the main scheduler
+//     Recurring schedules (day_of_week) are expanded into the next 4 weeks.
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/portal/visits', clientAuth, async (req, res) => {
   const limit  = Math.min(parseInt(req.query.limit)  || 20, 50);
@@ -199,23 +204,136 @@ router.get('/portal/visits', clientAuth, async (req, res) => {
   const past   = req.query.past === 'true';
 
   try {
-    const result = await db.query(`
+    // 1. Explicit scheduled_visits (portal-created)
+    const svResult = await db.query(`
       SELECT
-        sv.id, sv.scheduled_date, sv.start_time, sv.end_time, sv.status, sv.notes,
-        sv.cancelled_reason,
+        sv.id, sv.scheduled_date, sv.start_time::text, sv.end_time::text,
+        sv.status, sv.notes, sv.client_notes, sv.cancelled_reason,
+        sv.caregiver_id,
+        sv.source_schedule_id as schedule_id,
         u.first_name as caregiver_first_name,
         u.last_name  as caregiver_last_name,
-        u.phone      as caregiver_phone
+        u.phone      as caregiver_phone,
+        'scheduled_visit' as source
       FROM scheduled_visits sv
       JOIN users u ON sv.caregiver_id = u.id
       WHERE sv.client_id = $1
         AND sv.scheduled_date ${past ? '<' : '>='} CURRENT_DATE
         AND sv.status != 'cancelled'
-      ORDER BY sv.scheduled_date ${past ? 'DESC' : 'ASC'}, sv.start_time ASC
-      LIMIT $2 OFFSET $3
-    `, [req.clientId, limit, offset]);
+    `, [req.clientId]);
 
-    res.json(result.rows);
+    // 2. Active schedules from the main scheduler
+    const schResult = await db.query(`
+      SELECT
+        s.id, s.caregiver_id, s.schedule_type, s.day_of_week, s.date,
+        s.start_time::text, s.end_time::text, s.notes,
+        u.first_name as caregiver_first_name,
+        u.last_name  as caregiver_last_name,
+        u.phone      as caregiver_phone
+      FROM schedules s
+      JOIN users u ON s.caregiver_id = u.id
+      WHERE s.client_id = $1
+        AND s.is_active = true
+        AND (s.status IS NULL OR s.status = 'active')
+    `, [req.clientId]);
+
+    // 3. Load schedule exceptions (cancelled/modified occurrences) to skip them
+    const scheduleIds = schResult.rows.map(s => s.id);
+    let exceptionKeys = new Set();
+    if (scheduleIds.length > 0) {
+      const exResult = await db.query(`
+        SELECT schedule_id, exception_date::text
+        FROM schedule_exceptions
+        WHERE schedule_id = ANY($1)
+      `, [scheduleIds]);
+      exResult.rows.forEach(e => exceptionKeys.add(`${e.schedule_id}|${e.exception_date}`));
+    }
+
+    // Expand recurring schedules into concrete dates (next 4 weeks / past 4 weeks)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const weeksOut = 4;
+    const expanded = [];
+
+    for (const sch of schResult.rows) {
+      if (sch.schedule_type === 'recurring' && sch.day_of_week != null) {
+        // Generate dates for the next (or past) 4 weeks matching this day_of_week
+        for (let w = 0; w < weeksOut; w++) {
+          const d = new Date(today);
+          // Find the next occurrence of day_of_week from today + w weeks
+          const diff = (sch.day_of_week - d.getDay() + 7) % 7;
+          d.setDate(d.getDate() + diff + (w * 7));
+          const dateStr = d.toISOString().split('T')[0];
+
+          // Skip if there's an exception for this date
+          if (exceptionKeys.has(`${sch.id}|${dateStr}`)) continue;
+
+          const isFuture = d >= today;
+          if ((past && !isFuture) || (!past && isFuture)) {
+            expanded.push({
+              id: `${sch.id}-${dateStr}`,
+              scheduled_date: dateStr,
+              start_time: sch.start_time,
+              end_time: sch.end_time,
+              status: 'scheduled',
+              notes: sch.notes,
+              client_notes: null,
+              cancelled_reason: null,
+              caregiver_id: sch.caregiver_id,
+              schedule_id: sch.id,
+              caregiver_first_name: sch.caregiver_first_name,
+              caregiver_last_name: sch.caregiver_last_name,
+              caregiver_phone: sch.caregiver_phone,
+              source: 'schedule',
+            });
+          }
+        }
+      } else if (sch.date) {
+        // One-off schedule entry
+        const schDate = new Date(sch.date + 'T00:00:00');
+        const isFuture = schDate >= today;
+        if ((past && !isFuture) || (!past && isFuture)) {
+          expanded.push({
+            id: sch.id,
+            scheduled_date: sch.date,
+            start_time: sch.start_time,
+            end_time: sch.end_time,
+            status: 'scheduled',
+            notes: sch.notes,
+            client_notes: null,
+            cancelled_reason: null,
+            caregiver_id: sch.caregiver_id,
+            schedule_id: sch.id,
+            caregiver_first_name: sch.caregiver_first_name,
+            caregiver_last_name: sch.caregiver_last_name,
+            caregiver_phone: sch.caregiver_phone,
+            source: 'schedule',
+          });
+        }
+      }
+    }
+
+    // Merge, deduplicate by date+time+caregiver, sort, paginate
+    const all = [...svResult.rows, ...expanded];
+
+    // Deduplicate: if a scheduled_visit exists for the same date/time/caregiver, skip the schedule version
+    const svKeys = new Set(svResult.rows.map(r =>
+      `${r.scheduled_date}|${r.start_time}|${r.caregiver_first_name} ${r.caregiver_last_name}`
+    ));
+    const deduped = all.filter(r =>
+      r.source === 'scheduled_visit' ||
+      !svKeys.has(`${r.scheduled_date}|${r.start_time}|${r.caregiver_first_name} ${r.caregiver_last_name}`)
+    );
+
+    deduped.sort((a, b) => {
+      const dateComp = past
+        ? b.scheduled_date.localeCompare(a.scheduled_date)
+        : a.scheduled_date.localeCompare(b.scheduled_date);
+      if (dateComp !== 0) return dateComp;
+      return (a.start_time || '').localeCompare(b.start_time || '');
+    });
+
+    res.json(deduped.slice(offset, offset + limit));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -249,21 +367,33 @@ router.get('/portal/history', clientAuth, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PORTAL: GET MY CAREGIVERS (active assignments)
+// PORTAL: GET MY CAREGIVERS (active assignments + active schedules)
 // GET /api/client-portal/portal/caregivers
+//
+// Merges two sources so clients see their caregivers even if
+// client_assignments was never populated:
+//  1. client_assignments with status 'active'
+//  2. Distinct caregivers from active schedules for this client
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/portal/caregivers', clientAuth, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT
-        ca.id as assignment_id, ca.assignment_date, ca.hours_per_week, ca.status,
+      SELECT DISTINCT ON (u.id)
+        COALESCE(ca.id, s.id)   as assignment_id,
+        ca.assignment_date,
+        ca.hours_per_week,
+        COALESCE(ca.status, 'active') as status,
         u.id  as caregiver_id,
         u.first_name, u.last_name, u.phone,
         u.certifications
-      FROM client_assignments ca
-      JOIN users u ON ca.caregiver_id = u.id
-      WHERE ca.client_id = $1 AND ca.status = 'active'
-      ORDER BY ca.assignment_date DESC
+      FROM users u
+      LEFT JOIN client_assignments ca
+        ON ca.caregiver_id = u.id AND ca.client_id = $1 AND ca.status = 'active'
+      LEFT JOIN schedules s
+        ON s.caregiver_id = u.id AND s.client_id = $1 AND s.is_active = true
+        AND (s.status IS NULL OR s.status = 'active')
+      WHERE (ca.id IS NOT NULL OR s.id IS NOT NULL)
+      ORDER BY u.id, ca.assignment_date DESC NULLS LAST
     `, [req.clientId]);
 
     res.json(result.rows);
@@ -676,6 +806,558 @@ router.post('/admin/notify', auth, async (req, res) => {
     `, [clientId, type, title, message || null, relatedVisitId || null, relatedInvoiceId || null, relatedCaregiverId || null]);
 
     res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CLIENT VISIT ACTIONS — notes, cancel requests, reschedule requests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper: materialize a schedule-sourced virtual visit into a real scheduled_visits row
+async function materializeVisit({ scheduleId, visitDate, clientId, caregiverId, startTime, endTime }) {
+  const existing = await db.query(
+    `SELECT id FROM scheduled_visits
+     WHERE source_schedule_id = $1 AND scheduled_date = $2 AND client_id = $3`,
+    [scheduleId, visitDate, clientId]
+  );
+  if (existing.rows.length > 0) return existing.rows[0].id;
+
+  const result = await db.query(
+    `INSERT INTO scheduled_visits
+       (client_id, caregiver_id, scheduled_date, start_time, end_time, status, source_schedule_id)
+     VALUES ($1, $2, $3, $4, $5, 'scheduled', $6) RETURNING id`,
+    [clientId, caregiverId, visitDate, startTime, endTime, scheduleId]
+  );
+  return result.rows[0].id;
+}
+
+// Helper: notify all admin users
+async function notifyAdmins(type, title, message) {
+  try {
+    const admins = await db.query("SELECT id FROM users WHERE role = 'admin' AND is_active = true");
+    for (const admin of admins.rows) {
+      await db.query(
+        'INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)',
+        [admin.id, type, title, message]
+      );
+    }
+  } catch (e) { /* notifications table may not exist — don't fail */ }
+}
+
+// Helper: parse visit identity from request body
+function parseVisitIdentity(body) {
+  return {
+    source:      body.source,
+    visitId:     body.visitId || null,
+    scheduleId:  body.scheduleId || null,
+    visitDate:   body.visitDate,
+    caregiverId: body.caregiverId,
+    startTime:   body.startTime,
+    endTime:     body.endTime,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: ADD NOTE TO VISIT
+// PUT /api/client-portal/portal/visits/note
+// ─────────────────────────────────────────────────────────────────────────────
+router.put('/portal/visits/note', clientAuth, async (req, res) => {
+  const { note } = req.body;
+  const vi = parseVisitIdentity(req.body);
+
+  if (!note || !vi.visitDate || !vi.caregiverId || !vi.startTime || !vi.endTime) {
+    return res.status(400).json({ error: 'note, visitDate, caregiverId, startTime, endTime are required' });
+  }
+
+  try {
+    let visitId = vi.visitId;
+    if (vi.source === 'schedule' && vi.scheduleId) {
+      visitId = await materializeVisit({
+        scheduleId: vi.scheduleId, visitDate: vi.visitDate,
+        clientId: req.clientId, caregiverId: vi.caregiverId,
+        startTime: vi.startTime, endTime: vi.endTime,
+      });
+    }
+
+    if (visitId) {
+      await db.query(
+        `UPDATE scheduled_visits SET client_notes = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3`,
+        [note, visitId, req.clientId]
+      );
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: REQUEST CANCELLATION
+// POST /api/client-portal/portal/visits/cancel-request
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/portal/visits/cancel-request', clientAuth, async (req, res) => {
+  const { reason } = req.body;
+  const vi = parseVisitIdentity(req.body);
+
+  if (!vi.visitDate || !vi.caregiverId || !vi.startTime || !vi.endTime) {
+    return res.status(400).json({ error: 'visitDate, caregiverId, startTime, endTime are required' });
+  }
+
+  try {
+    // Materialize if needed
+    let visitId = vi.visitId;
+    if (vi.source === 'schedule' && vi.scheduleId) {
+      visitId = await materializeVisit({
+        scheduleId: vi.scheduleId, visitDate: vi.visitDate,
+        clientId: req.clientId, caregiverId: vi.caregiverId,
+        startTime: vi.startTime, endTime: vi.endTime,
+      });
+    }
+
+    const result = await db.query(`
+      INSERT INTO visit_change_requests
+        (client_id, caregiver_id, request_type, visit_id, schedule_id,
+         visit_date, original_start_time, original_end_time, cancel_reason)
+      VALUES ($1, $2, 'cancel', $3, $4, $5, $6, $7, $8)
+      RETURNING *
+    `, [
+      req.clientId, vi.caregiverId, visitId || null, vi.scheduleId || null,
+      vi.visitDate, vi.startTime, vi.endTime, reason || null
+    ]);
+
+    // Notify caregiver + all admins
+    const client = await db.query('SELECT first_name, last_name FROM clients WHERE id = $1', [req.clientId]);
+    const cn = client.rows[0];
+    const cancelMsg = `${cn?.first_name} ${cn?.last_name} is requesting to cancel their visit on ${vi.visitDate} at ${vi.startTime}.${reason ? ' Reason: ' + reason : ''}`;
+    await db.query(
+      'INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)',
+      [vi.caregiverId, 'visit_cancel_request', 'Cancellation Request', cancelMsg]
+    ).catch(() => {});
+    await notifyAdmins('visit_cancel_request', 'Client Cancellation Request', cancelMsg);
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: GET CAREGIVER AVAILABILITY (for reschedule picker)
+// GET /api/client-portal/portal/caregivers/:caregiverId/availability
+// Query: ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/portal/caregivers/:caregiverId/availability', clientAuth, async (req, res) => {
+  const { caregiverId } = req.params;
+  const startDate = req.query.startDate || new Date().toISOString().split('T')[0];
+  const endDateDefault = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
+  const endDate = req.query.endDate || endDateDefault;
+
+  try {
+    // 1. Get caregiver availability windows
+    const avail = await db.query(`
+      SELECT day_of_week, date, start_time::text, end_time::text, is_available
+      FROM caregiver_schedules
+      WHERE caregiver_id = $1 AND is_available = true
+    `, [caregiverId]);
+
+    // 2. Get existing booked visits in the date range
+    const booked = await db.query(`
+      SELECT scheduled_date, start_time::text, end_time::text
+      FROM scheduled_visits
+      WHERE caregiver_id = $1
+        AND scheduled_date BETWEEN $2 AND $3
+        AND status NOT IN ('cancelled')
+    `, [caregiverId, startDate, endDate]);
+
+    // 3. Get recurring schedules (other clients) that block time
+    const otherSchedules = await db.query(`
+      SELECT day_of_week, date, start_time::text, end_time::text
+      FROM schedules
+      WHERE caregiver_id = $1 AND is_active = true
+        AND (status IS NULL OR status = 'active')
+        AND client_id != $2
+    `, [caregiverId, req.clientId]);
+
+    // 4. Get time off
+    const timeOff = await db.query(`
+      SELECT start_date, end_date
+      FROM caregiver_time_off
+      WHERE caregiver_id = $1 AND status = 'approved'
+        AND end_date >= $2 AND start_date <= $3
+    `, [caregiverId, startDate, endDate]);
+
+    // Build a set of blocked date-time combos
+    const timeOffDates = new Set();
+    for (const to of timeOff.rows) {
+      const s = new Date(to.start_date);
+      const e = new Date(to.end_date);
+      for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+        timeOffDates.add(d.toISOString().split('T')[0]);
+      }
+    }
+
+    // Expand availability into concrete date slots
+    const slots = [];
+    const start = new Date(startDate + 'T00:00:00');
+    const end = new Date(endDate + 'T00:00:00');
+
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      const dow = d.getDay();
+
+      // Skip time-off days
+      if (timeOffDates.has(dateStr)) continue;
+
+      // Find matching availability windows
+      const windows = avail.rows.filter(a =>
+        (a.day_of_week === dow && !a.date) ||
+        (a.date && a.date === dateStr)
+      );
+
+      for (const win of windows) {
+        // Check if this slot overlaps with booked visits
+        const isBooked = booked.rows.some(b =>
+          b.scheduled_date === dateStr &&
+          b.start_time < win.end_time && b.end_time > win.start_time
+        );
+        // Check if overlaps with other client schedules (recurring)
+        const isOtherScheduled = otherSchedules.rows.some(os => {
+          if (os.date === dateStr) return os.start_time < win.end_time && os.end_time > win.start_time;
+          if (os.day_of_week === dow && !os.date) return os.start_time < win.end_time && os.end_time > win.start_time;
+          return false;
+        });
+
+        if (!isBooked && !isOtherScheduled) {
+          slots.push({
+            date: dateStr,
+            dayOfWeek: dow,
+            startTime: win.start_time,
+            endTime: win.end_time,
+          });
+        }
+      }
+    }
+
+    res.json(slots);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: REQUEST RESCHEDULE
+// POST /api/client-portal/portal/visits/reschedule-request
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/portal/visits/reschedule-request', clientAuth, async (req, res) => {
+  const { proposedDate, proposedStartTime, proposedEndTime } = req.body;
+  const vi = parseVisitIdentity(req.body);
+
+  if (!vi.visitDate || !vi.caregiverId || !vi.startTime || !vi.endTime || !proposedDate || !proposedStartTime || !proposedEndTime) {
+    return res.status(400).json({ error: 'Original visit info and proposedDate, proposedStartTime, proposedEndTime are required' });
+  }
+
+  try {
+    let visitId = vi.visitId;
+    if (vi.source === 'schedule' && vi.scheduleId) {
+      visitId = await materializeVisit({
+        scheduleId: vi.scheduleId, visitDate: vi.visitDate,
+        clientId: req.clientId, caregiverId: vi.caregiverId,
+        startTime: vi.startTime, endTime: vi.endTime,
+      });
+    }
+
+    const result = await db.query(`
+      INSERT INTO visit_change_requests
+        (client_id, caregiver_id, request_type, visit_id, schedule_id,
+         visit_date, original_start_time, original_end_time,
+         proposed_date, proposed_start_time, proposed_end_time)
+      VALUES ($1, $2, 'reschedule', $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *
+    `, [
+      req.clientId, vi.caregiverId, visitId || null, vi.scheduleId || null,
+      vi.visitDate, vi.startTime, vi.endTime,
+      proposedDate, proposedStartTime, proposedEndTime
+    ]);
+
+    // Notify caregiver + all admins
+    const client = await db.query('SELECT first_name, last_name FROM clients WHERE id = $1', [req.clientId]);
+    const cn = client.rows[0];
+    const reschedMsg = `${cn?.first_name} ${cn?.last_name} is requesting to reschedule their visit from ${vi.visitDate} to ${proposedDate} at ${proposedStartTime}.`;
+    await db.query(
+      'INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)',
+      [vi.caregiverId, 'visit_reschedule_request', 'Reschedule Request', reschedMsg]
+    ).catch(() => {});
+    await notifyAdmins('visit_reschedule_request', 'Client Reschedule Request', reschedMsg);
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: GET MY CHANGE REQUESTS (pending/counter-offered)
+// GET /api/client-portal/portal/change-requests
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/portal/change-requests', clientAuth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT vcr.*,
+        u.first_name as caregiver_first_name,
+        u.last_name  as caregiver_last_name
+      FROM visit_change_requests vcr
+      JOIN users u ON vcr.caregiver_id = u.id
+      WHERE vcr.client_id = $1
+        AND vcr.status IN ('pending', 'counter_offered')
+      ORDER BY vcr.created_at DESC
+    `, [req.clientId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: RESPOND TO COUNTER-OFFER
+// PUT /api/client-portal/portal/change-requests/:id/respond
+// Body: { accept: true|false }
+// ─────────────────────────────────────────────────────────────────────────────
+router.put('/portal/change-requests/:id/respond', clientAuth, async (req, res) => {
+  const { accept } = req.body;
+
+  try {
+    const cr = await db.query(
+      `SELECT * FROM visit_change_requests WHERE id = $1 AND client_id = $2 AND status = 'counter_offered'`,
+      [req.params.id, req.clientId]
+    );
+    if (cr.rows.length === 0) return res.status(404).json({ error: 'Request not found or not counter-offered' });
+
+    const request = cr.rows[0];
+    const newStatus = accept ? 'counter_accepted' : 'counter_declined';
+
+    await db.query(
+      `UPDATE visit_change_requests SET status = $1, resolved_at = NOW(), updated_at = NOW() WHERE id = $2`,
+      [newStatus, req.params.id]
+    );
+
+    // If accepted, apply the reschedule
+    if (accept && request.visit_id) {
+      await db.query(`
+        UPDATE scheduled_visits
+        SET scheduled_date = $1, start_time = $2, end_time = $3, status = 'scheduled', updated_at = NOW()
+        WHERE id = $4
+      `, [request.counter_date, request.counter_start_time, request.counter_end_time, request.visit_id]);
+
+      // If from a recurring schedule, create exception for original date
+      if (request.schedule_id) {
+        await db.query(`
+          INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
+          VALUES ($1, $2, 'modified', $3)
+          ON CONFLICT (schedule_id, exception_date) DO NOTHING
+        `, [request.schedule_id, request.visit_date, request.caregiver_id]);
+      }
+    }
+
+    // Notify caregiver + all admins
+    const client = await db.query('SELECT first_name, last_name FROM clients WHERE id = $1', [req.clientId]);
+    const cn = client.rows[0];
+    const counterMsg = `${cn?.first_name} ${cn?.last_name} has ${accept ? 'accepted' : 'declined'} your suggested time.`;
+    const counterType = accept ? 'counter_accepted' : 'counter_declined';
+    const counterTitle = accept ? 'Counter-Offer Accepted' : 'Counter-Offer Declined';
+    await db.query(
+      'INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)',
+      [request.caregiver_id, counterType, counterTitle, counterMsg]
+    ).catch(() => {});
+    await notifyAdmins(counterType, counterTitle, counterMsg);
+
+    res.json({ success: true, status: newStatus });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN / CAREGIVER: MANAGE CHANGE REQUESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET PENDING CHANGE REQUESTS
+// GET /api/client-portal/admin/change-requests
+// Query: ?status=pending&caregiverId=uuid
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/admin/change-requests', auth, async (req, res) => {
+  const role = req.user.role;
+  if (role !== 'admin' && role !== 'caregiver') {
+    return res.status(403).json({ error: 'Access required' });
+  }
+
+  try {
+    let query = `
+      SELECT vcr.*,
+        c.first_name as client_first_name, c.last_name as client_last_name,
+        u.first_name as caregiver_first_name, u.last_name as caregiver_last_name
+      FROM visit_change_requests vcr
+      JOIN clients c ON vcr.client_id = c.id
+      JOIN users u ON vcr.caregiver_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    // Caregivers only see their own
+    if (role === 'caregiver') {
+      params.push(req.user.id);
+      query += ` AND vcr.caregiver_id = $${params.length}`;
+    } else if (req.query.caregiverId) {
+      params.push(req.query.caregiverId);
+      query += ` AND vcr.caregiver_id = $${params.length}`;
+    }
+
+    if (req.query.status) {
+      params.push(req.query.status);
+      query += ` AND vcr.status = $${params.length}`;
+    } else {
+      query += ` AND vcr.status IN ('pending', 'counter_offered')`;
+    }
+
+    query += ` ORDER BY vcr.created_at DESC`;
+    const result = await db.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESOLVE CHANGE REQUEST (approve / deny / counter-offer)
+// PUT /api/client-portal/admin/change-requests/:id/resolve
+// Body: { action: 'approve'|'deny'|'counter', counterDate?, counterStartTime?,
+//         counterEndTime?, counterMessage?, adminNotes? }
+// ─────────────────────────────────────────────────────────────────────────────
+router.put('/admin/change-requests/:id/resolve', auth, async (req, res) => {
+  const role = req.user.role;
+  if (role !== 'admin' && role !== 'caregiver') {
+    return res.status(403).json({ error: 'Access required' });
+  }
+
+  const { action, counterDate, counterStartTime, counterEndTime, counterMessage, adminNotes } = req.body;
+  if (!['approve', 'deny', 'counter'].includes(action)) {
+    return res.status(400).json({ error: 'action must be approve, deny, or counter' });
+  }
+
+  try {
+    // Fetch the request (caregivers can only resolve their own)
+    let fetchQuery = 'SELECT * FROM visit_change_requests WHERE id = $1';
+    const fetchParams = [req.params.id];
+    if (role === 'caregiver') {
+      fetchQuery += ' AND caregiver_id = $2';
+      fetchParams.push(req.user.id);
+    }
+
+    const cr = await db.query(fetchQuery, fetchParams);
+    if (cr.rows.length === 0) return res.status(404).json({ error: 'Request not found' });
+
+    const request = cr.rows[0];
+
+    if (action === 'approve') {
+      // Approve cancellation
+      if (request.request_type === 'cancel') {
+        if (request.visit_id) {
+          await db.query(`
+            UPDATE scheduled_visits
+            SET status = 'cancelled', cancelled_reason = $1, cancelled_by = $2, cancelled_at = NOW(), updated_at = NOW()
+            WHERE id = $3
+          `, [request.cancel_reason || 'Client requested', req.user.id, request.visit_id]);
+        }
+        if (request.schedule_id) {
+          await db.query(`
+            INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
+            VALUES ($1, $2, 'cancelled', $3)
+            ON CONFLICT (schedule_id, exception_date) DO NOTHING
+          `, [request.schedule_id, request.visit_date, req.user.id]);
+        }
+      }
+
+      // Approve reschedule
+      if (request.request_type === 'reschedule' && request.visit_id) {
+        await db.query(`
+          UPDATE scheduled_visits
+          SET scheduled_date = $1, start_time = $2, end_time = $3, status = 'scheduled', updated_at = NOW()
+          WHERE id = $4
+        `, [request.proposed_date, request.proposed_start_time, request.proposed_end_time, request.visit_id]);
+
+        if (request.schedule_id) {
+          await db.query(`
+            INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
+            VALUES ($1, $2, 'modified', $3)
+            ON CONFLICT (schedule_id, exception_date) DO NOTHING
+          `, [request.schedule_id, request.visit_date, req.user.id]);
+        }
+      }
+
+      await db.query(`
+        UPDATE visit_change_requests
+        SET status = 'approved', resolved_at = NOW(), resolved_by = $1, admin_notes = $2, updated_at = NOW()
+        WHERE id = $3
+      `, [req.user.id, adminNotes || null, req.params.id]);
+
+      // Notify client
+      const typeLabel = request.request_type === 'cancel' ? 'Cancellation' : 'Reschedule';
+      await db.query(`
+        INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
+        VALUES ($1, 'change_request_approved', $2, $3, $4)
+      `, [
+        request.client_id,
+        `${typeLabel} Approved`,
+        `Your ${typeLabel.toLowerCase()} request for ${request.visit_date} has been approved.`,
+        request.visit_id
+      ]);
+
+    } else if (action === 'deny') {
+      await db.query(`
+        UPDATE visit_change_requests
+        SET status = 'denied', resolved_at = NOW(), resolved_by = $1, admin_notes = $2, updated_at = NOW()
+        WHERE id = $3
+      `, [req.user.id, adminNotes || null, req.params.id]);
+
+      const typeLabel = request.request_type === 'cancel' ? 'Cancellation' : 'Reschedule';
+      await db.query(`
+        INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
+        VALUES ($1, 'change_request_denied', $2, $3, $4)
+      `, [
+        request.client_id,
+        `${typeLabel} Not Approved`,
+        `Your ${typeLabel.toLowerCase()} request for ${request.visit_date} was not approved.${adminNotes ? ' Note: ' + adminNotes : ''}`,
+        request.visit_id
+      ]);
+
+    } else if (action === 'counter') {
+      if (!counterDate || !counterStartTime || !counterEndTime) {
+        return res.status(400).json({ error: 'counterDate, counterStartTime, counterEndTime required for counter-offer' });
+      }
+
+      await db.query(`
+        UPDATE visit_change_requests
+        SET status = 'counter_offered',
+            counter_date = $1, counter_start_time = $2, counter_end_time = $3,
+            counter_message = $4, admin_notes = $5, updated_at = NOW()
+        WHERE id = $6
+      `, [counterDate, counterStartTime, counterEndTime, counterMessage || null, adminNotes || null, req.params.id]);
+
+      await db.query(`
+        INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
+        VALUES ($1, 'change_request_counter', 'Alternative Time Suggested', $2, $3)
+      `, [
+        request.client_id,
+        `Your caregiver suggested ${counterDate} at ${counterStartTime} instead.${counterMessage ? ' "' + counterMessage + '"' : ''}`,
+        request.visit_id
+      ]);
+    }
+
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -79,6 +79,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [showMoreDrawer, setShowMoreDrawer] = useState(false);
   const [showAllClients, setShowAllClients] = useState(false);
+  const [changeRequests, setChangeRequests] = useState([]);
+  const [crResolving, setCrResolving]       = useState(null);
 
   // Ref to hold a setter so background geo can push updates into geofence check
   const bgLocationRef = React.useRef(null);
@@ -181,10 +183,45 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       }
       if (visitsRes.ok) setRecentVisits(await visitsRes.json());
       loadMyHours();
+      loadChangeRequests();
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadChangeRequests = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/client-portal/admin/change-requests?status=pending`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChangeRequests(Array.isArray(data) ? data : []);
+      }
+    } catch (e) { /* silently skip if table doesn't exist yet */ }
+  };
+
+  const resolveChangeRequest = async (crId, action, extra = {}) => {
+    setCrResolving(crId);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/client-portal/admin/change-requests/${crId}/resolve`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...extra }),
+      });
+      if (res.ok) {
+        toast('Request resolved', 'success');
+        loadChangeRequests();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || 'Failed to resolve', 'error');
+      }
+    } catch (e) {
+      toast('Network error', 'error');
+    } finally {
+      setCrResolving(null);
     }
   };
 
@@ -723,6 +760,82 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         )}
       </div>
 
+      {/* Client Change Requests */}
+      {changeRequests.length > 0 && (
+        <div className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid #e67e22' }}>
+          <div className="card-title" style={{ color: '#e67e22' }}>Client Requests ({changeRequests.length})</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {changeRequests.slice(0, 5).map(cr => (
+              <div key={cr.id} style={{ padding: '1rem', borderRadius: '8px', background: '#FFF7ED', border: '1px solid #FED7AA' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, color: '#1F2937' }}>
+                      {cr.client_first_name} {cr.client_last_name}
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>
+                      {cr.request_type === 'cancel' ? 'Wants to cancel' : 'Wants to reschedule'} — {cr.visit_date}
+                    </div>
+                    {cr.cancel_reason && (
+                      <div style={{ fontSize: '0.82rem', color: '#92400E', marginTop: '4px' }}>Reason: {cr.cancel_reason}</div>
+                    )}
+                    {cr.request_type === 'reschedule' && cr.proposed_date && (
+                      <div style={{ fontSize: '0.82rem', color: '#1D4ED8', marginTop: '4px' }}>
+                        Proposed: {cr.proposed_date} {cr.proposed_start_time?.slice(0,5)} - {cr.proposed_end_time?.slice(0,5)}
+                      </div>
+                    )}
+                  </div>
+                  <span style={{
+                    background: cr.request_type === 'cancel' ? '#FEE2E2' : '#DBEAFE',
+                    color: cr.request_type === 'cancel' ? '#991B1B' : '#1E40AF',
+                    padding: '2px 8px', borderRadius: '10px', fontSize: '0.72rem', fontWeight: 600, whiteSpace: 'nowrap',
+                  }}>
+                    {cr.request_type === 'cancel' ? 'Cancel' : 'Reschedule'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-sm"
+                    style={{ background: '#059669', color: '#fff', padding: '0.35rem 0.75rem', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                    disabled={crResolving === cr.id}
+                    onClick={() => resolveChangeRequest(cr.id, 'approve')}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    style={{ background: '#DC2626', color: '#fff', padding: '0.35rem 0.75rem', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                    disabled={crResolving === cr.id}
+                    onClick={() => resolveChangeRequest(cr.id, 'deny')}
+                  >
+                    Deny
+                  </button>
+                  {cr.request_type === 'reschedule' && (
+                    <button
+                      className="btn btn-sm"
+                      style={{ background: '#7C3AED', color: '#fff', padding: '0.35rem 0.75rem', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                      disabled={crResolving === cr.id}
+                      onClick={() => {
+                        const counterDate = prompt('Suggest a different date (YYYY-MM-DD):');
+                        const counterStart = prompt('Start time (HH:MM):');
+                        const counterEnd = prompt('End time (HH:MM):');
+                        const msg = prompt('Optional message to client:');
+                        if (counterDate && counterStart && counterEnd) {
+                          resolveChangeRequest(cr.id, 'counter', {
+                            counterDate, counterStartTime: counterStart, counterEndTime: counterEnd, counterMessage: msg || ''
+                          });
+                        }
+                      }}
+                    >
+                      Counter-Offer
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* MOBILE-FIRST CLOCK-IN — Full prominent card */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {activeSession ? (
@@ -1223,6 +1336,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           </li>
           <li><a href="#" className={currentPage === 'open-shifts' ? 'active' : ''} onClick={() => handlePageClick('open-shifts')}>📋 Open Shifts</a></li>
           <li><a href="#" className={currentPage === 'availability' ? 'active' : ''} onClick={() => handlePageClick('availability')}>⏰ Availability</a></li>
+          <li><a href="#" className={currentPage === 'client-requests' ? 'active' : ''} onClick={() => handlePageClick('client-requests')}>📩 Client Requests{changeRequests.length > 0 ? ` (${changeRequests.length})` : ''}</a></li>
           <li><a href="#" className={currentPage === 'miss-report' ? 'active' : ''} onClick={() => handlePageClick('miss-report')}>🚨 Report Miss</a></li>
           <li><a href="#" className={currentPage === 'time-off' ? 'active' : ''} onClick={() => handlePageClick('time-off')}>🏖️ Time Off</a></li>
           <li style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', marginTop: '0.5rem' }}>
@@ -1260,6 +1374,95 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           {currentPage === 'open-shifts' && renderOpenShiftsPage()}
           {currentPage === 'availability' && renderAvailabilityPage()}
           {currentPage === 'time-off' && renderTimeOffPage()}
+          {currentPage === 'client-requests' && (
+            <div>
+              <h2 style={{ marginBottom: '1rem' }}>Client Requests</h2>
+              {changeRequests.length === 0 ? (
+                <div className="card" style={{ textAlign: 'center', padding: '2rem', color: '#6B7280' }}>
+                  No pending requests from clients.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {changeRequests.map(cr => (
+                    <div key={cr.id} className="card" style={{ borderLeft: cr.request_type === 'cancel' ? '4px solid #DC2626' : '4px solid #2563EB' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: '1.05rem', color: '#1F2937' }}>
+                            {cr.client_first_name} {cr.client_last_name}
+                          </div>
+                          <div style={{ fontSize: '0.9rem', color: '#6B7280', marginTop: '2px' }}>
+                            {cr.request_type === 'cancel' ? 'Cancellation Request' : 'Reschedule Request'}
+                          </div>
+                        </div>
+                        <span style={{
+                          background: cr.request_type === 'cancel' ? '#FEE2E2' : '#DBEAFE',
+                          color: cr.request_type === 'cancel' ? '#991B1B' : '#1E40AF',
+                          padding: '4px 10px', borderRadius: '12px', fontSize: '0.78rem', fontWeight: 600,
+                        }}>
+                          {cr.status}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+                        <div>
+                          <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '2px' }}>ORIGINAL VISIT</div>
+                          <div style={{ fontWeight: 600 }}>{cr.visit_date} {cr.original_start_time?.slice(0,5)} - {cr.original_end_time?.slice(0,5)}</div>
+                        </div>
+                        {cr.request_type === 'reschedule' && cr.proposed_date && (
+                          <div>
+                            <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '2px' }}>PROPOSED TIME</div>
+                            <div style={{ fontWeight: 600, color: '#1D4ED8' }}>{cr.proposed_date} {cr.proposed_start_time?.slice(0,5)} - {cr.proposed_end_time?.slice(0,5)}</div>
+                          </div>
+                        )}
+                      </div>
+                      {cr.cancel_reason && (
+                        <div style={{ padding: '0.5rem 0.75rem', background: '#FEF3C7', borderRadius: '6px', fontSize: '0.85rem', color: '#92400E', marginBottom: '0.75rem' }}>
+                          Reason: {cr.cancel_reason}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button
+                          className="btn btn-sm"
+                          style={{ background: '#059669', color: '#fff', padding: '0.4rem 1rem', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                          disabled={crResolving === cr.id}
+                          onClick={() => resolveChangeRequest(cr.id, 'approve')}
+                        >
+                          {crResolving === cr.id ? 'Working...' : 'Approve'}
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          style={{ background: '#DC2626', color: '#fff', padding: '0.4rem 1rem', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                          disabled={crResolving === cr.id}
+                          onClick={() => resolveChangeRequest(cr.id, 'deny')}
+                        >
+                          Deny
+                        </button>
+                        {cr.request_type === 'reschedule' && (
+                          <button
+                            className="btn btn-sm"
+                            style={{ background: '#7C3AED', color: '#fff', padding: '0.4rem 1rem', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                            disabled={crResolving === cr.id}
+                            onClick={() => {
+                              const counterDate = prompt('Suggest a different date (YYYY-MM-DD):');
+                              const counterStart = prompt('Start time (HH:MM):');
+                              const counterEnd = prompt('End time (HH:MM):');
+                              const msg = prompt('Optional message to client:');
+                              if (counterDate && counterStart && counterEnd) {
+                                resolveChangeRequest(cr.id, 'counter', {
+                                  counterDate, counterStartTime: counterStart, counterEndTime: counterEnd, counterMessage: msg || ''
+                                });
+                              }
+                            }}
+                          >
+                            Suggest Different Time
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {currentPage === 'miss-report' && <ShiftMissReport token={token} userId={user.id} onClose={() => setCurrentPage('home')} />}
           {currentPage === 'settings' && renderSettingsPage()}
         </div>
