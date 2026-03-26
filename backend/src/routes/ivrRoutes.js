@@ -46,9 +46,9 @@ router.post('/verify-pin', async (req, res) => {
 
     const cg = caregiver.rows[0];
 
-    // Check if they have an active shift (clocked in but not out)
+    // Check if they have an active shift (clocked in but not out) — check all dates, not just today
     const activeShift = await db.query(
-      `SELECT id FROM time_entries WHERE caregiver_id = $1 AND end_time IS NULL AND DATE(start_time) = CURRENT_DATE`,
+      `SELECT id FROM time_entries WHERE caregiver_id = $1 AND end_time IS NULL ORDER BY start_time DESC LIMIT 1`,
       [cg.id]
     );
 
@@ -104,6 +104,24 @@ router.post('/clock-in', async (req, res) => {
 
     const cl = client.rows[0];
     const entryId = uuidv4();
+
+    // Auto-close any existing open time entries for this caregiver
+    const openEntries = await db.query(
+      `SELECT id, start_time, allotted_minutes FROM time_entries WHERE caregiver_id = $1 AND end_time IS NULL`,
+      [caregiverId]
+    );
+    for (const openEntry of openEntries.rows) {
+      const durationMinutes = Math.round((new Date() - new Date(openEntry.start_time)) / 60000);
+      const discrepancyMinutes = openEntry.allotted_minutes ? durationMinutes - openEntry.allotted_minutes : null;
+      const billableMinutes = openEntry.allotted_minutes ? Math.min(durationMinutes, openEntry.allotted_minutes) : durationMinutes;
+      await db.query(
+        `UPDATE time_entries SET end_time = NOW(), duration_minutes = $1, is_complete = true,
+          discrepancy_minutes = $2, billable_minutes = $3,
+          notes = COALESCE(notes, '') || ' | Auto-closed: caregiver clocked into new client via IVR',
+          updated_at = NOW() WHERE id = $4`,
+        [durationMinutes, discrepancyMinutes, billableMinutes, openEntry.id]
+      );
+    }
 
     // Find matching schedule for allotted minutes
     let allottedMinutes = null;

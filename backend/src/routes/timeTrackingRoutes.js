@@ -155,6 +155,30 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     const { clientId, latitude, longitude, scheduleId } = req.body;
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
+
+    // Auto-close any existing open time entries for this caregiver
+    const openEntries = await db.query(
+      `SELECT id, start_time, client_id, allotted_minutes FROM time_entries
+       WHERE caregiver_id = $1 AND end_time IS NULL`,
+      [req.user.id]
+    );
+    for (const openEntry of openEntries.rows) {
+      const durationMinutes = Math.round((new Date() - new Date(openEntry.start_time)) / 60000);
+      const discrepancyMinutes = openEntry.allotted_minutes ? durationMinutes - openEntry.allotted_minutes : null;
+      const billableMinutes = openEntry.allotted_minutes ? Math.min(durationMinutes, openEntry.allotted_minutes) : durationMinutes;
+      await db.query(
+        `UPDATE time_entries SET end_time = NOW(), duration_minutes = $1, is_complete = true,
+          discrepancy_minutes = $2, billable_minutes = $3,
+          notes = CASE WHEN notes IS NULL OR notes = '' THEN '(Auto-closed: caregiver clocked into new client)'
+                       ELSE notes || ' | (Auto-closed: caregiver clocked into new client)' END,
+          updated_at = NOW()
+         WHERE id = $4`,
+        [durationMinutes, discrepancyMinutes, billableMinutes, openEntry.id]
+      );
+      await auditLog(req.user.id, 'UPDATE', 'time_entries', openEntry.id, null, { auto_closed: true, duration_minutes: durationMinutes });
+      // Generate EVV for auto-closed entry
+      try { const { createEVVFromTimeEntry } = require('./sandataRoutes'); createEVVFromTimeEntry(openEntry.id).catch(e => console.error('[EVV auto-close]', e.message)); } catch(e) {}
+    }
     try {
       const today = new Date();
       const sched = await db.query(`
