@@ -15,6 +15,10 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
   const [message, setMessage] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
+  // ── Visit notes state ───────────────────────────────────────────────────
+  const [visitNotes, setVisitNotes] = useState([]);
+  const [visitNotesLoading, setVisitNotesLoading] = useState(false);
+
   // ── Portal state ──────────────────────────────────────────────────────────
   const [portalStatus, setPortalStatus]   = useState(null);
   const [portalEmail, setPortalEmail]     = useState('');
@@ -91,6 +95,17 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
           }
         })
         .catch(() => setPortalStatus('not_invited'));
+
+      // Load visit notes
+      setVisitNotes([]);
+      setVisitNotesLoading(true);
+      fetch(`${API_BASE_URL}/api/clients/${client.id}/visit-notes`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(r => r.ok ? r.json() : [])
+        .then(data => setVisitNotes(Array.isArray(data) ? data : []))
+        .catch(() => setVisitNotes([]))
+        .finally(() => setVisitNotesLoading(false));
     }
   }, [client, isOpen]);
 
@@ -196,6 +211,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
     { id: 'billing',   label: '💰 Billing'    },
     { id: 'medical',   label: '🏥 Medical'    },
     { id: 'caregivers',label: '👤 Caregivers' },
+    { id: 'visitnotes',label: `📝 Visit Notes${visitNotes.length ? ` (${visitNotes.length})` : ''}` },
     { id: 'portal',    label: '🌐 Portal'     },
   ];
 
@@ -708,6 +724,53 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                 <strong>Note:</strong> Caregiver pay rates are set by care type in Caregiver Management. 
                 When a caregiver works with this client, they'll be paid based on the client's care type.
               </div>
+            </div>
+          )}
+
+          {/* Visit Notes Tab */}
+          {activeTab === 'visitnotes' && (
+            <div>
+              <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>
+                Caregiver Visit Notes
+              </h4>
+              <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                Notes written by caregivers at clock-out for this client.
+              </p>
+              {visitNotesLoading ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>Loading notes...</div>
+              ) : visitNotes.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: '#999', background: '#f9f9f9', borderRadius: '8px' }}>
+                  No visit notes have been recorded for this client yet.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '500px', overflowY: 'auto' }}>
+                  {visitNotes.map((note, idx) => (
+                    <div
+                      key={note.id || idx}
+                      style={{
+                        background: '#f8f9fa',
+                        border: '1px solid #e9ecef',
+                        borderRadius: '8px',
+                        padding: '1rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+                        <strong style={{ color: '#2563EB' }}>{note.caregiver_name || 'Unknown Caregiver'}</strong>
+                        <span style={{ color: '#666' }}>
+                          {new Date(note.created_at).toLocaleDateString('en-US', {
+                            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+                          })}
+                          {' '}
+                          {new Date(note.created_at).toLocaleTimeString('en-US', {
+                            hour: '2-digit', minute: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{note.note}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
