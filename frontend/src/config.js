@@ -5,6 +5,18 @@ export const API_BASE_URL = 'https://chippewa-home-care-api.onrender.com';
 let _onSessionExpired = null;
 export const setSessionExpiredCallback = (fn) => { _onSessionExpired = fn; };
 
+// Global fetch interceptor — auto-logout on 401 from our API
+const _originalFetch = window.fetch;
+window.fetch = async function(input, init) {
+  const url = typeof input === 'string' ? input : input?.url || '';
+  const hasAuth = init?.headers?.Authorization || init?.headers?.authorization;
+  const response = await _originalFetch.call(window, input, init);
+  if (response.status === 401 && hasAuth && url.includes(API_BASE_URL) && _onSessionExpired) {
+    _onSessionExpired();
+  }
+  return response;
+};
+
 // Check if JWT is expired (without verifying signature)
 export const isTokenExpired = (token) => {
   try {

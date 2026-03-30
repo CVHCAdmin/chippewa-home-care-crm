@@ -149,6 +149,46 @@ router.post('/impersonate/:userId', verifyToken, requireAdmin, async (req, res) 
   }
 });
 
+// POST /api/auth/impersonate-portal/:clientId
+// Admin only — generates a client portal token to view a client's portal
+router.post('/impersonate-portal/:clientId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const client = await db.query('SELECT * FROM clients WHERE id = $1', [clientId]);
+    if (!client.rows[0]) return res.status(404).json({ error: 'Client not found' });
+    const c = client.rows[0];
+
+    await auditLog(req.user.id, 'ADMIN_IMPERSONATE_PORTAL', 'clients', clientId, null, {
+      impersonating: `${c.first_name} ${c.last_name}`,
+      impersonatedBy: req.user.email
+    });
+
+    const token = jwt.sign(
+      {
+        role: 'client',
+        clientId: c.id,
+        impersonatedBy: req.user.email,
+        impersonation: true
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '2h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: c.id,
+        name: `${c.first_name} ${c.last_name}`,
+        role: 'client',
+        impersonatedBy: req.user.email
+      }
+    });
+  } catch (error) {
+    console.error('Portal impersonation error:', error);
+    res.status(500).json({ error: 'Portal impersonation failed' });
+  }
+});
+
 // GET /api/auth/users — admin only, returns list of users to impersonate
 router.get('/users', verifyToken, requireAdmin, async (req, res) => {
   try {

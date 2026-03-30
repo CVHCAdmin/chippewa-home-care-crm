@@ -4,35 +4,69 @@ import { API_BASE_URL } from '../config';
 
 const ImpersonationModal = ({ token, onImpersonate, onClose }) => {
   const [users, setUsers] = useState([]);
+  const [clients, setClients] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [impersonating, setImpersonating] = useState(null);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState('staff'); // 'staff' | 'clients'
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/api/auth/users`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-      .then(r => { if (!r.ok) throw new Error('Request failed'); return r.json(); })
-      .then(data => { setUsers(Array.isArray(data) ? data : []); setLoading(false); })
-      .catch(() => { setError('Failed to load users'); setLoading(false); });
+    Promise.all([
+      fetch(`${API_BASE_URL}/api/auth/users`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }).then(r => r.ok ? r.json() : []),
+      fetch(`${API_BASE_URL}/api/clients`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }).then(r => r.ok ? r.json() : [])
+    ])
+      .then(([userData, clientData]) => {
+        setUsers(Array.isArray(userData) ? userData : []);
+        setClients(Array.isArray(clientData) ? clientData : []);
+        setLoading(false);
+      })
+      .catch(() => { setError('Failed to load data'); setLoading(false); });
   }, [token]);
 
-  const filtered = users.filter(u => {
-    const q = search.toLowerCase();
-    return (
-      u.first_name?.toLowerCase().includes(q) ||
-      u.last_name?.toLowerCase().includes(q) ||
-      u.email?.toLowerCase().includes(q) ||
-      u.role?.toLowerCase().includes(q)
-    );
-  });
+  const q = search.toLowerCase();
+
+  const filteredUsers = users.filter(u =>
+    u.first_name?.toLowerCase().includes(q) ||
+    u.last_name?.toLowerCase().includes(q) ||
+    u.email?.toLowerCase().includes(q) ||
+    u.role?.toLowerCase().includes(q)
+  );
+
+  const filteredClients = clients.filter(c =>
+    c.first_name?.toLowerCase().includes(q) ||
+    c.last_name?.toLowerCase().includes(q) ||
+    c.email?.toLowerCase().includes(q) ||
+    c.phone?.includes(q)
+  );
 
   const handleImpersonate = async (userId) => {
     setImpersonating(userId);
     setError('');
     try {
       const res = await fetch(`${API_BASE_URL}/api/auth/impersonate/${userId}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      onImpersonate(data.token, data.user);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setImpersonating(null);
+    }
+  };
+
+  const handlePortalPreview = async (clientId) => {
+    setImpersonating(clientId);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/impersonate-portal/${clientId}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -66,9 +100,9 @@ const ImpersonationModal = ({ token, onImpersonate, onClose }) => {
           display: 'flex', alignItems: 'center', justifyContent: 'space-between'
         }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700 }}>👁️ View As User</h2>
+            <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700 }}>👁️ View As</h2>
             <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#6b7280' }}>
-              Select a user to see the app from their perspective
+              See the app from a staff member or client's perspective
             </p>
           </div>
           <button onClick={onClose} style={{
@@ -77,12 +111,34 @@ const ImpersonationModal = ({ token, onImpersonate, onClose }) => {
           }}>×</button>
         </div>
 
+        {/* Tabs */}
+        <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb' }}>
+          {[
+            { key: 'staff', label: 'Staff', icon: '👤', count: users.length },
+            { key: 'clients', label: 'Client Portal', icon: '🏠', count: clients.length },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => { setTab(t.key); setSearch(''); }}
+              style={{
+                flex: 1, padding: '0.65rem', border: 'none', cursor: 'pointer',
+                fontWeight: 600, fontSize: '0.85rem',
+                background: tab === t.key ? '#f0f9ff' : 'transparent',
+                color: tab === t.key ? '#2563eb' : '#6b7280',
+                borderBottom: tab === t.key ? '2px solid #2563eb' : '2px solid transparent',
+              }}
+            >
+              {t.icon} {t.label} ({t.count})
+            </button>
+          ))}
+        </div>
+
         {/* Search */}
         <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #f3f4f6' }}>
           <input
             autoFocus
             type="text"
-            placeholder="Search by name, email, or role..."
+            placeholder={tab === 'staff' ? 'Search by name, email, or role...' : 'Search by name, email, or phone...'}
             value={search}
             onChange={e => setSearch(e.target.value)}
             style={{
@@ -97,7 +153,7 @@ const ImpersonationModal = ({ token, onImpersonate, onClose }) => {
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {loading && (
             <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
-              Loading users...
+              Loading...
             </div>
           )}
           {error && (
@@ -105,12 +161,14 @@ const ImpersonationModal = ({ token, onImpersonate, onClose }) => {
               ⚠️ {error}
             </div>
           )}
-          {!loading && filtered.length === 0 && (
+
+          {/* Staff list */}
+          {tab === 'staff' && !loading && filteredUsers.length === 0 && (
             <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
-              No users found
+              No staff found
             </div>
           )}
-          {filtered.map(u => (
+          {tab === 'staff' && filteredUsers.map(u => (
             <div key={u.id} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '0.75rem 1.5rem', borderBottom: '1px solid #f9fafb',
@@ -154,6 +212,55 @@ const ImpersonationModal = ({ token, onImpersonate, onClose }) => {
                 }}
               >
                 {impersonating === u.id ? 'Loading...' : 'View As'}
+              </button>
+            </div>
+          ))}
+
+          {/* Clients list */}
+          {tab === 'clients' && !loading && filteredClients.length === 0 && (
+            <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
+              No clients found
+            </div>
+          )}
+          {tab === 'clients' && filteredClients.map(c => (
+            <div key={c.id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '0.75rem 1.5rem', borderBottom: '1px solid #f9fafb',
+              transition: 'background 0.1s'
+            }}
+              onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{
+                  width: '38px', height: '38px', borderRadius: '50%',
+                  background: '#059669' + '18',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '1.1rem'
+                }}>
+                  🏠
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                    {c.first_name} {c.last_name}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                    {c.email || c.phone || 'No contact info'}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => handlePortalPreview(c.id)}
+                disabled={impersonating === c.id}
+                style={{
+                  padding: '0.4rem 1rem', borderRadius: '6px', border: 'none',
+                  background: impersonating === c.id ? '#e5e7eb' : '#059669',
+                  color: impersonating === c.id ? '#9ca3af' : '#fff',
+                  fontSize: '0.82rem', fontWeight: 600, cursor: impersonating === c.id ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {impersonating === c.id ? 'Loading...' : 'View Portal'}
               </button>
             </div>
           ))}

@@ -12,7 +12,7 @@ import FamilyPortalLogin from './components/portal/FamilyPortalLogin';
 import FamilyPortal from './components/portal/FamilyPortal';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
-import { setSessionExpiredCallback } from './config';
+import { setSessionExpiredCallback } from './config'; // also installs global 401 fetch interceptor
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 const App = () => {
@@ -53,6 +53,10 @@ const PortalApp = () => {
     setToken(null);
     setClient(null);
   }, []);
+
+  useEffect(() => {
+    setSessionExpiredCallback(handleLogout);
+  }, [handleLogout]);
 
   useEffect(() => {
     if (token) {
@@ -112,6 +116,10 @@ const FamilyApp = () => {
     setFamilyUser(null);
     setPermissions(null);
   }, []);
+
+  useEffect(() => {
+    setSessionExpiredCallback(handleLogout);
+  }, [handleLogout]);
 
   useEffect(() => {
     if (token) {
@@ -257,7 +265,7 @@ const MainApp = () => {
           <span>
             👁️ Viewing as <strong>{impersonationUser.name}</strong>
             <span style={{ fontWeight: 400, opacity: 0.85, marginLeft: '0.5rem' }}>
-              ({impersonationUser.role}) — read-only debug view
+              ({impersonationUser.role === 'client' ? 'client portal' : impersonationUser.role}) — read-only debug view
             </span>
           </span>
           <button
@@ -273,9 +281,11 @@ const MainApp = () => {
         </div>
         {/* Offset content below banner */}
         <div style={{ paddingTop: '2.5rem' }}>
-          {impersonationUser.role === 'admin'
-            ? <AdminDashboard user={impersonationUser} token={impersonationToken} onLogout={exitImpersonation} />
-            : <CaregiverDashboard user={impersonationUser} token={impersonationToken} onLogout={exitImpersonation} />
+          {impersonationUser.role === 'client'
+            ? <ClientPortal user={impersonationUser} token={impersonationToken} onLogout={exitImpersonation} />
+            : impersonationUser.role === 'admin'
+              ? <AdminDashboard user={impersonationUser} token={impersonationToken} onLogout={exitImpersonation} />
+              : <CaregiverDashboard user={impersonationUser} token={impersonationToken} onLogout={exitImpersonation} />
           }
         </div>
       </ErrorBoundary>

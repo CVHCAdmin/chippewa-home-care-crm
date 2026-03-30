@@ -25,6 +25,20 @@ const clientAuth = async (req, res, next) => {
       return res.status(403).json({ error: 'Client access required' });
     }
 
+    // Admin impersonation — skip portal account check, just verify client exists
+    if (decoded.impersonation) {
+      const client = await db.query(
+        'SELECT id, first_name, last_name, is_active FROM clients WHERE id = $1',
+        [decoded.clientId]
+      );
+      if (client.rows.length === 0) {
+        return res.status(403).json({ error: 'Client not found' });
+      }
+      req.clientId   = decoded.clientId;
+      req.portalUser = client.rows[0];
+      return next();
+    }
+
     // Verify portal is still enabled and client is active
     const result = await db.query(`
       SELECT cpa.*, c.first_name, c.last_name, c.is_active
@@ -178,7 +192,7 @@ router.get('/portal/me', clientAuth, async (req, res) => {
         c.service_type, c.start_date,
         cpa.email as portal_email, cpa.last_login
       FROM clients c
-      JOIN client_portal_accounts cpa ON cpa.client_id = c.id
+      LEFT JOIN client_portal_accounts cpa ON cpa.client_id = c.id
       WHERE c.id = $1
     `, [req.clientId]);
 
