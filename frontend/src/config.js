@@ -6,13 +6,24 @@ let _onSessionExpired = null;
 export const setSessionExpiredCallback = (fn) => { _onSessionExpired = fn; };
 
 // Global fetch interceptor — auto-logout on 401 from our API
+// Uses a counter to avoid logging out on a single transient 401 (background polls, etc.)
+let _consecutive401s = 0;
 const _originalFetch = window.fetch;
 window.fetch = async function(input, init) {
   const url = typeof input === 'string' ? input : input?.url || '';
   const hasAuth = init?.headers?.Authorization || init?.headers?.authorization;
   const response = await _originalFetch.call(window, input, init);
-  if (response.status === 401 && hasAuth && url.includes(API_BASE_URL) && _onSessionExpired) {
-    _onSessionExpired();
+  if (hasAuth && url.includes(API_BASE_URL)) {
+    if (response.status === 401) {
+      _consecutive401s++;
+      // Only auto-logout after 2+ consecutive 401s to avoid race conditions
+      // with background polls during token refresh
+      if (_consecutive401s >= 2 && _onSessionExpired) {
+        _onSessionExpired();
+      }
+    } else {
+      _consecutive401s = 0;
+    }
   }
   return response;
 };
