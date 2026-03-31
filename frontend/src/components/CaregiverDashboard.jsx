@@ -330,6 +330,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const gpsIntervalRef = React.useRef(null);
   const geofenceIntervalRef = React.useRef(null);
   const geofenceTriggeredRef = React.useRef(new Set()); // track which clients we've already auto-clocked for
+  const geofenceOutsideCountRef = React.useRef(new Map()); // debounce: consecutive outside-geofence checks per client
 
   // Refs to hold latest state for use inside intervals (avoids stale closures)
   const locationRef = React.useRef(null);
@@ -381,9 +382,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         const data = await res.json();
 
         // AUTO CLOCK-IN: within geofence, not clocked in, not already triggered
+        if (data.withinGeofence) {
+          // Reset outside-geofence counter whenever we're inside
+          geofenceOutsideCountRef.current.delete(clientId);
+        }
         if (data.withinGeofence && data.autoClockIn && !currentSession && !alreadyTriggered) {
           geofenceTriggeredRef.current.add(clientId);
-          toast(`📍 You've arrived at ${data.clientName} — clocking you in automatically`, 'success');
           // Auto clock in
           const clockRes = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
             method: 'POST',
@@ -392,22 +396,32 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           });
           if (clockRes.ok) {
             const clockData = await clockRes.json();
+            toast(`📍 You've arrived at ${data.clientName} — clocked in automatically`, 'success');
             setActiveSession(clockData);
             setSelectedClient(clientId);
             gpsIntervalRef.current = startGPSBreadcrumbs(clockData.id);
+          } else {
+            // Clock-in failed — remove from triggered set so it can retry
+            geofenceTriggeredRef.current.delete(clientId);
           }
           break; // only clock into one client at a time
         }
 
         // AUTO CLOCK-OUT: was within geofence but now left, currently clocked into this client
+        // Require 3 consecutive outside-geofence checks (~90s) to prevent GPS jitter false clock-outs
         if (!data.withinGeofence && data.autoClockOut && currentSession?.client_id === clientId && alreadyTriggered) {
-          // Only auto clock-out if they've been there at least 10 minutes
-          const sessionStart = new Date(currentSession.start_time);
-          const minsElapsed = (now - sessionStart) / 60000;
-          if (minsElapsed >= 10) {
-            toast(`📍 You've left ${data.clientName}'s location — clocking you out automatically`, 'success');
-            geofenceTriggeredRef.current.delete(clientId);
-            setShowNoteModal(true); // prompt for visit note before clocking out
+          const outsideCount = (geofenceOutsideCountRef.current.get(clientId) || 0) + 1;
+          geofenceOutsideCountRef.current.set(clientId, outsideCount);
+          if (outsideCount >= 3) {
+            // Only auto clock-out if they've been there at least 10 minutes
+            const sessionStart = new Date(currentSession.start_time);
+            const minsElapsed = (now - sessionStart) / 60000;
+            if (minsElapsed >= 10) {
+              toast(`📍 You've left ${data.clientName}'s location — clocking you out automatically`, 'success');
+              geofenceTriggeredRef.current.delete(clientId);
+              geofenceOutsideCountRef.current.delete(clientId);
+              setShowNoteModal(true); // prompt for visit note before clocking out
+            }
           }
         }
       } catch(e) {
@@ -841,8 +855,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         {activeSession ? (
           // ACTIVE SESSION — big timer, center-stage
           <div style={{ textAlign: 'center', padding: '2rem 1.5rem', background: 'linear-gradient(135deg, #F0FDF4, #DCFCE7)' }}>
+            {/* Stale session warning — if clocked in for 16+ hours, likely forgot to clock out */}
+            {activeSession.start_time && ((new Date() - new Date(activeSession.start_time)) / 3600000) > 16 && (
+              <div style={{ background: '#FEF3C7', border: '1px solid #F59E0B', borderRadius: '8px', padding: '0.75rem', marginBottom: '1rem', fontSize: '0.85rem', color: '#92400E' }}>
+                This session has been open for {Math.round((new Date() - new Date(activeSession.start_time)) / 3600000)} hours.
+                If you forgot to clock out, clock out now and contact your admin to correct the time.
+              </div>
+            )}
             <div style={{ fontSize: '0.9rem', color: '#166534', fontWeight: '600', marginBottom: '0.25rem' }}>
-              🟢 Clocked In with {getClientName(activeSession.client_id)}
+              🟢 Clocked In with {activeSession.client_name || getClientName(activeSession.client_id)}
             </div>
             <div style={{ fontSize: '4rem', fontWeight: '900', fontFamily: 'monospace', color: '#16A34A', lineHeight: 1.1, margin: '0.5rem 0' }}>
               {formatElapsed(elapsedTime)}
