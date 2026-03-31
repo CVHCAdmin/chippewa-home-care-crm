@@ -173,7 +173,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       ]);
 
       if (schedulesRes.ok) setSchedules(await schedulesRes.json());
-      if (clientsRes.ok) setClients(await clientsRes.json());
+      if (clientsRes.ok) {
+        const clientData = await clientsRes.json();
+        setClients(clientData);
+        if (!clientData || clientData.length === 0) {
+          console.warn('[CaregiverDashboard] No clients returned from API');
+        }
+      } else {
+        console.error('[CaregiverDashboard] Failed to load clients:', clientsRes.status);
+      }
       if (activeRes.ok) {
         const data = await activeRes.json();
         if (data?.id) {
@@ -896,7 +904,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 onChange={(e) => setSelectedClient(e.target.value)}
                 style={{ width: '100%', padding: '0.875rem', fontSize: '1rem', border: '2px solid #D1D5DB', borderRadius: '10px', background: '#fff', boxSizing: 'border-box' }}
               >
-                <option value="">Choose client...</option>
+                <option value="">{clients.length === 0 ? 'No clients available — try refreshing' : 'Choose client...'}</option>
                 {(() => {
                   const todayClientIds = getTodaysAppointments().map(a => a.client_id);
                   const todayClients = clients.filter(c => todayClientIds.includes(c.id));
