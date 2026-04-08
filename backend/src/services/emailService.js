@@ -255,6 +255,41 @@ const sendInvoiceEmail = async ({ to, clientName, invoiceNumber, invoiceId, tota
   });
 };
 
+// ── Caregiver Welcome ─────────────────────────────────────────
+const sendCaregiverWelcome = async ({ to, firstName, tempPassword }) => {
+  const loginUrl = 'https://app.chippewavalleyhomecare.com';
+
+  return sendEmail({
+    to,
+    subject: `Welcome to ${AGENCY_NAME}!`,
+    html: wrap(`
+      <h3 style="color: #059669;">Welcome aboard, ${firstName}!</h3>
+      <p>You've been hired as a caregiver at ${AGENCY_NAME}. Your account is ready to go.</p>
+
+      <div style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+        <p style="margin: 0 0 8px; font-weight: 700; color: #065F46;">Your Login Credentials</p>
+        <p style="margin: 4px 0;"><strong>Email:</strong> ${to}</p>
+        <p style="margin: 4px 0;"><strong>Temporary Password:</strong> ${tempPassword}</p>
+      </div>
+
+      <p style="text-align: center; margin: 24px 0;">
+        <a href="${loginUrl}" style="background: #059669; color: #fff; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; display: inline-block;">
+          Log In to the App
+        </a>
+      </p>
+
+      <p style="color: #555; font-size: 0.9rem;">
+        Use the link above or go to <strong>${loginUrl}</strong> on your phone or computer.
+        We recommend changing your password after your first login.
+      </p>
+
+      <p style="color: #555; font-size: 0.9rem;">
+        If you have any questions, please contact the office. We're glad to have you on the team!
+      </p>
+    `),
+  });
+};
+
 module.exports = {
   sendEmail,
   sendClientPortalInvite,
@@ -262,5 +297,6 @@ module.exports = {
   sendFamilyPasswordReset,
   sendPasswordReset,
   sendInvoiceEmail,
+  sendCaregiverWelcome,
   isConfigured,
 };

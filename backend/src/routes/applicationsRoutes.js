@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { sendCaregiverWelcome } = require('../services/emailService');
 
 // ==================== PUBLIC ENDPOINT (NO AUTH) ====================
 
@@ -251,12 +252,16 @@ router.post('/:id/hire', auth, async (req, res) => {
       VALUES ($1, 'hired', $2, $3)
     `, [req.params.id, 'Converted to caregiver. Temporary password was set.', req.user.id]);
 
+    // Send welcome email with login credentials and app link
+    sendCaregiverWelcome({ to: caregiverEmail, firstName: a.first_name, tempPassword })
+      .catch(err => console.error('[Caregiver welcome email error]', err.message));
+
     res.json({
       success: true,
       caregiverId: userId,
       tempPassword,
       caregiver: caregiver.rows[0],
-      message: `${a.first_name} ${a.last_name} is now a caregiver. Please share the temporary password securely.`
+      message: `${a.first_name} ${a.last_name} is now a caregiver. A welcome email has been sent with login instructions.`
     });
   } catch (error) {
     console.error('Hire error:', error);
