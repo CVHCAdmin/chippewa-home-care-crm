@@ -1,421 +1,360 @@
-// src/components/admin/NotificationCenter.jsx
+// src/components/admin/NotificationCenter.jsx — Admin notification inbox with handled/archived workflow
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 
 const NotificationCenter = ({ token }) => {
-  const [tab, setTab] = useState('log'); // log or settings
+  const [tab, setTab] = useState('new'); // new, handled, archived, settings
   const [notifications, setNotifications] = useState([]);
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
-  const [showManualForm, setShowManualForm] = useState(false);
-  const [caregivers, setCaregivers] = useState([]);
-  const [clients, setClients] = useState([]);
-  const [filter, setFilter] = useState('all'); // all, sent, pending, failed
-  const [manualNotification, setManualNotification] = useState({
-    recipientType: 'caregiver', // caregiver or admin
-    recipientId: '',
-    notificationType: 'general',
-    subject: '',
-    message: ''
-  });
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [counts, setCounts] = useState({ new: 0, handled: 0, archived: 0 });
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadNotifications(); }, [tab]);
 
-  const loadData = async () => {
+  const loadNotifications = async () => {
+    setLoading(true);
+    setSelectedIds([]);
     try {
-      const [notificationsRes, settingsRes, caregiversRes, clientsRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/notifications`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }),
-        fetch(`${API_BASE_URL}/api/notification-settings`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }),
-        fetch(`${API_BASE_URL}/api/users/caregivers`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }),
-        fetch(`${API_BASE_URL}/api/clients`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        })
+      const statusParam = ['new', 'handled', 'archived'].includes(tab) ? `?status=${tab}` : '';
+      const [notifRes, settingsRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/notifications${statusParam}`, { headers: { Authorization: `Bearer ${token}` } }),
+        tab === 'settings' ? fetch(`${API_BASE_URL}/api/notification-settings`, { headers: { Authorization: `Bearer ${token}` } }) : Promise.resolve(null)
       ]);
+      if (notifRes.ok) {
+        const data = await notifRes.json();
+        setNotifications(Array.isArray(data) ? data : []);
+      }
+      if (settingsRes?.ok) setSettings(await settingsRes.json());
 
-      const notificationsData = notificationsRes.ok ? await notificationsRes.json() : [];
-      const settingsData = settingsRes.ok ? await settingsRes.json() : {};
-      const caregiversData = caregiversRes.ok ? await caregiversRes.json() : [];
-      const clientsData = clientsRes.ok ? await clientsRes.json() : [];
+      // Mark all "new" notifications as read so the bell badge clears
+      if (tab === 'new' && Array.isArray(data) && data.length > 0) {
+        fetch(`${API_BASE_URL}/api/push/mark-read`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ids: 'all' })
+        }).catch(() => {});
+      }
 
-      setNotifications(Array.isArray(notificationsData) ? notificationsData : []);
-      setSettings(settingsData || {});
-      setCaregivers(Array.isArray(caregiversData) ? caregiversData : []);
-      setClients(Array.isArray(clientsData) ? clientsData : []);
+      // Load counts for all tabs
+      const [newRes, handledRes, archivedRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/notifications?status=new`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/notifications?status=handled`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/notifications?status=archived`, { headers: { Authorization: `Bearer ${token}` } })
+      ]);
+      setCounts({
+        new: newRes.ok ? (await newRes.json()).length : 0,
+        handled: handledRes.ok ? (await handledRes.json()).length : 0,
+        archived: archivedRes.ok ? (await archivedRes.json()).length : 0
+      });
     } catch (error) {
-      console.error('Failed to load data:', error);
+      console.error('Failed to load notifications:', error);
     } finally {
       setLoading(false);
     }
   };
 
+  const updateStatus = async (id, status) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/notifications/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status })
+      });
+      if (!res.ok) throw new Error('Failed');
+      loadNotifications();
+    } catch (error) {
+      setMessage('Error: ' + error.message);
+      setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
+  const bulkUpdateStatus = async (status) => {
+    if (!selectedIds.length) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/notifications/bulk-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ids: selectedIds, status })
+      });
+      if (!res.ok) throw new Error('Failed');
+      setMessage(`${selectedIds.length} notification(s) marked as ${status}`);
+      setTimeout(() => setMessage(''), 3000);
+      loadNotifications();
+    } catch (error) {
+      setMessage('Error: ' + error.message);
+      setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
+  const deleteNotification = async (id) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/notifications/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed');
+      loadNotifications();
+    } catch (error) {
+      setMessage('Error: ' + error.message);
+      setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
   const handleSaveSettings = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/notification-settings`, {
+      const res = await fetch(`${API_BASE_URL}/api/notification-settings`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(settings)
       });
-
-      if (!response.ok) throw new Error('Failed to save settings');
-
-      setMessage('Notification settings saved!');
+      if (!res.ok) throw new Error('Failed to save');
+      setMessage('Settings saved!');
       setTimeout(() => setMessage(''), 2000);
-    } catch (error) {
-      setMessage('Error: ' + error.message);
-    }
+    } catch (error) { setMessage('Error: ' + error.message); }
   };
 
-  const handleSendManualNotification = async (e) => {
-    e.preventDefault();
-    setMessage('');
-
-    if (!manualNotification.recipientId || !manualNotification.subject || !manualNotification.message) {
-      setMessage('Recipient, subject, and message are required');
-      return;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/notifications/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(manualNotification)
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to send notification');
-      }
-
-      setMessage('Notification sent successfully!');
-      setManualNotification({
-        recipientType: 'caregiver',
-        recipientId: '',
-        notificationType: 'general',
-        subject: '',
-        message: ''
-      });
-      setShowManualForm(false);
-      loadData();
-    } catch (error) {
-      setMessage('Error: ' + error.message);
-    }
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
-  const getRecipientName = (type, id) => {
-    if (type === 'caregiver') {
-      const cg = caregivers.find(c => c.id === id);
-      return cg ? `${cg.first_name} ${cg.last_name}` : 'Unknown';
-    } else {
-      return 'Administrator';
-    }
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => prev.length === notifications.length ? [] : notifications.map(n => n.id));
   };
 
-  const getNotificationTypeLabel = (type) => {
-    const labels = {
-      'schedule_confirmation': 'Schedule Confirmation',
-      'absence_alert': 'Absence Alert',
-      'incident_alert': 'Incident Alert',
-      'certification_warning': 'Certification Warning',
-      'general': 'General Message'
+  const typeIcon = (type) => {
+    const icons = {
+      time_off_request: '🏖️',
+      schedule_alert: '📅',
+      absence_alert: '🚫',
+      incident_alert: '⚠️',
+      certification_warning: '📜',
+      billing_alert: '🧾',
+      general: '📬'
     };
-    return labels[type] || type;
+    return icons[type] || '📬';
   };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'sent':
-        return '#4caf50';
-      case 'pending':
-        return '#2196f3';
-      case 'failed':
-        return '#d32f2f';
-      default:
-        return '#999';
-    }
+  const typeLabel = (type) => {
+    const labels = {
+      time_off_request: 'Time Off Request',
+      schedule_alert: 'Schedule',
+      absence_alert: 'Absence',
+      incident_alert: 'Incident',
+      certification_warning: 'Certification',
+      billing_alert: 'Billing',
+      general: 'General'
+    };
+    return labels[type] || type || 'General';
   };
 
-  const filteredNotifications = notifications
-    .filter(notif => filter === 'all' || notif.status === filter)
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const timeAgo = (dateStr) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
 
-  if (loading) {
-    return (
-      <div className="loading">
-        <div className="spinner"></div>
-      </div>
-    );
-  }
+  const tabs = [
+    { id: 'new', label: 'New', count: counts.new, color: '#DC2626' },
+    { id: 'handled', label: 'Handled', count: counts.handled, color: '#059669' },
+    { id: 'archived', label: 'Archived', count: counts.archived, color: '#6B7280' },
+    { id: 'settings', label: 'Settings', count: null, color: null }
+  ];
 
   return (
     <div>
       <div className="page-header">
-        <h2>Notification Center</h2>
+        <h2>Notifications</h2>
       </div>
 
       {message && (
-        <div className={`alert ${message.includes('Error') ? 'alert-error' : 'alert-success'}`}>
+        <div style={{ padding: '0.75rem 1rem', marginBottom: '1rem', borderRadius: '8px', background: message.startsWith('Error') ? '#FEE2E2' : '#D1FAE5', color: message.startsWith('Error') ? '#DC2626' : '#059669', fontWeight: '500' }}>
           {message}
         </div>
       )}
 
-      {/* Tab Navigation */}
-      <div className="card" style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid #ddd', marginBottom: '1rem' }}>
-          <button
-            onClick={() => setTab('log')}
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
             style={{
-              padding: '1rem',
-              background: tab === 'log' ? '#2196f3' : 'transparent',
-              color: tab === 'log' ? 'white' : 'inherit',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              borderBottom: tab === 'log' ? '3px solid #2196f3' : 'none'
-            }}
-          >
-            Notification Log
+              padding: '0.5rem 1rem', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '0.9rem',
+              border: tab === t.id ? '2px solid #2563EB' : '1px solid #D1D5DB',
+              background: tab === t.id ? '#EFF6FF' : '#fff',
+              color: tab === t.id ? '#2563EB' : '#374151',
+              display: 'flex', alignItems: 'center', gap: '0.4rem'
+            }}>
+            {t.label}
+            {t.count != null && t.count > 0 && (
+              <span style={{
+                background: tab === t.id ? '#2563EB' : t.color, color: '#fff',
+                borderRadius: '99px', fontSize: '0.72rem', fontWeight: '700',
+                padding: '1px 6px', minWidth: '18px', textAlign: 'center'
+              }}>{t.count}</span>
+            )}
           </button>
-          <button
-            onClick={() => setTab('settings')}
-            style={{
-              padding: '1rem',
-              background: tab === 'settings' ? '#2196f3' : 'transparent',
-              color: tab === 'settings' ? 'white' : 'inherit',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              borderBottom: tab === 'settings' ? '3px solid #2196f3' : 'none'
-            }}
-          >
-            Settings
-          </button>
-        </div>
+        ))}
       </div>
 
-      {/* Notification Log Tab */}
-      {tab === 'log' && (
-        <>
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem' }}>
-            <div className="filter-tabs">
-              {['all', 'sent', 'pending', 'failed'].map(f => (
-                <button
-                  key={f}
-                  className={`filter-tab ${filter === f ? 'active' : ''}`}
-                  onClick={() => setFilter(f)}
-                >
-                  {f.charAt(0).toUpperCase() + f.slice(1)}
-                  {f !== 'all' && ` (${filteredNotifications.filter(n => n.status === f).length})`}
-                </button>
-              ))}
-            </div>
-            <button
-              className="btn btn-primary"
-              onClick={() => setShowManualForm(!showManualForm)}
-            >
-              {showManualForm ? 'Cancel' : 'Send Notification'}
+      {/* Bulk actions bar */}
+      {selectedIds.length > 0 && tab !== 'settings' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 1rem', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '8px', marginBottom: '1rem', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.875rem', fontWeight: '600', color: '#1D4ED8' }}>
+            {selectedIds.length} selected
+          </span>
+          {tab === 'new' && (
+            <button onClick={() => bulkUpdateStatus('handled')}
+              style={{ padding: '0.35rem 0.75rem', background: '#059669', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: '600' }}>
+              Mark Handled
             </button>
+          )}
+          {tab !== 'archived' && (
+            <button onClick={() => bulkUpdateStatus('archived')}
+              style={{ padding: '0.35rem 0.75rem', background: '#6B7280', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: '600' }}>
+              Archive
+            </button>
+          )}
+          {tab === 'archived' && (
+            <button onClick={() => bulkUpdateStatus('new')}
+              style={{ padding: '0.35rem 0.75rem', background: '#2563EB', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: '600' }}>
+              Move to New
+            </button>
+          )}
+          <button onClick={() => setSelectedIds([])}
+            style={{ padding: '0.35rem 0.75rem', background: 'none', border: '1px solid #D1D5DB', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem', color: '#6B7280' }}>
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* Notification list */}
+      {tab !== 'settings' && (
+        loading ? (
+          <div className="card" style={{ textAlign: 'center', padding: '2rem', color: '#888' }}>Loading...</div>
+        ) : notifications.length === 0 ? (
+          <div className="card" style={{ textAlign: 'center', padding: '2rem', color: '#888' }}>
+            No {tab} notifications
           </div>
-
-          {/* Manual Send Form */}
-          {showManualForm && (
-            <div className="card card-form">
-              <h3>Send Manual Notification</h3>
-              <form onSubmit={handleSendManualNotification}>
-                <div className="form-grid-2">
-                  <div className="form-group">
-                    <label>Recipient Type *</label>
-                    <select
-                      value={manualNotification.recipientType}
-                      onChange={(e) => setManualNotification({ ...manualNotification, recipientType: e.target.value, recipientId: '' })}
-                    >
-                      <option value="caregiver">Caregiver</option>
-                      <option value="admin">Administrator</option>
-                    </select>
-                  </div>
-
-                  {manualNotification.recipientType === 'caregiver' && (
-                    <div className="form-group">
-                      <label>Caregiver *</label>
-                      <select
-                        value={manualNotification.recipientId}
-                        onChange={(e) => setManualNotification({ ...manualNotification, recipientId: e.target.value })}
-                        required
-                      >
-                        <option value="">Select caregiver...</option>
-                        {caregivers.map(cg => (
-                          <option key={cg.id} value={cg.id}>
-                            {cg.first_name} {cg.last_name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="form-group">
-                    <label>Notification Type</label>
-                    <select
-                      value={manualNotification.notificationType}
-                      onChange={(e) => setManualNotification({ ...manualNotification, notificationType: e.target.value })}
-                    >
-                      <option value="general">General Message</option>
-                      <option value="schedule_confirmation">Schedule Confirmation</option>
-                      <option value="absence_alert">Absence Alert</option>
-                      <option value="incident_alert">Incident Alert</option>
-                      <option value="certification_warning">Certification Warning</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Subject *</label>
-                  <input
-                    type="text"
-                    value={manualNotification.subject}
-                    onChange={(e) => setManualNotification({ ...manualNotification, subject: e.target.value })}
-                    placeholder="Email subject line..."
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Message *</label>
-                  <textarea
-                    value={manualNotification.message}
-                    onChange={(e) => setManualNotification({ ...manualNotification, message: e.target.value })}
-                    placeholder="Email body text..."
-                    rows="5"
-                    required
-                  ></textarea>
-                </div>
-
-                <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">Send Notification</button>
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowManualForm(false)}>Cancel</button>
-                </div>
-              </form>
+        ) : (
+          <div>
+            {/* Select all */}
+            <div style={{ marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input type="checkbox" checked={selectedIds.length === notifications.length && notifications.length > 0} onChange={toggleSelectAll} />
+              <span style={{ fontSize: '0.82rem', color: '#6B7280' }}>Select all</span>
             </div>
-          )}
 
-          {/* Notifications List */}
-          {filteredNotifications.length === 0 ? (
-            <div className="card card-centered">
-              <p>No notifications in this filter.</p>
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gap: '1rem' }}>
-              {filteredNotifications.map(notif => (
-                <div
-                  key={notif.id}
-                  style={{
-                    padding: '1rem',
-                    border: `1px solid #ddd`,
-                    borderLeft: `4px solid ${getStatusColor(notif.status)}`,
-                    borderRadius: '4px',
-                    background: '#f9f9f9'
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.75rem' }}>
-                    <div>
-                      <h4 style={{ margin: '0 0 0.25rem 0' }}>{notif.subject}</h4>
-                      <small style={{ color: '#666' }}>
-                        To: {getRecipientName(notif.recipient_type, notif.recipient_id)}
-                      </small>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                      <span
-                        className="badge"
-                        style={{
-                          background: getStatusColor(notif.status),
-                          color: 'white',
-                          fontSize: '0.85rem'
-                        }}
-                      >
-                        {(notif.status || 'unknown').toUpperCase()}
-                      </span>
-                      <span className="badge badge-secondary" style={{ fontSize: '0.85rem' }}>
-                        {getNotificationTypeLabel(notif.notification_type)}
-                      </span>
-                    </div>
-                  </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {notifications.map(n => {
+                const isSelected = selectedIds.includes(n.id);
+                return (
+                  <div key={n.id} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
+                    padding: '0.875rem 1rem', borderRadius: '8px',
+                    border: isSelected ? '2px solid #2563EB' : '1px solid #E5E7EB',
+                    background: isSelected ? '#EFF6FF' : '#fff',
+                    transition: 'all 0.1s'
+                  }}>
+                    <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(n.id)} style={{ marginTop: '0.2rem' }} />
 
-                  <p style={{ margin: '0.5rem 0', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
-                    {notif.message}
-                  </p>
+                    <div style={{ fontSize: '1.3rem', marginTop: '0.1rem' }}>{typeIcon(n.type)}</div>
 
-                  <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid #e0e0e0', fontSize: '0.85rem', color: '#999' }}>
-                    Sent: {new Date(notif.sent_at || notif.created_at).toLocaleString()}
-                    {notif.status === 'failed' && notif.error_message && (
-                      <div style={{ color: '#d32f2f', marginTop: '0.25rem' }}>
-                        Error: {notif.error_message}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: '600', fontSize: '0.95rem' }}>{n.title}</div>
+                          <span style={{
+                            display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: '4px',
+                            fontSize: '0.72rem', fontWeight: '600', background: '#F3F4F6', color: '#374151', marginTop: '0.2rem'
+                          }}>{typeLabel(n.type)}</span>
+                        </div>
+                        <span style={{ fontSize: '0.78rem', color: '#9CA3AF', whiteSpace: 'nowrap' }}>{timeAgo(n.created_at)}</span>
                       </div>
-                    )}
+                      {n.message && (
+                        <p style={{ margin: '0.4rem 0 0', fontSize: '0.9rem', color: '#555', lineHeight: '1.4' }}>{n.message}</p>
+                      )}
+                      {n.handled_at && (
+                        <div style={{ fontSize: '0.78rem', color: '#9CA3AF', marginTop: '0.3rem' }}>
+                          Handled {timeAgo(n.handled_at)}
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                        {tab === 'new' && (
+                          <button onClick={() => updateStatus(n.id, 'handled')}
+                            style={{ padding: '0.25rem 0.6rem', background: '#D1FAE5', color: '#059669', border: '1px solid #A7F3D0', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}>
+                            Mark Handled
+                          </button>
+                        )}
+                        {tab !== 'archived' && (
+                          <button onClick={() => updateStatus(n.id, 'archived')}
+                            style={{ padding: '0.25rem 0.6rem', background: '#F3F4F6', color: '#6B7280', border: '1px solid #D1D5DB', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}>
+                            Archive
+                          </button>
+                        )}
+                        {tab === 'handled' && (
+                          <button onClick={() => updateStatus(n.id, 'new')}
+                            style={{ padding: '0.25rem 0.6rem', background: '#DBEAFE', color: '#2563EB', border: '1px solid #BFDBFE', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}>
+                            Reopen
+                          </button>
+                        )}
+                        {tab === 'archived' && (
+                          <button onClick={() => updateStatus(n.id, 'new')}
+                            style={{ padding: '0.25rem 0.6rem', background: '#DBEAFE', color: '#2563EB', border: '1px solid #BFDBFE', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}>
+                            Move to New
+                          </button>
+                        )}
+                        <button onClick={() => deleteNotification(n.id)}
+                          style={{ padding: '0.25rem 0.6rem', background: '#FEE2E2', color: '#DC2626', border: '1px solid #FECACA', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}>
+                          Delete
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
-          )}
-        </>
+          </div>
+        )
       )}
 
       {/* Settings Tab */}
       {tab === 'settings' && (
-        <div className="card card-form">
-          <h3>Notification Settings</h3>
-          <p style={{ color: '#666', marginBottom: '1.5rem' }}>
-            Configure when and how notifications are sent automatically
-          </p>
+        <div className="card" style={{ padding: '1.5rem' }}>
+          <h3 style={{ marginTop: 0 }}>Notification Settings</h3>
+          <p style={{ color: '#666', marginBottom: '1.5rem' }}>Configure when automatic notifications are sent</p>
 
           <h4>Schedule Notifications</h4>
           <div style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid #ddd' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={settings.send_schedule_confirmations !== false}
-                onChange={(e) => setSettings({ ...settings, send_schedule_confirmations: e.target.checked })}
-              />
+              <input type="checkbox" checked={settings.send_schedule_confirmations !== false}
+                onChange={e => setSettings({ ...settings, send_schedule_confirmations: e.target.checked })} />
               <span>Send confirmation when caregiver is scheduled</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={settings.send_schedule_reminders !== false}
-                onChange={(e) => setSettings({ ...settings, send_schedule_reminders: e.target.checked })}
-              />
-              <span>Send shift reminders 24 hours before scheduled shifts</span>
+              <input type="checkbox" checked={settings.send_schedule_reminders !== false}
+                onChange={e => setSettings({ ...settings, send_schedule_reminders: e.target.checked })} />
+              <span>Send shift reminders 24 hours before</span>
             </label>
           </div>
 
           <h4>Absence Notifications</h4>
           <div style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid #ddd' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={settings.send_absence_alerts !== false}
-                onChange={(e) => setSettings({ ...settings, send_absence_alerts: e.target.checked })}
-              />
+              <input type="checkbox" checked={settings.send_absence_alerts !== false}
+                onChange={e => setSettings({ ...settings, send_absence_alerts: e.target.checked })} />
               <span>Notify admin when caregiver reports absence</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={settings.send_absence_decisions !== false}
-                onChange={(e) => setSettings({ ...settings, send_absence_decisions: e.target.checked })}
-              />
+              <input type="checkbox" checked={settings.send_absence_decisions !== false}
+                onChange={e => setSettings({ ...settings, send_absence_decisions: e.target.checked })} />
               <span>Notify caregiver when absence is approved/denied</span>
             </label>
           </div>
@@ -423,44 +362,31 @@ const NotificationCenter = ({ token }) => {
           <h4>Incident Notifications</h4>
           <div style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid #ddd' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={settings.send_incident_alerts !== false}
-                onChange={(e) => setSettings({ ...settings, send_incident_alerts: e.target.checked })}
-              />
-              <span>Notify admin for critical/severe incidents immediately</span>
+              <input type="checkbox" checked={settings.send_incident_alerts !== false}
+                onChange={e => setSettings({ ...settings, send_incident_alerts: e.target.checked })} />
+              <span>Notify admin for critical incidents immediately</span>
             </label>
           </div>
 
           <h4>Certification Notifications</h4>
           <div style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid #ddd' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={settings.send_certification_warnings !== false}
-                onChange={(e) => setSettings({ ...settings, send_certification_warnings: e.target.checked })}
-              />
-              <span>Notify admin when certification is expiring in 30 days</span>
+              <input type="checkbox" checked={settings.send_certification_warnings !== false}
+                onChange={e => setSettings({ ...settings, send_certification_warnings: e.target.checked })} />
+              <span>Notify when certification expires in 30 days</span>
             </label>
           </div>
 
           <h4>Email Configuration</h4>
           <div className="form-group" style={{ marginBottom: '1.5rem' }}>
             <label>Admin Email for Alerts</label>
-            <input
-              type="email"
-              value={settings.admin_email || ''}
-              onChange={(e) => setSettings({ ...settings, admin_email: e.target.value })}
-              placeholder="admin@example.com"
-            />
+            <input type="email" value={settings.admin_email || ''}
+              onChange={e => setSettings({ ...settings, admin_email: e.target.value })}
+              placeholder="admin@example.com" />
             <small style={{ color: '#666' }}>Where critical alerts will be sent</small>
           </div>
 
-          <div className="form-actions">
-            <button className="btn btn-primary" onClick={handleSaveSettings}>
-              Save Settings
-            </button>
-          </div>
+          <button className="btn btn-primary" onClick={handleSaveSettings}>Save Settings</button>
         </div>
       )}
     </div>

@@ -48,8 +48,8 @@ router.post('/generate-shifts', auth, async (req, res) => {
     // Step 1: Expand all schedule occurrences and match to time entries
     const matchResult = await db.query(`
       WITH ${SCHEDULE_EXPANSION_CTE},
-      matched AS (
-        -- Scheduled shifts matched to clock-ins
+      -- Rank time entries per shift by best match: schedule_id first, then closest start time
+      ranked_matches AS (
         SELECT
           so.schedule_id,
           so.caregiver_id,
@@ -62,19 +62,35 @@ router.post('/generate-shifts', auth, async (req, res) => {
           te.start_time AS actual_start,
           te.end_time AS actual_end,
           COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
-          CASE
-            WHEN te.id IS NOT NULL AND ABS(COALESCE(te.billable_minutes, te.duration_minutes, 0) - so.scheduled_minutes) <= 15
-              THEN 'verified'
-            WHEN te.id IS NOT NULL
-              THEN 'pending'
-            ELSE 'missing_punch'
-          END AS auto_status
+          ROW_NUMBER() OVER (
+            PARTITION BY so.schedule_id, so.shift_date
+            ORDER BY
+              -- Prefer exact schedule_id match
+              CASE WHEN te.schedule_id = so.schedule_id THEN 0 ELSE 1 END,
+              -- Then prefer closest start time to scheduled start
+              ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start)))
+          ) AS rn
         FROM shift_occurrences so
         LEFT JOIN time_entries te
           ON te.caregiver_id = so.caregiver_id
           AND te.client_id = so.client_id
           AND DATE(te.start_time) = so.shift_date
-          AND te.is_complete = true
+      ),
+      matched AS (
+        -- Scheduled shifts matched to best clock-in
+        SELECT
+          schedule_id, caregiver_id, client_id, shift_date,
+          scheduled_start, scheduled_end, scheduled_minutes,
+          time_entry_id, actual_start, actual_end, actual_minutes,
+          CASE
+            WHEN time_entry_id IS NOT NULL AND ABS(COALESCE(actual_minutes, 0) - scheduled_minutes) <= 15
+              THEN 'verified'
+            WHEN time_entry_id IS NOT NULL
+              THEN 'pending'
+            ELSE 'missing_punch'
+          END AS auto_status
+        FROM ranked_matches
+        WHERE rn = 1
 
         UNION ALL
 
@@ -93,8 +109,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
           COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
           'pending' AS auto_status
         FROM time_entries te
-        WHERE te.is_complete = true
-          AND DATE(te.start_time) >= $1::date
+        WHERE DATE(te.start_time) >= $1::date
           AND DATE(te.start_time) <= $2::date
           AND NOT EXISTS (
             SELECT 1 FROM shift_occurrences so

@@ -7,16 +7,21 @@ import AddCaregiverModal from './AddCaregiverModal';
 import CaregiverDetail from './CaregiverDetail';
 
 // Mobile-friendly caregiver card
-const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, onPromote }) => (
-  <div className="card" style={{ marginBottom: '0.75rem', padding: '1rem' }}>
+const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, onPromote, onToggleActive }) => (
+  <div className="card" style={{ marginBottom: '0.75rem', padding: '1rem', opacity: caregiver.is_active === false ? 0.65 : 1 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
       <div>
         <strong style={{ fontSize: '1.1rem' }}>{caregiver.first_name} {caregiver.last_name}</strong>
         <div style={{ fontSize: '0.85rem', color: '#666' }}>{caregiver.email}</div>
       </div>
-      <span className={`badge ${caregiver.role === 'admin' ? 'badge-danger' : 'badge-info'}`}>
-        {(caregiver.role || 'caregiver').toUpperCase()}
-      </span>
+      <div style={{ display: 'flex', gap: '0.35rem' }}>
+        {caregiver.is_active === false && (
+          <span className="badge" style={{ background: '#DC2626', color: '#fff' }}>INACTIVE</span>
+        )}
+        <span className={`badge ${caregiver.role === 'admin' ? 'badge-danger' : 'badge-info'}`}>
+          {(caregiver.role || 'caregiver').toUpperCase()}
+        </span>
+      </div>
     </div>
     
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
@@ -53,6 +58,10 @@ const CaregiverCard = ({ caregiver, formatCurrency, onEdit, onRates, onProfile, 
       {caregiver.role !== 'admin' && (
         <button className="btn btn-sm btn-warning" onClick={() => onPromote(caregiver.id)}>⬆️ Admin</button>
       )}
+      <button className="btn btn-sm" onClick={() => onToggleActive(caregiver)}
+        style={{ background: caregiver.is_active === false ? '#D1FAE5' : '#FEE2E2', color: caregiver.is_active === false ? '#059669' : '#DC2626', border: 'none', borderRadius: 6, padding: '0.25rem 0.6rem', cursor: 'pointer', fontWeight: 700, fontSize: '0.78rem' }}>
+        {caregiver.is_active === false ? 'Reactivate' : 'Deactivate'}
+      </button>
     </div>
   </div>
 );
@@ -104,7 +113,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
   const loadData = async () => {
     try {
       const [cgRes, ctRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/api/caregivers?includeInactive=true`, { headers: { 'Authorization': `Bearer ${token}` } }),
         fetch(`${API_BASE_URL}/api/care-types`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
       if (!cgRes.ok || !ctRes.ok) throw new Error('Failed to load data');
@@ -136,6 +145,24 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
       } catch (error) {
         toast('Failed to promote: ' + error.message, 'error');
       }
+    }
+  };
+
+  const handleToggleActive = async (caregiver) => {
+    const newStatus = !caregiver.is_active;
+    const action = newStatus ? 'reactivate' : 'deactivate';
+    if (!await confirm(`${newStatus ? 'Reactivate' : 'Deactivate'} ${caregiver.first_name} ${caregiver.last_name}?${!newStatus ? ' They will no longer appear on schedules.' : ''}`, { danger: !newStatus })) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/caregivers/${caregiver.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ isActive: newStatus })
+      });
+      if (!response.ok) throw new Error(`Failed to ${action}`);
+      loadData();
+      toast(`Caregiver ${action}d!`);
+    } catch (error) {
+      toast(`Failed to ${action}: ` + error.message, 'error');
     }
   };
 
@@ -374,6 +401,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
               onRates={handleOpenRates}
               onProfile={onViewProfile}
               onPromote={handlePromoteToAdmin}
+              onToggleActive={handleToggleActive}
             />
           ))}
         </div>
@@ -391,13 +419,13 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                 <th>Phone</th>
                 <th>Address</th>
                 <th>Default Rate</th>
-                <th>Role</th>
+                <th>Status</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredCaregivers.map(caregiver => (
-                <tr key={caregiver.id} style={{ background: selectedIds.includes(caregiver.id) ? '#EFF6FF' : undefined }}>
+                <tr key={caregiver.id} style={{ background: selectedIds.includes(caregiver.id) ? '#EFF6FF' : undefined, opacity: caregiver.is_active === false ? 0.65 : 1 }}>
                   <td>
                     <input type="checkbox" checked={selectedIds.includes(caregiver.id)}
                       onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, caregiver.id] : prev.filter(id => id !== caregiver.id))} />
@@ -414,9 +442,11 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                   </td>
                   <td><strong>{formatCurrency(caregiver.default_pay_rate)}</strong>/hr</td>
                   <td>
-                    <span className={`badge ${caregiver.role === 'admin' ? 'badge-danger' : 'badge-info'}`}>
-                      {(caregiver.role || 'caregiver').toUpperCase()}
-                    </span>
+                    {caregiver.is_active === false ? (
+                      <span className="badge" style={{ background: '#DC2626', color: '#fff' }}>INACTIVE</span>
+                    ) : (
+                      <span className="badge" style={{ background: '#059669', color: '#fff' }}>ACTIVE</span>
+                    )}
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -429,6 +459,10 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                       {caregiver.role !== 'admin' && (
                         <button className="btn btn-sm btn-warning" onClick={() => handlePromoteToAdmin(caregiver.id)}>Make Admin</button>
                       )}
+                      <button className="btn btn-sm" onClick={() => handleToggleActive(caregiver)}
+                        style={{ background: caregiver.is_active === false ? '#D1FAE5' : '#FEE2E2', color: caregiver.is_active === false ? '#059669' : '#DC2626', border: 'none', borderRadius: 6, padding: '0.25rem 0.6rem', cursor: 'pointer', fontWeight: 700, fontSize: '0.78rem' }}>
+                        {caregiver.is_active === false ? 'Reactivate' : 'Deactivate'}
+                      </button>
                     </div>
                   </td>
                 </tr>

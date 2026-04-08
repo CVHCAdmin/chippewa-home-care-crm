@@ -5,13 +5,14 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 
-// GET /api/caregivers - All active caregivers
+// GET /api/caregivers - All caregivers (optionally include inactive via ?includeInactive=true)
 router.get('/', verifyToken, async (req, res) => {
   try {
+    const includeInactive = req.query.includeInactive === 'true';
     const result = await db.query(
       `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate,
               address, city, state, zip, latitude, longitude, ivr_pin
-       FROM users WHERE role = 'caregiver' AND is_active = true ORDER BY first_name`
+       FROM users WHERE role = 'caregiver' ${includeInactive ? '' : 'AND is_active = true'} ORDER BY is_active DESC, first_name`
     );
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -33,7 +34,7 @@ router.get('/available', verifyToken, async (req, res) => {
       SELECT u.id, u.first_name, u.last_name, ca.${availableField}, ca.${startField}, ca.${endField}
       FROM users u
       LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
-      WHERE u.role = 'caregiver'
+      WHERE u.role = 'caregiver' AND u.is_active = true
       AND ca.${availableField} = true
       AND ca.${startField} <= $1
       AND ca.${endField} >= $2

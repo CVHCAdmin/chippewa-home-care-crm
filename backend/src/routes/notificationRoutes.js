@@ -4,14 +4,35 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+// ─── HELPER: notify all admins ──────────────────────────────────────────────
+async function notifyAdmins(type, title, message) {
+  try {
+    const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
+    for (const admin of admins.rows) {
+      await db.query(
+        `INSERT INTO notifications (id, user_id, type, title, message, status) VALUES ($1,$2,$3,$4,$5,'new')`,
+        [uuidv4(), admin.id, type, title, message]
+      );
+    }
+  } catch (e) { console.error('[notifyAdmins error]', e.message); }
+}
+
+// Export for use in other route files
+router.notifyAdmins = notifyAdmins;
+
 // ─── NOTIFICATIONS ───────────────────────────────────────────────────────────
 
 router.get('/notifications', verifyToken, async (req, res) => {
   try {
-    const result = await db.query(
-      `SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,
-      [req.user.id]
-    );
+    const { status } = req.query;
+    let query = `SELECT * FROM notifications WHERE user_id=$1`;
+    const params = [req.user.id];
+    if (status && ['new', 'handled', 'archived'].includes(status)) {
+      params.push(status);
+      query += ` AND status = $${params.length}`;
+    }
+    query += ` ORDER BY created_at DESC LIMIT 100`;
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -77,6 +98,42 @@ router.patch('/notifications/:id/read', verifyToken, async (req, res) => {
     const result = await db.query(`UPDATE notifications SET is_read=true WHERE id=$1 RETURNING *`, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Notification not found' });
     res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// PATCH /notifications/:id/status — mark as handled or archived
+router.patch('/notifications/:id/status', verifyToken, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['new', 'handled', 'archived'].includes(status)) return res.status(400).json({ error: 'Status must be new, handled, or archived' });
+    const updates = status === 'handled'
+      ? `status='handled', is_read=true, handled_at=NOW(), handled_by=$2`
+      : status === 'archived'
+        ? `status='archived', is_read=true`
+        : `status='new', is_read=false, handled_at=NULL, handled_by=NULL`;
+    const params = status === 'handled' ? [req.params.id, req.user.id] : [req.params.id];
+    const result = await db.query(`UPDATE notifications SET ${updates} WHERE id=$1 RETURNING *`, params);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Notification not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /notifications/bulk-status — bulk update status
+router.post('/notifications/bulk-status', verifyToken, async (req, res) => {
+  try {
+    const { ids, status } = req.body;
+    if (!ids?.length || !['handled', 'archived', 'new'].includes(status)) return res.status(400).json({ error: 'ids and valid status required' });
+    let updated = 0;
+    for (const id of ids) {
+      const updates = status === 'handled'
+        ? `status='handled', is_read=true, handled_at=NOW(), handled_by='${req.user.id}'`
+        : status === 'archived'
+          ? `status='archived', is_read=true`
+          : `status='new', is_read=false, handled_at=NULL, handled_by=NULL`;
+      const r = await db.query(`UPDATE notifications SET ${updates} WHERE id=$1 AND user_id=$2 RETURNING id`, [id, req.user.id]);
+      if (r.rows.length) updated++;
+    }
+    res.json({ updated });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

@@ -467,17 +467,29 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     };
   }, [location]); // only restart interval when location first becomes available
 
+  const [clockingIn, setClockingIn] = useState(false);
+
   const handleClockIn = async () => {
     if (!selectedClient) return toast('Please select a client.');
+    if (clockingIn) return;
+    setClockingIn(true);
 
     try {
-      // Get fresh position if we don't have one
+      // Use whatever GPS we already have — don't block on a fresh fix
       let lat = location?.latitude || null;
       let lng = location?.longitude || null;
       if (!lat) {
-        const pos = await getPosition();
-        lat = pos?.latitude || location?.latitude || null;
-        lng = pos?.longitude || location?.longitude || null;
+        // Try a quick GPS grab but don't let it block clock-in
+        try {
+          const pos = await Promise.race([
+            getPosition(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 3000))
+          ]);
+          lat = pos?.latitude || null;
+          lng = pos?.longitude || null;
+        } catch {
+          // GPS unavailable — proceed without it
+        }
       }
 
       await impact('medium'); // native haptic on button press
@@ -508,6 +520,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     } catch (error) {
       await hapticNotify('error');
       toast('Failed to clock in: ' + error.message, 'error');
+    } finally {
+      setClockingIn(false);
     }
   };
 
@@ -932,15 +946,18 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             </div>
             <button
               onClick={handleClockIn}
-              disabled={!selectedClient}
+              disabled={clockingIn}
               style={{
-                width: '100%', padding: '1.125rem', background: selectedClient ? '#2ABBA7' : '#D1D5DB',
-                color: selectedClient ? '#fff' : '#9CA3AF', border: 'none', borderRadius: '12px',
-                cursor: selectedClient ? 'pointer' : 'not-allowed', fontWeight: '800', fontSize: '1.15rem',
-                transition: 'all 0.15s', boxShadow: selectedClient ? '0 4px 12px rgba(42,187,167,0.3)' : 'none'
+                width: '100%', padding: '1.125rem',
+                background: clockingIn ? '#9CA3AF' : selectedClient ? '#2ABBA7' : '#D1D5DB',
+                color: clockingIn ? '#fff' : selectedClient ? '#fff' : '#9CA3AF',
+                border: 'none', borderRadius: '12px',
+                cursor: clockingIn ? 'wait' : 'pointer', fontWeight: '800', fontSize: '1.15rem',
+                transition: 'all 0.15s',
+                boxShadow: selectedClient && !clockingIn ? '0 4px 12px rgba(42,187,167,0.3)' : 'none'
               }}
             >
-              ▶️ Clock In
+              {clockingIn ? '⏳ Clocking In...' : '▶️ Clock In'}
             </button>
           </div>
         )}

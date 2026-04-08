@@ -82,14 +82,21 @@ const TimeOffManagement = ({ token }) => {
     setLoadingCoverage(prev => ({ ...prev, [key]: false }));
   };
 
-  const formatDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const parseDate = (d) => {
+    if (!d) return null;
+    // Handle both "YYYY-MM-DD" and full ISO "2026-03-15T00:00:00.000Z" formats
+    const str = typeof d === 'string' ? d.split('T')[0] : '';
+    if (!str) return null;
+    return new Date(str + 'T12:00:00');
+  };
+  const formatDate = (d) => { const dt = parseDate(d); return dt ? dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''; };
   const formatTime = (t) => {
     if (!t) return '';
     const [h, m] = t.split(':');
     const hr = parseInt(h);
     return `${hr > 12 ? hr - 12 : hr || 12}:${m} ${hr >= 12 ? 'PM' : 'AM'}`;
   };
-  const getDayName = (dateStr) => new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+  const getDayName = (dateStr) => { const dt = parseDate(dateStr); return dt ? dt.toLocaleDateString('en-US', { weekday: 'short' }) : ''; };
 
   const statusColor = (s) => {
     switch (s) {
@@ -105,8 +112,9 @@ const TimeOffManagement = ({ token }) => {
   };
 
   const countDays = (start, end) => {
-    const s = new Date(start + 'T12:00:00');
-    const e = new Date(end + 'T12:00:00');
+    const s = parseDate(start);
+    const e = parseDate(end);
+    if (!s || !e || isNaN(s) || isNaN(e)) return 0;
     return Math.round((e - s) / (1000 * 60 * 60 * 24)) + 1;
   };
 

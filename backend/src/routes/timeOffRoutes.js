@@ -4,6 +4,8 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { requireAdmin, auditLog } = require('../middleware/shared');
+const notificationRoutes = require('./notificationRoutes');
+const notifyAdmins = notificationRoutes.notifyAdmins;
 
 // ─── POST / — Caregiver submits a time-off request ─────────────────────────
 router.post('/', async (req, res) => {
@@ -18,6 +20,19 @@ router.post('/', async (req, res) => {
       [id, req.user.id, startDate, endDate, type || 'other', reason || null]
     );
     await auditLog(req.user.id, 'CREATE', 'caregiver_time_off', id, null, result.rows[0]);
+
+    // Auto-notify admins about the new time-off request
+    const user = await db.query(`SELECT first_name, last_name FROM users WHERE id = $1`, [req.user.id]);
+    const name = user.rows[0] ? `${user.rows[0].first_name} ${user.rows[0].last_name}` : 'A caregiver';
+    const typeLabel = { vacation: 'Vacation', sick: 'Sick Leave', personal: 'Personal', other: 'Other' }[type] || type || 'Other';
+    const startStr = startDate.split('T')[0];
+    const endStr = endDate.split('T')[0];
+    await notifyAdmins(
+      'time_off_request',
+      `Time Off Request: ${name}`,
+      `${name} has requested ${typeLabel} from ${startStr} to ${endStr}.${reason ? ' Reason: ' + reason : ''}`
+    );
+
     res.status(201).json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -136,8 +151,10 @@ router.get('/:id/affected-shifts', requireAdmin, async (req, res) => {
 
     // Expand recurring schedules into concrete dates within the range
     const shifts = [...oneTime.rows];
-    const startD = new Date(start_date);
-    const endD = new Date(end_date);
+    const startStr = typeof start_date === 'string' ? start_date.split('T')[0] : start_date;
+    const endStr = typeof end_date === 'string' ? end_date.split('T')[0] : end_date;
+    const startD = new Date(startStr + 'T12:00:00');
+    const endD = new Date(endStr + 'T12:00:00');
 
     for (const sched of recurring.rows) {
       const dow = parseInt(sched.day_of_week);
