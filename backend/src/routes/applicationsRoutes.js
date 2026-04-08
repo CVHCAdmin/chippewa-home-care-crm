@@ -152,7 +152,12 @@ router.get('/:id', auth, async (req, res) => {
 // Update application status
 router.put('/:id/status', auth, async (req, res) => {
   const { status, notes } = req.body;
-  
+
+  // Prevent setting status to 'hired' without going through the /hire endpoint
+  if (status === 'hired') {
+    return res.status(400).json({ error: 'Use the "Hire as Caregiver" button to hire applicants — this creates their login account.' });
+  }
+
   try {
     await db.query(`
       UPDATE job_applications 

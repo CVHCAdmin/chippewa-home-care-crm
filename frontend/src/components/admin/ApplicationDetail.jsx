@@ -263,7 +263,7 @@ const ApplicationDetail = ({ applicationId, token, onBack }) => {
       <div className="card">
         <h3>Application Status</h3>
         <div className="status-buttons" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {['new', 'reviewing', 'interviewed', 'offered', 'hired', 'rejected'].map(s => (
+          {['new', 'reviewing', 'interviewed', 'offered', 'rejected'].map(s => (
             <button
               key={s}
               className={`btn ${status === s ? 'btn-primary' : 'btn-secondary'}`}
