@@ -4,8 +4,18 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { requireAdmin, auditLog } = require('../middleware/shared');
-const notificationRoutes = require('./notificationRoutes');
-const notifyAdmins = notificationRoutes.notifyAdmins;
+// Helper: notify all admin users (local copy to avoid import issues)
+async function notifyAdmins(type, title, message) {
+  try {
+    const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
+    for (const admin of admins.rows) {
+      await db.query(
+        `INSERT INTO notifications (id, user_id, type, title, message, is_read) VALUES ($1,$2,$3,$4,$5,false)`,
+        [uuidv4(), admin.id, type, title, message]
+      );
+    }
+  } catch (e) { console.error('[notifyAdmins error]', e.message); }
+}
 
 // ─── POST / — Caregiver submits a time-off request ─────────────────────────
 router.post('/', async (req, res) => {
@@ -21,19 +31,22 @@ router.post('/', async (req, res) => {
     );
     await auditLog(req.user.id, 'CREATE', 'caregiver_time_off', id, null, result.rows[0]);
 
-    // Auto-notify admins about the new time-off request
-    const user = await db.query(`SELECT first_name, last_name FROM users WHERE id = $1`, [req.user.id]);
-    const name = user.rows[0] ? `${user.rows[0].first_name} ${user.rows[0].last_name}` : 'A caregiver';
-    const typeLabel = { vacation: 'Vacation', sick: 'Sick Leave', personal: 'Personal', other: 'Other' }[type] || type || 'Other';
-    const startStr = startDate.split('T')[0];
-    const endStr = endDate.split('T')[0];
-    await notifyAdmins(
-      'time_off_request',
-      `Time Off Request: ${name}`,
-      `${name} has requested ${typeLabel} from ${startStr} to ${endStr}.${reason ? ' Reason: ' + reason : ''}`
-    );
-
+    // Send response first, then notify admins (non-blocking)
     res.status(201).json(result.rows[0]);
+
+    // Auto-notify admins about the new time-off request (after response sent)
+    try {
+      const user = await db.query(`SELECT first_name, last_name FROM users WHERE id = $1`, [req.user.id]);
+      const name = user.rows[0] ? `${user.rows[0].first_name} ${user.rows[0].last_name}` : 'A caregiver';
+      const typeLabel = { vacation: 'Vacation', sick: 'Sick Leave', personal: 'Personal', other: 'Other' }[type] || type || 'Other';
+      const startStr = startDate.split('T')[0];
+      const endStr = endDate.split('T')[0];
+      await notifyAdmins(
+        'time_off_request',
+        `Time Off Request: ${name}`,
+        `${name} has requested ${typeLabel} from ${startStr} to ${endStr}.${reason ? ' Reason: ' + reason : ''}`
+      );
+    } catch (e) { console.error('[time-off notify error]', e.message); }
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
