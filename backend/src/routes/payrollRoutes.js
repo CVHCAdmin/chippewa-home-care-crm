@@ -19,11 +19,13 @@ const SCHEDULE_EXPANSION_CTE = `
       s.caregiver_id,
       s.client_id,
       d.dt::date AS shift_date,
-      s.start_time AS scheduled_start,
-      s.end_time AS scheduled_end,
-      ROUND(EXTRACT(EPOCH FROM (s.end_time - s.start_time)) / 60)::int AS scheduled_minutes
+      COALESCE(se.override_start_time, s.start_time) AS scheduled_start,
+      COALESCE(se.override_end_time, s.end_time) AS scheduled_end,
+      ROUND(EXTRACT(EPOCH FROM (COALESCE(se.override_end_time, s.end_time) - COALESCE(se.override_start_time, s.start_time))) / 60)::int AS scheduled_minutes
     FROM schedules s
     CROSS JOIN generate_series($1::date, $2::date, '1 day'::interval) AS d(dt)
+    LEFT JOIN schedule_exceptions se
+      ON se.schedule_id = s.id AND se.exception_date = d.dt::date
     WHERE s.is_active = true
       AND (
         (s.schedule_type = 'one-time' AND s.date = d.dt::date)
@@ -33,6 +35,8 @@ const SCHEDULE_EXPANSION_CTE = `
         OR (s.schedule_type = 'multi-day' AND s.date IS NOT NULL AND s.date = d.dt::date)
       )
       AND (s.effective_date IS NULL OR d.dt::date >= s.effective_date)
+      AND (s.end_date IS NULL OR d.dt::date <= s.end_date)
+      AND (se.id IS NULL OR se.exception_type != 'cancelled')
   )
 `;
 
@@ -46,10 +50,13 @@ router.post('/generate-shifts', auth, async (req, res) => {
 
   try {
     // Step 1: Expand all schedule occurrences and match to time entries
+    // Two-pass matching: (1) each punch picks closest shift, (2) each shift picks best remaining punch
+    // With 2-hour max threshold to prevent wrong-shift matches (e.g. morning punch on afternoon shift)
     const matchResult = await db.query(`
       WITH ${SCHEDULE_EXPANSION_CTE},
-      -- Rank time entries per shift by best match: schedule_id first, then closest start time
-      ranked_matches AS (
+
+      -- All candidate (shift, punch) pairs within 2 hours of each other
+      candidates AS (
         SELECT
           so.schedule_id,
           so.caregiver_id,
@@ -62,39 +69,59 @@ router.post('/generate-shifts', auth, async (req, res) => {
           te.start_time AS actual_start,
           te.end_time AS actual_end,
           COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
-          ROW_NUMBER() OVER (
-            PARTITION BY so.schedule_id, so.shift_date
-            ORDER BY
-              -- Prefer exact schedule_id match
-              CASE WHEN te.schedule_id = so.schedule_id THEN 0 ELSE 1 END,
-              -- Then prefer closest start time to scheduled start
-              ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start)))
-          ) AS rn
+          ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) AS time_diff_secs,
+          CASE WHEN te.schedule_id = so.schedule_id THEN 0 ELSE 1 END AS sched_rank
         FROM shift_occurrences so
-        LEFT JOIN time_entries te
+        INNER JOIN time_entries te
           ON te.caregiver_id = so.caregiver_id
           AND te.client_id = so.client_id
           AND DATE(te.start_time) = so.shift_date
+          AND ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) <= 7200
       ),
+
+      -- Pass 1: each punch picks its best (closest) shift — prevents one punch matching multiple shifts
+      punch_best AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY time_entry_id
+            ORDER BY sched_rank, time_diff_secs
+          ) AS punch_rn
+        FROM candidates
+      ),
+
+      -- Pass 2: from punches that chose this shift, pick the best one per shift
+      shift_best AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY schedule_id, shift_date
+            ORDER BY sched_rank, time_diff_secs
+          ) AS shift_rn
+        FROM punch_best
+        WHERE punch_rn = 1
+      ),
+
+      -- Final: all shifts with their matched punch (or NULL for missing)
       matched AS (
-        -- Scheduled shifts matched to best clock-in
         SELECT
-          schedule_id, caregiver_id, client_id, shift_date,
-          scheduled_start, scheduled_end, scheduled_minutes,
-          time_entry_id, actual_start, actual_end, actual_minutes,
+          so.schedule_id, so.caregiver_id, so.client_id, so.shift_date,
+          so.scheduled_start, so.scheduled_end, so.scheduled_minutes,
+          sb.time_entry_id, sb.actual_start, sb.actual_end, sb.actual_minutes,
           CASE
-            WHEN time_entry_id IS NOT NULL AND ABS(COALESCE(actual_minutes, 0) - scheduled_minutes) <= 15
+            WHEN sb.time_entry_id IS NOT NULL AND ABS(COALESCE(sb.actual_minutes, 0) - so.scheduled_minutes) <= 15
               THEN 'verified'
-            WHEN time_entry_id IS NOT NULL
+            WHEN sb.time_entry_id IS NOT NULL
               THEN 'pending'
             ELSE 'missing_punch'
           END AS auto_status
-        FROM ranked_matches
-        WHERE rn = 1
+        FROM shift_occurrences so
+        LEFT JOIN shift_best sb
+          ON sb.schedule_id = so.schedule_id
+          AND sb.shift_date = so.shift_date
+          AND sb.shift_rn = 1
 
         UNION ALL
 
-        -- Unscheduled clock-ins (clock-in exists but no matching schedule)
+        -- Unscheduled clock-ins (punch exists but no matching schedule within 2hrs)
         SELECT
           NULL AS schedule_id,
           te.caregiver_id,
@@ -116,6 +143,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
             WHERE so.caregiver_id = te.caregiver_id
               AND so.client_id = te.client_id
               AND so.shift_date = DATE(te.start_time)
+              AND ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) <= 7200
           )
       )
       SELECT * FROM matched
