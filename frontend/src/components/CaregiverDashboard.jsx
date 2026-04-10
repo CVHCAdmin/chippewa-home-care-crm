@@ -415,6 +415,58 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           break; // only clock into one client at a time
         }
 
+        // AUTO SCHEDULE TRANSITION: clocked in but next scheduled shift has started for a different client
+        if (currentSession && currentSession.client_id !== clientId) {
+          const todaySchedules = (currentSchedules || []).filter(s => {
+            if (s.date) return new Date(s.date).toDateString() === now.toDateString();
+            if (s.day_of_week === todayDay) return isScheduleActiveForDate(s, new Date(now.getFullYear(), now.getMonth(), now.getDate()));
+            return false;
+          });
+
+          // Find the next scheduled shift that should be active now
+          const nowTime = now.getHours() * 60 + now.getMinutes();
+          const nextShift = todaySchedules
+            .filter(s => s.client_id === clientId && s.start_time)
+            .find(s => {
+              const [h, m] = s.start_time.split(':').map(Number);
+              const startMin = h * 60 + m;
+              // Shift has started (within window: start time to start + 30min)
+              return nowTime >= startMin && nowTime <= startMin + 30;
+            });
+
+          if (nextShift && !geofenceTriggeredRef.current.has(`transition-${clientId}`)) {
+            geofenceTriggeredRef.current.add(`transition-${clientId}`);
+            // Get client name for the toast
+            const nextClientName = data.clientName || 'next client';
+            try {
+              // Clock in to next client — backend auto-closes current session
+              const clockRes = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({
+                  clientId,
+                  latitude: lat,
+                  longitude: lng,
+                  autoTransition: true,
+                  scheduleId: nextShift.id
+                })
+              });
+              if (clockRes.ok) {
+                const clockData = await clockRes.json();
+                // Stop GPS breadcrumbs for old session, start for new
+                if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
+                gpsIntervalRef.current = startGPSBreadcrumbs(clockData.id);
+                setActiveSession(clockData);
+                setSelectedClient(clientId);
+                toast(`🔄 Schedule transition — now clocked in for ${nextClientName}`, 'success');
+                break;
+              }
+            } catch(e) {
+              geofenceTriggeredRef.current.delete(`transition-${clientId}`);
+            }
+          }
+        }
+
         // AUTO CLOCK-OUT: was within geofence but now left, currently clocked into this client
         // Require 3 consecutive outside-geofence checks (~90s) to prevent GPS jitter false clock-outs
         if (!data.withinGeofence && data.autoClockOut && currentSession?.client_id === clientId && alreadyTriggered) {

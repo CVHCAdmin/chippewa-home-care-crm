@@ -152,7 +152,7 @@ router.get('/', verifyToken, async (req, res) => {
 // POST /api/time-entries/clock-in
 router.post('/clock-in', verifyToken, async (req, res) => {
   try {
-    const { clientId, latitude, longitude, scheduleId } = req.body;
+    const { clientId, latitude, longitude, scheduleId, autoTransition } = req.body;
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
 
@@ -169,11 +169,12 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       await db.query(
         `UPDATE time_entries SET end_time = NOW(), duration_minutes = $1, is_complete = true,
           discrepancy_minutes = $2, billable_minutes = $3,
-          notes = CASE WHEN notes IS NULL OR notes = '' THEN '(Auto-closed: caregiver clocked into new client)'
-                       ELSE notes || ' | (Auto-closed: caregiver clocked into new client)' END,
+          notes = CASE WHEN notes IS NULL OR notes = '' THEN $5
+                       ELSE notes || ' | ' || $5 END,
           updated_at = NOW()
          WHERE id = $4`,
-        [durationMinutes, discrepancyMinutes, billableMinutes, openEntry.id]
+        [durationMinutes, discrepancyMinutes, billableMinutes, openEntry.id,
+          autoTransition ? '(Auto-transition: schedule shift change)' : '(Auto-closed: caregiver clocked into new client)']
       );
       await auditLog(req.user.id, 'UPDATE', 'time_entries', openEntry.id, null, { auto_closed: true, duration_minutes: durationMinutes });
       // Generate EVV for auto-closed entry
