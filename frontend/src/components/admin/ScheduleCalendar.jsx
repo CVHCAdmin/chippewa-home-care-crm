@@ -134,6 +134,7 @@ const ScheduleCalendar = ({ token }) => {
         if (exc && exc.exception_type === 'modified') {
           results.push({
             ...schedule,
+            caregiver_id: exc.override_caregiver_id || schedule.caregiver_id,
             start_time: exc.override_start_time || schedule.start_time,
             end_time: exc.override_end_time || schedule.end_time,
             client_id: exc.override_client_id || schedule.client_id,

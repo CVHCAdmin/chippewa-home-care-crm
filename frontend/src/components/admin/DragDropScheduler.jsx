@@ -77,6 +77,12 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   // ── Delete scope modal ──
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { shift, date }
 
+  // ── Drag & drop ──
+  const [dragShift, setDragShift]   = useState(null); // { shift, fromDate }
+  const [dropTarget, setDropTarget] = useState(null); // { shift, fromDate, toCaregiverId, toDate, toDayIndex }
+  const [dropScope, setDropScope]   = useState('this');
+  const [dragOverKey, setDragOverKey] = useState(null); // `${caregiverId}:${dayIndex}` for hover highlight
+
   const clientMap = Object.fromEntries(clients.map(c => [c.id, c]));
 
   const showToast = (msg, type = 'success') => {
@@ -129,10 +135,9 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     const results = [];
 
     schedules.forEach(s => {
-      if (s.caregiver_id !== caregiverId) return;
-
       // One-off shift
       if (s.date) {
+        if (s.caregiver_id !== caregiverId) return;
         if (s.date.slice(0,10) === dateStr) results.push({ ...s, _isOneTime: true });
         return;
       }
@@ -168,10 +173,15 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
         if (exc && exc.exception_type === 'cancelled') return; // Skip cancelled occurrence
 
+        // Route to the effective caregiver for this date (exception override wins)
+        const effectiveCaregiverId = (exc && exc.override_caregiver_id) || s.caregiver_id;
+        if (effectiveCaregiverId !== caregiverId) return;
+
         if (exc && exc.exception_type === 'modified') {
           // Show with overrides applied
           results.push({
             ...s,
+            caregiver_id: effectiveCaregiverId,
             start_time: exc.override_start_time || s.start_time,
             end_time: exc.override_end_time || s.end_time,
             client_id: exc.override_client_id || s.client_id,
@@ -392,6 +402,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     setEditDate(cellDate || '');
     setEditScope('all');
     setEditShiftForm({
+      caregiverId: s.caregiver_id || '',
       clientId:  s.client_id || '',
       startTime: s.start_time ? s.start_time.slice(0,5) : '09:00',
       endTime:   s.end_time   ? s.end_time.slice(0,5)   : '13:00',
@@ -406,6 +417,8 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     try {
       const isRecurring = editShift.day_of_week !== null && editShift.day_of_week !== undefined;
 
+      const caregiverChanged = editShiftForm.caregiverId && editShiftForm.caregiverId !== editShift.caregiver_id;
+
       if (isRecurring && editScope === 'this') {
         // Create a modified exception for just this date
         await fetch(`${API_BASE_URL}/api/schedule-exceptions`, {
@@ -418,6 +431,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             overrideStartTime: editShiftForm.startTime,
             overrideEndTime: editShiftForm.endTime,
             overrideClientId: editShiftForm.clientId,
+            overrideCaregiverId: caregiverChanged ? editShiftForm.caregiverId : null,
             overrideNotes: editShiftForm.notes,
           }),
         });
@@ -453,7 +467,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           method: 'POST',
           headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
           body: JSON.stringify({
-            caregiverId: editShift.caregiver_id,
+            caregiverId: editShiftForm.caregiverId || editShift.caregiver_id,
             clientId: editShiftForm.clientId,
             scheduleType: 'recurring',
             dayOfWeek: editShift.day_of_week,
@@ -485,6 +499,18 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           }),
         });
         if (!res.ok) throw new Error('Failed to save');
+
+        if (caregiverChanged) {
+          const rRes = await fetch(`${API_BASE_URL}/api/schedules/${editShift.id}/reassign`, {
+            method: 'PUT',
+            headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+            body: JSON.stringify({ newCaregiverId: editShiftForm.caregiverId, reason: 'admin_decision' }),
+          });
+          if (!rRes.ok) {
+            const errBody = await rRes.json().catch(() => ({}));
+            throw new Error(errBody.error || 'Reassignment failed');
+          }
+        }
         showToast('Shift updated');
       }
 
@@ -493,6 +519,139 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       onScheduleChange && onScheduleChange();
     } catch (err) {
       showToast(err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ═══════════════════════════════════════════════
+  // DRAG & DROP — confirm move
+  // ═══════════════════════════════════════════════
+
+  async function handleConfirmDrop() {
+    if (!dropTarget) return;
+    const { shift, fromDate, toCaregiverId, toDate, toDayIndex } = dropTarget;
+    const isRecurring = shift.day_of_week !== null && shift.day_of_week !== undefined;
+    const caregiverChanged = shift.caregiver_id !== toCaregiverId;
+    const dayChanged = isRecurring
+      ? Number(shift.day_of_week) !== toDayIndex
+      : shift.date && shift.date.slice(0,10) !== toDate;
+
+    setSaving(true);
+    try {
+      const hdrs = { 'Content-Type':'application/json', Authorization:`Bearer ${token}` };
+
+      if (isRecurring && dropScope === 'this') {
+        // Cancel the original occurrence, create a one-off at the new spot
+        await fetch(`${API_BASE_URL}/api/schedule-exceptions`, {
+          method:'POST', headers: hdrs,
+          body: JSON.stringify({
+            scheduleId: shift.id,
+            exceptionDate: fromDate,
+            exceptionType: 'cancelled',
+          }),
+        });
+        await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
+          method:'POST', headers: hdrs,
+          body: JSON.stringify({
+            caregiverId: toCaregiverId,
+            clientId: shift.client_id,
+            scheduleType: 'one-time',
+            date: toDate,
+            startTime: shift.start_time,
+            endTime: shift.end_time,
+            notes: shift.notes,
+          }),
+        });
+        showToast('Occurrence moved');
+
+      } else if (isRecurring && dropScope === 'following') {
+        // End current pattern day before fromDate, create new pattern from toDate
+        await fetch(`${API_BASE_URL}/api/schedules/${shift.id}?scope=following&date=${fromDate}`, {
+          method:'DELETE', headers: hdrs,
+        });
+        await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
+          method:'POST', headers: hdrs,
+          body: JSON.stringify({
+            caregiverId: toCaregiverId,
+            clientId: shift.client_id,
+            scheduleType: 'recurring',
+            dayOfWeek: toDayIndex,
+            date: null,
+            startTime: shift.start_time,
+            endTime: shift.end_time,
+            notes: shift.notes,
+            frequency: shift.frequency || 'weekly',
+            effectiveDate: toDate,
+            anchorDate: shift.anchor_date || null,
+          }),
+        });
+        showToast('Moved from this date forward');
+
+      } else if (isRecurring) {
+        // scope === 'all'
+        if (dayChanged) {
+          await fetch(`${API_BASE_URL}/api/schedules-all/${shift.id}`, {
+            method:'PUT', headers: hdrs,
+            body: JSON.stringify({
+              clientId: shift.client_id,
+              startTime: shift.start_time,
+              endTime: shift.end_time,
+              notes: shift.notes,
+              dayOfWeek: toDayIndex,
+              date: null,
+              frequency: shift.frequency || 'weekly',
+              anchorDate: shift.anchor_date || null,
+            }),
+          });
+        }
+        if (caregiverChanged) {
+          const rRes = await fetch(`${API_BASE_URL}/api/schedules/${shift.id}/reassign`, {
+            method:'PUT', headers: hdrs,
+            body: JSON.stringify({ newCaregiverId: toCaregiverId, reason: 'admin_decision' }),
+          });
+          if (!rRes.ok) {
+            const errBody = await rRes.json().catch(() => ({}));
+            throw new Error(errBody.error || 'Reassignment failed');
+          }
+        }
+        showToast('Recurring shift moved');
+
+      } else {
+        // One-time shift
+        if (dayChanged) {
+          await fetch(`${API_BASE_URL}/api/schedules-all/${shift.id}`, {
+            method:'PUT', headers: hdrs,
+            body: JSON.stringify({
+              clientId: shift.client_id,
+              startTime: shift.start_time,
+              endTime: shift.end_time,
+              notes: shift.notes,
+              dayOfWeek: null,
+              date: toDate,
+              frequency: shift.frequency || 'weekly',
+              anchorDate: shift.anchor_date || null,
+            }),
+          });
+        }
+        if (caregiverChanged) {
+          const rRes = await fetch(`${API_BASE_URL}/api/schedules/${shift.id}/reassign`, {
+            method:'PUT', headers: hdrs,
+            body: JSON.stringify({ newCaregiverId: toCaregiverId, reason: 'admin_decision' }),
+          });
+          if (!rRes.ok) {
+            const errBody = await rRes.json().catch(() => ({}));
+            throw new Error(errBody.error || 'Reassignment failed');
+          }
+        }
+        showToast('Shift moved');
+      }
+
+      setDropTarget(null);
+      await loadAll();
+      onScheduleChange && onScheduleChange();
+    } catch (err) {
+      showToast(err.message || 'Move failed', 'error');
     } finally {
       setSaving(false);
     }
@@ -522,14 +681,23 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           <div style={{ borderLeft: `2px dashed ${color}`, height: 8, marginLeft: 12, opacity: 0.5 }} />
         )}
         <div
+          draggable
+          onDragStart={e => {
+            e.stopPropagation();
+            setDragShift({ shift: s, fromDate: weekDateStrs[dayIndex] });
+            try { e.dataTransfer.setData('text/plain', s.id); } catch {}
+            e.dataTransfer.effectAllowed = 'move';
+          }}
+          onDragEnd={() => { setDragShift(null); setDragOverKey(null); }}
           onClick={e => { e.stopPropagation(); openEditShift(s, weekDateStrs[dayIndex]); }}
           style={{
             background: isModified ? `repeating-linear-gradient(135deg, ${color}, ${color} 4px, ${color}dd 4px, ${color}dd 8px)` : color,
             color:'#fff', borderRadius:5, padding:'3px 6px',
             marginBottom: isSplit && s.split_segment === 1 ? 0 : 3,
-            fontSize:11, fontWeight:600, cursor:'pointer', userSelect:'none',
+            fontSize:11, fontWeight:600, cursor:'grab', userSelect:'none',
             boxShadow:'0 1px 3px rgba(0,0,0,0.15)',
             borderLeft: isSplit ? '3px solid rgba(255,255,255,0.5)' : undefined,
+            opacity: dragShift && dragShift.shift.id === s.id && dragShift.fromDate === weekDateStrs[dayIndex] ? 0.4 : 1,
           }}
         >
           <div style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontWeight:700, display:'flex', alignItems:'center', gap:3 }}>
@@ -730,17 +898,47 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                 {weekDates.map((_, dayIndex) => {
                   const shifts  = getShiftsForCell(cg.id, dayIndex);
                   const isToday = dayIndex === todayIdx;
+                  const cellKey = `${cg.id}:${dayIndex}`;
+                  const isDragOver = dragOverKey === cellKey;
+                  const bgBase = isToday ? '#F0F9FF' : 'transparent';
                   return (
                     <div
                       key={dayIndex}
                       onClick={() => handleCellClick(cg.id, dayIndex)}
+                      onDragOver={e => {
+                        if (!dragShift) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        if (dragOverKey !== cellKey) setDragOverKey(cellKey);
+                      }}
+                      onDragLeave={() => { if (dragOverKey === cellKey) setDragOverKey(null); }}
+                      onDrop={e => {
+                        e.preventDefault();
+                        setDragOverKey(null);
+                        if (!dragShift) return;
+                        const toDate = weekDateStrs[dayIndex];
+                        const sameCaregiver = dragShift.shift.caregiver_id === cg.id;
+                        const sameDate = dragShift.fromDate === toDate;
+                        if (sameCaregiver && sameDate) { setDragShift(null); return; }
+                        const isRecurring = dragShift.shift.day_of_week !== null && dragShift.shift.day_of_week !== undefined;
+                        setDropTarget({
+                          shift: dragShift.shift,
+                          fromDate: dragShift.fromDate,
+                          toCaregiverId: cg.id,
+                          toDate,
+                          toDayIndex: dayIndex,
+                        });
+                        setDropScope(isRecurring ? 'this' : 'all');
+                        setDragShift(null);
+                      }}
                       style={{
                         borderLeft:'1px solid #F3F4F6', padding:'5px 4px', minHeight:72,
-                        background: isToday ? '#F0F9FF' : 'transparent',
+                        background: isDragOver ? '#DCFCE7' : bgBase,
+                        boxShadow: isDragOver ? 'inset 0 0 0 2px #22C55E' : undefined,
                         cursor:'pointer', transition:'background 0.1s',
                       }}
-                      onMouseEnter={e => e.currentTarget.style.background = isToday ? '#DBEAFE' : '#F9FAFB'}
-                      onMouseLeave={e => e.currentTarget.style.background = isToday ? '#F0F9FF' : 'transparent'}
+                      onMouseEnter={e => { if (!dragShift) e.currentTarget.style.background = isToday ? '#DBEAFE' : '#F9FAFB'; }}
+                      onMouseLeave={e => { if (!dragShift) e.currentTarget.style.background = isToday ? '#F0F9FF' : 'transparent'; }}
                     >
                       {shifts.map(s => renderShiftBlock(s, dayIndex, shifts))}
                     </div>
@@ -963,7 +1161,21 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               </div>
             )}
 
-            <Field label="Client">
+            <Field label="Caregiver">
+              <select value={editShiftForm.caregiverId} onChange={e => setEditShiftForm(f => ({ ...f, caregiverId: e.target.value }))} style={inputStyle}>
+                <option value=''>Select caregiver...</option>
+                {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
+              </select>
+              {editShiftForm.caregiverId && editShiftForm.caregiverId !== editShift.caregiver_id && (
+                <div style={{ marginTop:4, fontSize:11, color:'#8B5CF6', fontWeight:600 }}>
+                  &#8635; Reassigning from {(() => {
+                    const cg = caregivers.find(c => c.id === editShift.caregiver_id);
+                    return cg ? `${cg.first_name} ${cg.last_name}` : 'original caregiver';
+                  })()}
+                </div>
+              )}
+            </Field>
+            <Field label="Client" style={{ marginTop:10 }}>
               <select value={editShiftForm.clientId} onChange={e => setEditShiftForm(f => ({ ...f, clientId: e.target.value }))} style={inputStyle}>
                 <option value=''>Select client...</option>
                 {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
@@ -995,6 +1207,69 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                   {saving ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ═══════ DROP CONFIRM MODAL ═══════ */}
+      {dropTarget && (() => {
+        const { shift, fromDate, toCaregiverId, toDate, toDayIndex } = dropTarget;
+        const isRecurring = shift.day_of_week !== null && shift.day_of_week !== undefined;
+        const fromCg = caregivers.find(c => c.id === shift.caregiver_id);
+        const toCg   = caregivers.find(c => c.id === toCaregiverId);
+        const fromLabel = fromDate ? new Date(fromDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }) : '';
+        const toLabel   = new Date(toDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
+        const client = clientMap[shift.client_id];
+
+        return (
+          <Modal title="Move Shift?" onClose={() => setDropTarget(null)}>
+            <div style={{ fontSize:13, color:'#374151', marginBottom:12, background:'#F9FAFB', padding:'10px 12px', borderRadius:8 }}>
+              <div style={{ fontWeight:700 }}>{client ? `${client.first_name} ${client.last_name}` : 'Unknown client'}</div>
+              <div style={{ fontSize:12, color:'#6B7280', marginTop:2 }}>
+                {formatTime(shift.start_time)}&ndash;{formatTime(shift.end_time)}
+              </div>
+              <div style={{ fontSize:12, color:'#6B7280', marginTop:6 }}>
+                <strong>{fromCg ? `${fromCg.first_name} ${fromCg.last_name}` : 'Unknown'}</strong>{fromLabel ? ` · ${fromLabel}` : ''}
+                {' '}&rarr;{' '}
+                <strong>{toCg ? `${toCg.first_name} ${toCg.last_name}` : 'Unknown'}</strong> · {toLabel}
+              </div>
+            </div>
+
+            {isRecurring && (
+              <div style={{ marginBottom:12 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:6 }}>Apply to:</div>
+                <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                  {[
+                    { key:'this', icon:'\uD83D\uDCC5', label:`This date only (${fromLabel})`, color:'#3B82F6', bg:'#EFF6FF' },
+                    { key:'following', icon:'\u27A1\uFE0F', label:'This & all following', color:'#8B5CF6', bg:'#F5F3FF' },
+                    { key:'all', icon:'\u21BB', label:'All occurrences', color:'#F59E0B', bg:'#FFFBEB' },
+                  ].map(opt => (
+                    <button key={opt.key} type="button" onClick={() => setDropScope(opt.key)} style={{
+                      padding:'8px 12px', borderRadius:8, border:'2px solid', cursor:'pointer',
+                      fontWeight:600, fontSize:13, textAlign:'left',
+                      borderColor: dropScope === opt.key ? opt.color : '#E5E7EB',
+                      background: dropScope === opt.key ? opt.bg : '#fff',
+                      color: dropScope === opt.key ? opt.color : '#6B7280',
+                    }}>
+                      {opt.icon} {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ marginTop:6, fontSize:11, color:'#6B7280', background:'#F9FAFB', padding:'6px 10px', borderRadius:6 }}>
+                  {{ this: 'Only this single occurrence moves. The recurring pattern stays the same.',
+                     following: 'Moves this occurrence and all future ones. Earlier occurrences stay.',
+                     all: 'The entire recurring pattern moves to the new caregiver and day.',
+                  }[dropScope]}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+              <button onClick={() => setDropTarget(null)} disabled={saving} style={cancelBtn}>Cancel</button>
+              <button onClick={handleConfirmDrop} disabled={saving} style={primaryBtn}>
+                {saving ? 'Moving...' : 'Move'}
+              </button>
             </div>
           </Modal>
         );
