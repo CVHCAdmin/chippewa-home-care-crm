@@ -76,7 +76,14 @@ router.get('/caregiver-history/:caregiverId', verifyToken, async (req, res) => {
     if (startDate) { params.push(startDate); dateFilters += ` AND te.start_time >= $${params.length}::timestamptz`; }
     if (endDate) { params.push(endDate); dateFilters += ` AND te.start_time <= $${params.length}::timestamptz`; }
     const result = await db.query(
-      `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name,
+      `SELECT te.*,
+        CASE WHEN te.end_time IS NOT NULL
+          THEN ROUND((EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 3600.0)::numeric, 2)
+          ELSE NULL END as hours,
+        CASE WHEN te.end_time IS NOT NULL
+          THEN ROUND((EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 3600.0)::numeric, 2)
+          ELSE NULL END as duration_hours,
+        c.first_name as client_first_name, c.last_name as client_last_name,
         c.address as client_address, c.city as client_city,
         (SELECT COUNT(*) FROM gps_tracking gt WHERE gt.time_entry_id = te.id) as gps_point_count
        FROM time_entries te LEFT JOIN clients c ON te.client_id = c.id
@@ -92,7 +99,11 @@ router.get('/caregiver-history/:caregiverId', verifyToken, async (req, res) => {
 router.get('/caregiver/:caregiverId', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
+      `SELECT te.*,
+        CASE WHEN te.end_time IS NOT NULL
+          THEN ROUND((EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 3600.0)::numeric, 2)
+          ELSE NULL END as hours,
+        c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te JOIN clients c ON te.client_id = c.id
        WHERE te.caregiver_id = $1 ORDER BY te.start_time DESC`, [req.params.caregiverId]
     );
@@ -141,7 +152,11 @@ router.get('/discrepancies', verifyToken, requireAdmin, async (req, res) => {
 router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT te.*, u.first_name, u.last_name, c.first_name as client_first_name, c.last_name as client_last_name
+      `SELECT te.*,
+        CASE WHEN te.end_time IS NOT NULL
+          THEN ROUND((EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 3600.0)::numeric, 2)
+          ELSE NULL END as hours,
+        u.first_name, u.last_name, c.first_name as client_first_name, c.last_name as client_last_name
        FROM time_entries te JOIN users u ON te.caregiver_id=u.id JOIN clients c ON te.client_id=c.id
        ORDER BY te.start_time DESC`
     );
