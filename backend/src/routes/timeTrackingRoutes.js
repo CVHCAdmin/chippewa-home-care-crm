@@ -171,13 +171,45 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
 
-    // Auto-close any existing open time entries for this caregiver
+    // Fetch existing open entries (if any) for this caregiver
     const openEntries = await db.query(
-      `SELECT id, start_time, client_id, allotted_minutes FROM time_entries
+      `SELECT id, start_time, client_id, allotted_minutes,
+        EXTRACT(EPOCH FROM (NOW() - start_time)) as seconds_elapsed
+       FROM time_entries
        WHERE caregiver_id = $1 AND end_time IS NULL`,
       [req.user.id]
     );
+
+    // Idempotent clock-in: if there's an open entry for the same client
+    // started in the last 30 seconds, treat this as a duplicate submit and
+    // return the existing entry instead of auto-closing + recreating.
+    const DUPLICATE_WINDOW_SECONDS = 30;
+    const MICRO_DURATION_SECONDS = 10;
+    const dupe = openEntries.rows.find(e =>
+      e.client_id === clientId && Number(e.seconds_elapsed) < DUPLICATE_WINDOW_SECONDS
+    );
+    if (dupe) {
+      const existing = await db.query(
+        `SELECT id, client_id, start_time FROM time_entries WHERE id = $1`, [dupe.id]
+      );
+      return res.status(200).json({ ...existing.rows[0], duplicate: true });
+    }
+
     for (const openEntry of openEntries.rows) {
+      const secondsElapsed = Number(openEntry.seconds_elapsed) || 0;
+
+      // Drop micro-duration auto-closes: if the caregiver is switching
+      // clients within MICRO_DURATION_SECONDS of clocking in, the first
+      // clock-in was almost certainly a mistake (wrong client tap, double
+      // tap, etc.). Delete the spurious entry instead of leaving a
+      // zero-minute junk row.
+      if (secondsElapsed < MICRO_DURATION_SECONDS) {
+        await db.query(`DELETE FROM gps_tracking WHERE time_entry_id = $1`, [openEntry.id]);
+        await db.query(`DELETE FROM time_entries WHERE id = $1`, [openEntry.id]);
+        await auditLog(req.user.id, 'DELETE', 'time_entries', openEntry.id, null, { reason: 'spurious_auto_close', seconds_elapsed: secondsElapsed });
+        continue;
+      }
+
       const durationMinutes = Math.round((new Date() - new Date(openEntry.start_time)) / 60000);
       const discrepancyMinutes = openEntry.allotted_minutes ? durationMinutes - openEntry.allotted_minutes : null;
       const billableMinutes = openEntry.allotted_minutes ? Math.min(durationMinutes, openEntry.allotted_minutes) : durationMinutes;
