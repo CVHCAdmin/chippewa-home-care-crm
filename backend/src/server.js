@@ -148,6 +148,7 @@ app.use('/api/audit-logs',        verifyToken, require('./routes/auditLogs'));
 app.use('/api/users',             verifyToken, require('./routes/users'));
 app.use('/api/claims',            verifyToken, require('./routes/claimsRoutes'));
 app.use('/api/stripe',                         require('./routes/stripeRoutes'));
+app.use('/api/public',                         require('./routes/publicLeadRoutes'));
 app.use('/api/applications', (req, res, next) => {
   // POST / is public (job application form from website)
   // Everything else requires admin auth
