@@ -83,6 +83,9 @@ router.get('/caregiver-history/:caregiverId', verifyToken, async (req, res) => {
         CASE WHEN te.end_time IS NOT NULL
           THEN ROUND((EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 3600.0)::numeric, 2)
           ELSE NULL END as duration_hours,
+        CASE WHEN te.billable_minutes IS NOT NULL
+          THEN ROUND((te.billable_minutes / 60.0)::numeric, 2)
+          ELSE NULL END as billable_hours,
         c.first_name as client_first_name, c.last_name as client_last_name,
         c.address as client_address, c.city as client_city,
         (SELECT COUNT(*) FROM gps_tracking gt WHERE gt.time_entry_id = te.id) as gps_point_count
@@ -171,12 +174,18 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
 
-    // Fetch existing open entries (if any) for this caregiver
+    // Fetch existing open entries (if any) for this caregiver, joined with
+    // client/referral-source so we can apply the correct billing rule when
+    // auto-closing (see clock-out for the rule).
     const openEntries = await db.query(
-      `SELECT id, start_time, client_id, allotted_minutes,
-        EXTRACT(EPOCH FROM (NOW() - start_time)) as seconds_elapsed
-       FROM time_entries
-       WHERE caregiver_id = $1 AND end_time IS NULL`,
+      `SELECT te.id, te.start_time, te.client_id, te.allotted_minutes,
+        EXTRACT(EPOCH FROM (NOW() - te.start_time)) as seconds_elapsed,
+        c.is_private_pay,
+        rs.payer_type as referral_payer_type
+       FROM time_entries te
+       LEFT JOIN clients c ON te.client_id = c.id
+       LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+       WHERE te.caregiver_id = $1 AND te.end_time IS NULL`,
       [req.user.id]
     );
 
@@ -210,18 +219,40 @@ router.post('/clock-in', verifyToken, async (req, res) => {
         continue;
       }
 
+      const VARIANCE_GRACE_MINUTES = 7;
       const durationMinutes = Math.round((new Date() - new Date(openEntry.start_time)) / 60000);
-      const discrepancyMinutes = openEntry.allotted_minutes ? durationMinutes - openEntry.allotted_minutes : null;
-      const billableMinutes = openEntry.allotted_minutes ? Math.min(durationMinutes, openEntry.allotted_minutes) : durationMinutes;
+      const allottedMinutes = openEntry.allotted_minutes;
+      const isPrivatePay = openEntry.is_private_pay === true || openEntry.referral_payer_type === 'private_pay';
+
+      let billableMinutes;
+      let needsApproval = false;
+      let approvalReason = null;
+      if (isPrivatePay) {
+        billableMinutes = durationMinutes;
+      } else if (allottedMinutes == null) {
+        billableMinutes = durationMinutes;
+        needsApproval = true;
+        approvalReason = 'unscheduled';
+      } else {
+        billableMinutes = allottedMinutes;
+        if (Math.abs(durationMinutes - allottedMinutes) > VARIANCE_GRACE_MINUTES) {
+          needsApproval = true;
+          approvalReason = 'time_variance';
+        }
+      }
+      const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
+
       await db.query(
         `UPDATE time_entries SET end_time = NOW(), duration_minutes = $1, is_complete = true,
           discrepancy_minutes = $2, billable_minutes = $3,
+          needs_approval = $6, approval_reason = $7,
           notes = CASE WHEN notes IS NULL OR notes = '' THEN $5
                        ELSE notes || ' | ' || $5 END,
           updated_at = NOW()
          WHERE id = $4`,
         [durationMinutes, discrepancyMinutes, billableMinutes, openEntry.id,
-          autoTransition ? '(Auto-transition: schedule shift change)' : '(Auto-closed: caregiver clocked into new client)']
+          autoTransition ? '(Auto-transition: schedule shift change)' : '(Auto-closed: caregiver clocked into new client)',
+          needsApproval, approvalReason]
       );
       await auditLog(req.user.id, 'UPDATE', 'time_entries', openEntry.id, null, { auto_closed: true, duration_minutes: durationMinutes });
       // Generate EVV for auto-closed entry
@@ -262,22 +293,68 @@ router.post('/clock-in', verifyToken, async (req, res) => {
 });
 
 // POST /api/time-entries/:id/clock-out
+//
+// Billing rule:
+//   - Private pay clients: billable = actual duration (open/flexible)
+//   - All other payers (Medicaid, MCO, VA, etc.): billable = scheduled
+//     (allotted_minutes); time variance is tracked but never changes pay
+//   - Flag for admin approval when:
+//       a) no schedule linked (unscheduled visit), OR
+//       b) |actual - allotted| > 7 minutes (Medicaid grace window)
 router.post('/:id/clock-out', verifyToken, async (req, res) => {
   try {
+    const VARIANCE_GRACE_MINUTES = 7;
     const { latitude, longitude, notes } = req.body;
     const timeEntry = await db.query(
-      `SELECT te.*, c.first_name as client_first_name, c.last_name as client_last_name
-       FROM time_entries te LEFT JOIN clients c ON te.client_id=c.id WHERE te.id=$1`, [req.params.id]
+      `SELECT te.*,
+        c.first_name as client_first_name, c.last_name as client_last_name,
+        c.is_private_pay, c.referral_source_id,
+        rs.payer_type as referral_payer_type
+       FROM time_entries te
+       LEFT JOIN clients c ON te.client_id=c.id
+       LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+       WHERE te.id=$1`, [req.params.id]
     );
     if (timeEntry.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
-    const durationMinutes = Math.round((new Date() - new Date(timeEntry.rows[0].start_time)) / 60000);
-    const allottedMinutes = timeEntry.rows[0].allotted_minutes;
-    const discrepancyMinutes = allottedMinutes ? durationMinutes - allottedMinutes : null;
-    const billableMinutes = allottedMinutes ? Math.min(durationMinutes, allottedMinutes) : durationMinutes;
+    const entry = timeEntry.rows[0];
+
+    const durationMinutes = Math.round((new Date() - new Date(entry.start_time)) / 60000);
+    const allottedMinutes = entry.allotted_minutes;
+    const isPrivatePay = entry.is_private_pay === true || entry.referral_payer_type === 'private_pay';
+
+    let billableMinutes;
+    let needsApproval = false;
+    let approvalReason = null;
+
+    if (isPrivatePay) {
+      // Private pay: caregiver is paid for actual time, no schedule constraint
+      billableMinutes = durationMinutes;
+    } else if (allottedMinutes == null) {
+      // Non-private, no schedule linked: park billable at actual duration but
+      // flag for admin review — payroll should not auto-process until approved
+      billableMinutes = durationMinutes;
+      needsApproval = true;
+      approvalReason = 'unscheduled';
+    } else {
+      // Non-private with a schedule: pay the scheduled amount, no more, no less
+      billableMinutes = allottedMinutes;
+      const variance = Math.abs(durationMinutes - allottedMinutes);
+      if (variance > VARIANCE_GRACE_MINUTES) {
+        needsApproval = true;
+        approvalReason = 'time_variance';
+      }
+    }
+
+    const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
+
     const result = await db.query(
       `UPDATE time_entries SET end_time=NOW(), clock_out_location=$1, duration_minutes=$2, is_complete=true,
-        notes=$3, discrepancy_minutes=$4, billable_minutes=$5, updated_at=NOW() WHERE id=$6 RETURNING *`,
-      [latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, durationMinutes, notes || null, discrepancyMinutes, billableMinutes, req.params.id]
+        notes=$3, discrepancy_minutes=$4, billable_minutes=$5,
+        needs_approval=$7, approval_reason=$8,
+        updated_at=NOW() WHERE id=$6 RETURNING *`,
+      [latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null,
+       durationMinutes, notes || null, discrepancyMinutes, billableMinutes, req.params.id,
+       needsApproval, approvalReason]
     );
     await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
     try {
@@ -350,6 +427,81 @@ router.get('/caregiver-gps/:caregiverId', verifyToken, async (req, res) => {
     res.json(results);
   } catch (err) {
     console.error('caregiver-gps error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/time-entries/pending-approval — admin queue of flagged time entries
+router.get('/pending-approval', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT te.id, te.caregiver_id, te.client_id, te.start_time, te.end_time,
+        te.duration_minutes, te.allotted_minutes, te.billable_minutes,
+        te.discrepancy_minutes, te.needs_approval, te.approval_reason, te.notes,
+        CASE WHEN te.end_time IS NOT NULL
+          THEN ROUND((EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 3600.0)::numeric, 2)
+          ELSE NULL END as hours,
+        ROUND((te.billable_minutes / 60.0)::numeric, 2) as billable_hours,
+        ROUND((te.allotted_minutes / 60.0)::numeric, 2) as allotted_hours,
+        u.first_name as caregiver_first_name, u.last_name as caregiver_last_name,
+        u.default_pay_rate,
+        c.first_name as client_first_name, c.last_name as client_last_name,
+        c.is_private_pay,
+        rs.payer_type as referral_payer_type, rs.name as referral_source_name
+      FROM time_entries te
+      JOIN users u ON te.caregiver_id = u.id
+      LEFT JOIN clients c ON te.client_id = c.id
+      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+      WHERE te.needs_approval = true AND te.is_complete = true
+      ORDER BY te.start_time DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('pending-approval error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/time-entries/:id/approve — admin resolves a flagged entry
+// Body: { billable_minutes?: number, notes?: string, reject?: boolean }
+//   - If reject=true, sets billable_minutes=0 (shift is not paid)
+//   - If billable_minutes provided, overrides the computed value
+//   - Otherwise accepts the current billable_minutes as-is
+router.patch('/:id/approve', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { billable_minutes, notes, reject } = req.body;
+    const existing = await db.query(`SELECT * FROM time_entries WHERE id = $1`, [req.params.id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
+
+    let newBillable;
+    if (reject === true) {
+      newBillable = 0;
+    } else if (billable_minutes != null) {
+      newBillable = parseInt(billable_minutes, 10);
+      if (Number.isNaN(newBillable) || newBillable < 0) {
+        return res.status(400).json({ error: 'billable_minutes must be a non-negative integer' });
+      }
+    } else {
+      newBillable = existing.rows[0].billable_minutes;
+    }
+
+    const result = await db.query(
+      `UPDATE time_entries
+       SET billable_minutes = $1,
+           approved_billable_minutes = $1,
+           approved_by = $2,
+           approved_at = NOW(),
+           approval_notes = $3,
+           needs_approval = false,
+           updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [newBillable, req.user.id, notes || null, req.params.id]
+    );
+    await auditLog(req.user.id, 'APPROVE', 'time_entries', req.params.id, existing.rows[0], result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('approve error:', err);
     res.status(500).json({ error: err.message });
   }
 });

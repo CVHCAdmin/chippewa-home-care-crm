@@ -442,8 +442,14 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
 
   const renderShifts = () => {
     const shifts = allShifts || recentShifts || [];
-    const totalHrs = shifts.filter(s=>s.is_complete).reduce((sum,s)=>sum+parseFloat(s.hours||0),0);
-    const totalEarn = totalHrs * parseFloat(profile?.default_pay_rate || 0);
+    const completed = shifts.filter(s=>s.is_complete);
+    const totalHrs = completed.reduce((sum,s)=>sum+parseFloat(s.hours||s.duration_hours||0),0);
+    const totalBillableHrs = completed.reduce((sum,s)=>{
+      const bh = s.billable_hours != null ? s.billable_hours : (s.billable_minutes != null ? s.billable_minutes/60 : (s.hours||0));
+      return sum + parseFloat(bh||0);
+    },0);
+    const totalEarn = totalBillableHrs * parseFloat(profile?.default_pay_rate || 0);
+    const needsApprovalCount = completed.filter(s=>s.needs_approval).length;
     return (
       <div>
         <div style={{...s.card, display:'flex', gap:'0.75rem', alignItems:'flex-end', flexWrap:'wrap'}}>
@@ -454,28 +460,38 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
         </div>
         {allShifts && (
           <div style={{display:'flex',gap:'0.75rem',marginBottom:'1rem',flexWrap:'wrap'}}>
-            <div style={s.statBox('#2ABBA7')}><div style={{fontSize:'1.2rem',fontWeight:800,color:'#2ABBA7'}}>{fmtHrs(totalHrs)}</div><div style={{fontSize:'0.72rem',color:'#6B7280'}}>Hours in Period</div></div>
+            <div style={s.statBox('#2ABBA7')}><div style={{fontSize:'1.2rem',fontWeight:800,color:'#2ABBA7'}}>{fmtHrs(totalHrs)}</div><div style={{fontSize:'0.72rem',color:'#6B7280'}}>Actual Hours</div></div>
+            <div style={s.statBox('#0891B2')}><div style={{fontSize:'1.2rem',fontWeight:800,color:'#0891B2'}}>{fmtHrs(totalBillableHrs)}</div><div style={{fontSize:'0.72rem',color:'#6B7280'}}>Billable Hours</div></div>
             <div style={s.statBox('#6366F1')}><div style={{fontSize:'1.2rem',fontWeight:800,color:'#6366F1'}}>{fmt$(totalEarn)}</div><div style={{fontSize:'0.72rem',color:'#6B7280'}}>Est. Earnings</div></div>
             <div style={s.statBox('#F59E0B')}><div style={{fontSize:'1.2rem',fontWeight:800,color:'#F59E0B'}}>{shifts.length}</div><div style={{fontSize:'0.72rem',color:'#6B7280'}}>Total Shifts</div></div>
+            {needsApprovalCount>0 && <div style={s.statBox('#B45309')}><div style={{fontSize:'1.2rem',fontWeight:800,color:'#B45309'}}>{needsApprovalCount}</div><div style={{fontSize:'0.72rem',color:'#6B7280'}}>Need Approval</div></div>}
           </div>
         )}
         <div style={s.card}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
-            <thead><tr style={{background:'#F9FAFB'}}>{['Client','Date','Start','End','Hours','Est. Pay','GPS','Status'].map(h=><th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontWeight:700,color:'#374151',borderBottom:'1px solid #E5E7EB'}}>{h}</th>)}</tr></thead>
+            <thead><tr style={{background:'#F9FAFB'}}>{['Client','Date','Start','End','Actual','Billable','Est. Pay','GPS','Status'].map(h=><th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontWeight:700,color:'#374151',borderBottom:'1px solid #E5E7EB'}}>{h}</th>)}</tr></thead>
             <tbody>
-              {shifts.map(sh=>(
+              {shifts.map(sh=>{
+                const actualHrs = sh.hours||sh.duration_hours;
+                const billableHrs = sh.billable_hours != null ? sh.billable_hours : (sh.billable_minutes != null ? sh.billable_minutes/60 : null);
+                const payHrs = billableHrs != null ? billableHrs : actualHrs;
+                return (
                 <tr key={sh.id} style={{borderBottom:'1px solid #F3F4F6'}}>
                   <td style={{padding:'0.5rem 0.75rem',fontWeight:600}}>{sh.client_first_name||sh.client_first} {sh.client_last_name||sh.client_last}</td>
                   <td style={{padding:'0.5rem 0.75rem',color:'#6B7280'}}>{fmtDate(sh.start_time)}</td>
                   <td style={{padding:'0.5rem 0.75rem'}}>{new Date(sh.start_time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</td>
                   <td style={{padding:'0.5rem 0.75rem'}}>{sh.end_time?new Date(sh.end_time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'Active'}</td>
-                  <td style={{padding:'0.5rem 0.75rem',fontWeight:700}}>{sh.hours||sh.duration_hours?fmtHrs(sh.hours||sh.duration_hours):'—'}</td>
-                  <td style={{padding:'0.5rem 0.75rem',color:'#2ABBA7'}}>{sh.hours&&profile?.default_pay_rate?fmt$(parseFloat(sh.hours)*parseFloat(profile.default_pay_rate)):'—'}</td>
+                  <td style={{padding:'0.5rem 0.75rem',fontWeight:700}}>{actualHrs?fmtHrs(actualHrs):'—'}</td>
+                  <td style={{padding:'0.5rem 0.75rem',fontWeight:700,color:billableHrs!=null&&actualHrs&&Math.abs(billableHrs-actualHrs)>0.12?'#B45309':'#111827'}}>{billableHrs!=null?fmtHrs(billableHrs):'—'}</td>
+                  <td style={{padding:'0.5rem 0.75rem',color:'#2ABBA7'}}>{payHrs&&profile?.default_pay_rate?fmt$(parseFloat(payHrs)*parseFloat(profile.default_pay_rate)):'—'}</td>
                   <td style={{padding:'0.5rem 0.75rem'}}>{parseInt(sh.gps_point_count||0)>0?`✅ ${sh.gps_point_count} pts`:'⚠️ No GPS'}</td>
-                  <td style={{padding:'0.5rem 0.75rem'}}><span style={s.badge(sh.is_complete?'#065F46':'#92400E',sh.is_complete?'#D1FAE5':'#FEF3C7')}>{sh.is_complete?'Complete':'Active'}</span></td>
+                  <td style={{padding:'0.5rem 0.75rem'}}>
+                    <span style={s.badge(sh.is_complete?'#065F46':'#92400E',sh.is_complete?'#D1FAE5':'#FEF3C7')}>{sh.is_complete?'Complete':'Active'}</span>
+                    {sh.needs_approval && <span title={sh.approval_reason==='unscheduled'?'No schedule linked':'Time variance > 7 min'} style={{marginLeft:6,...s.badge('#92400E','#FEF3C7')}}>⚠ Approval</span>}
+                  </td>
                 </tr>
-              ))}
-              {!shifts.length&&<tr><td colSpan={8} style={{padding:'2rem',textAlign:'center',color:'#9CA3AF'}}>{allShifts?'No shifts in this date range':'Showing last 10 shifts — use search to filter'}</td></tr>}
+              );})}
+              {!shifts.length&&<tr><td colSpan={9} style={{padding:'2rem',textAlign:'center',color:'#9CA3AF'}}>{allShifts?'No shifts in this date range':'Showing last 10 shifts — use search to filter'}</td></tr>}
             </tbody>
           </table>
         </div>
