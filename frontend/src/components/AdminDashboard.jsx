@@ -28,6 +28,7 @@ const ComplianceTracking = React.lazy(() => import('./admin/ComplianceTracking')
 const ReportsAnalytics = React.lazy(() => import('./admin/ReportsAnalytics'));
 const PayrollProcessing = React.lazy(() => import('./admin/PayrollProcessing'));
 const ShiftApprovals = React.lazy(() => import('./admin/ShiftApprovals'));
+const LeadsManagement = React.lazy(() => import('./admin/LeadsManagement'));
 const AuditLogs = React.lazy(() => import('./admin/AuditLogs'));
 const LoginActivity = React.lazy(() => import('./admin/LoginActivity'));
 const ClaimsManagement = React.lazy(() => import('./admin/ClaimsManagement'));
@@ -58,6 +59,7 @@ const NAV_SECTIONS = [
     id: 'ops', label: 'Operations', icon: '🏢',
     items: [
       { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+      { id: 'leads', label: 'Leads', icon: '📬' },
       { id: 'clients', label: 'Clients', icon: '👤' },
       { id: 'onboarding', label: 'Onboarding', icon: '📋' },
       { id: 'referrals', label: 'Referral Sources', icon: '🏥' },
@@ -269,6 +271,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'reports': return <ReportsAnalytics token={token} />;
       case 'payroll': return <PayrollProcessing token={token} />;
       case 'shift-approvals': return <ShiftApprovals token={token} />;
+      case 'leads': return <LeadsManagement token={token} />;
       case 'expenses': return <ExpenseManagement token={token} />;
       case 'audit-logs': return <AuditLogs token={token} />;
       case 'login-activity': return <LoginActivity token={token} />;
