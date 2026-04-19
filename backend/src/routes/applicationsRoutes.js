@@ -41,14 +41,15 @@ router.post('/', async (req, res) => {
       )
       RETURNING id, first_name, last_name, created_at
     `, [
-      firstName, lastName, email, phone, address, city, state, zip, dob,
+      firstName, lastName, email, phone, address, city, state, zip, dob || null,
       driversLicense === 'yes', transportation === 'yes', legalToWork === 'yes', backgroundCheck === 'yes',
-      felony === 'yes', felonyExplanation, yearsExperience, cnaLicense, 
-      Array.isArray(certifications) ? certifications.join(',') : certifications,
+      felony === 'yes', felonyExplanation, parseInt(yearsExperience, 10) || 0, cnaLicense,
+      // certifications column is TEXT[] — pass a JS array, not a joined string
+      Array.isArray(certifications) ? certifications : (certifications ? [certifications] : []),
       previousEmployer, reasonForLeaving,
       Array.isArray(availability) ? availability.join(',') : availability,
       Array.isArray(shifts) ? shifts.join(',') : shifts,
-      hoursDesired, startDate,
+      hoursDesired, startDate || null,
       ref1Name, ref1Relationship, ref1Phone, ref1Email,
       ref2Name, ref2Relationship, ref2Phone, ref2Email,
       whyInterested, additionalInfo
