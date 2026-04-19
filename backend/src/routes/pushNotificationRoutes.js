@@ -175,10 +175,13 @@ router.post('/send-to-caregiver', auth, requireAdmin, async (req, res) => {
 });
 
 // GET /api/push/unread-count - Get unread notification count for user
+// Uses `status` (post-migration-v25 source of truth) to match the bell with
+// the NotificationCenter 'New' tab. Prior bug: bell queried is_read, page
+// queried status — they drifted out of sync, showing phantom unread counts.
 router.get('/unread-count', auth, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND is_read = false`,
+      `SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND status = 'new'`,
       [req.user.id]
     );
     res.json({ count: parseInt(result.rows[0]?.count || 0) });
@@ -188,13 +191,23 @@ router.get('/unread-count', auth, async (req, res) => {
 });
 
 // POST /api/push/mark-read - Mark notifications as read
+// Updates both is_read and status='handled' to keep them in sync; prior bug
+// was updating only is_read, leaving stale status='new' rows.
 router.post('/mark-read', auth, async (req, res) => {
   try {
     const { ids } = req.body; // array of notification ids, or 'all'
     if (ids === 'all') {
-      await db.query(`UPDATE notifications SET is_read = true WHERE user_id = $1`, [req.user.id]);
-    } else if (Array.isArray(ids)) {
-      await db.query(`UPDATE notifications SET is_read = true WHERE user_id = $1 AND id = ANY($2)`, [req.user.id, ids]);
+      await db.query(
+        `UPDATE notifications SET is_read = true, status = 'handled', handled_at = NOW()
+         WHERE user_id = $1 AND (is_read = false OR status = 'new')`,
+        [req.user.id]
+      );
+    } else if (Array.isArray(ids) && ids.length > 0) {
+      await db.query(
+        `UPDATE notifications SET is_read = true, status = 'handled', handled_at = NOW()
+         WHERE user_id = $1 AND id = ANY($2)`,
+        [req.user.id, ids]
+      );
     }
     res.json({ success: true });
   } catch (error) {

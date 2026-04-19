@@ -22,14 +22,18 @@ const NotificationCenter = ({ token }) => {
         fetch(`${API_BASE_URL}/api/notifications${statusParam}`, { headers: { Authorization: `Bearer ${token}` } }),
         tab === 'settings' ? fetch(`${API_BASE_URL}/api/notification-settings`, { headers: { Authorization: `Bearer ${token}` } }) : Promise.resolve(null)
       ]);
+      let data = [];
       if (notifRes.ok) {
-        const data = await notifRes.json();
-        setNotifications(Array.isArray(data) ? data : []);
+        data = await notifRes.json();
+        if (!Array.isArray(data)) data = [];
+        setNotifications(data);
+      } else {
+        setNotifications([]);
       }
       if (settingsRes?.ok) setSettings(await settingsRes.json());
 
       // Mark all "new" notifications as read so the bell badge clears
-      if (tab === 'new' && Array.isArray(data) && data.length > 0) {
+      if (tab === 'new' && data.length > 0) {
         fetch(`${API_BASE_URL}/api/push/mark-read`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
