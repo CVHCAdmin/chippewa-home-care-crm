@@ -46,6 +46,7 @@ app.use(cors({
   origin: (origin, callback) => {
     const defaultOrigins = [
       'https://cvhc-crm.netlify.app',
+      'https://cvhc-marketing.netlify.app',        // marketing site Netlify preview
       'https://chippewa-home-care-crm.pages.dev',
       'https://app.chippewavalleyhomecare.com',
       'https://chippewavalleyhomecare.com',
