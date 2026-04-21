@@ -10,6 +10,7 @@ import PortalSetup from './components/portal/PortalSetup';
 import ClientPortal from './components/portal/ClientPortal';
 import FamilyPortalLogin from './components/portal/FamilyPortalLogin';
 import FamilyPortal from './components/portal/FamilyPortal';
+import OnboardingPacketPage from './components/OnboardingPacketPage';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
 import { setSessionExpiredCallback } from './config'; // also installs global 401 fetch interceptor
@@ -28,6 +29,9 @@ const App = () => {
 
         {/* Client portal setup (invite link) */}
         <Route path="/portal/setup"      element={<PortalSetup />} />
+
+        {/* Caregiver onboarding packet (tokenized; post-hire) */}
+        <Route path="/onboarding/:token" element={<OnboardingPacketPage />} />
 
         {/* Client portal */}
         <Route path="/portal/*"          element={<PortalApp />} />

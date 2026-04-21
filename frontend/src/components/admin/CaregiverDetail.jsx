@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { toast } from '../Toast';
+import EligibilityCard from './EligibilityCard';
 
 const fmt$ = (n) => n != null ? `$${Number(parseFloat(n||0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}` : '—';
 const fmtHrs = (n) => n != null ? `${Number(parseFloat(n||0)).toFixed(2)}h` : '—';
@@ -678,6 +679,9 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   // ── BACKGROUND CHECKS ─────────────────────────────────────────────────────────
   const renderBackground = () => (
     <div>
+      {/* Automated WI caregiver eligibility analysis from the latest WORCS check */}
+      <EligibilityCard caregiverId={caregiverId} token={token} />
+
       <div style={{...s.card}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem'}}>
           <div style={{fontWeight:800,fontSize:'0.95rem'}}>🔍 Background Checks</div>

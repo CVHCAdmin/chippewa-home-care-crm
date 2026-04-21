@@ -1,4 +1,4 @@
-// routes/publicLeadRoutes.js — public, unauthenticated lead capture from the marketing website
+// routes/publicLeadRoutes.js — public, unauthenticated endpoints hit by the marketing website
 // Mounted at /api/public in server.js
 const express = require('express');
 const rateLimit = require('express-rate-limit');
@@ -13,6 +13,15 @@ const leadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many submissions from this address. Please try again later or call (715) 491-1254.' }
+});
+
+// Lighter limiter for simple GETs (job postings list) so the website can
+// fetch on every page load without tripping the form limiter.
+const readLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 router.post('/prospects', leadLimiter, async (req, res) => {
@@ -54,6 +63,52 @@ router.post('/prospects', leadLimiter, async (req, res) => {
   } catch (err) {
     console.error('publicLeadRoutes /prospects error:', err);
     res.status(500).json({ error: 'Something went wrong. Please try again or call (715) 491-1254.' });
+  }
+});
+
+// ── GET /api/public/job-postings ─────────────────────────────────────────
+// Returns currently-open postings for the website. Empty array → careers page
+// shows the evergreen "we're always building our pool" fallback copy.
+router.get('/job-postings', readLimiter, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT id, title, slug, employment_type, location,
+             pay_range_min, pay_range_max, pay_rate_unit,
+             summary, description, responsibilities, qualifications,
+             published_at, closes_at
+        FROM job_postings
+       WHERE is_published = true
+         AND (closes_at IS NULL OR closes_at > NOW())
+       ORDER BY published_at DESC NULLS LAST, created_at DESC
+    `);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('publicLeadRoutes /job-postings error:', err);
+    res.status(500).json({ error: 'Unable to load openings right now.' });
+  }
+});
+
+// ── GET /api/public/job-postings/:slug ──────────────────────────────────
+// Single posting by slug for the per-posting application page.
+router.get('/job-postings/:slug', readLimiter, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT id, title, slug, employment_type, location,
+             pay_range_min, pay_range_max, pay_rate_unit,
+             summary, description, responsibilities, qualifications,
+             published_at, closes_at
+        FROM job_postings
+       WHERE slug = $1
+         AND is_published = true
+         AND (closes_at IS NULL OR closes_at > NOW())
+    `, [req.params.slug]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Posting not found' });
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('publicLeadRoutes /job-postings/:slug error:', err);
+    res.status(500).json({ error: 'Unable to load posting right now.' });
   }
 });
 

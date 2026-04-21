@@ -5,6 +5,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { runEligibilityForCaregiver } = require('../services/eligibilityEngine');
+const { runPollCycle } = require('../jobs/worcsPoll');
 
 // Get all background checks (with optional filters)
 router.get('/', auth, async (req, res) => {
@@ -140,6 +142,32 @@ router.get('/reports/compliance', auth, async (req, res) => {
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ── GET /api/background-checks/caregiver/:caregiverId/eligibility ──────
+// Runs the Wisconsin caregiver eligibility engine against the most recent
+// WORCS background check for this caregiver. Does NOT persist a decision —
+// the admin is the legal decision-maker.
+router.get('/caregiver/:caregiverId/eligibility', async (req, res) => {
+  try {
+    const result = await runEligibilityForCaregiver(req.params.caregiverId);
+    res.json(result);
+  } catch (err) {
+    console.error('[bgc] eligibility error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/background-checks/poll-now ───────────────────────────────
+// Manual "poll WORCS now" trigger — bypasses the 30-minute cron for admins
+// who want results faster. Returns poll-cycle summary.
+router.post('/poll-now', async (req, res) => {
+  try {
+    const summary = await runPollCycle();
+    res.json({ success: true, ...summary });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -290,6 +290,83 @@ const sendCaregiverWelcome = async ({ to, firstName, tempPassword }) => {
   });
 };
 
+// ── Onboarding Packet Invite (post-hire) ──────────────────────────────
+// Emailed immediately after /hire. Deep-links into the tokenized onboarding
+// packet page where the caregiver signs BGC consent and completes deeper info.
+const sendOnboardingPacketInvite = async ({ to, firstName, packetUrl, expiresAt }) => {
+  const expiresStr = expiresAt
+    ? new Date(expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : '14 days from now';
+
+  return sendEmail({
+    to,
+    subject: `Welcome to ${AGENCY_NAME} — complete your onboarding`,
+    html: wrap(`
+      <h3 style="color: #059669;">Welcome aboard, ${firstName}!</h3>
+      <p>We're excited to have you join the ${AGENCY_NAME} team. Before your first shift,
+         we need a little more information from you and your consent to run the Wisconsin
+         caregiver background check.</p>
+
+      <p>This should take about 10–15 minutes and can be done from your phone or computer.
+         Please complete it as soon as you can — we can't schedule you for shifts until
+         this is done.</p>
+
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${packetUrl}" style="background: #059669; color: #fff; padding: 14px 40px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 1.05rem; display: inline-block;">
+          Complete Your Onboarding
+        </a>
+      </div>
+
+      <p style="color: #888; font-size: 0.85rem;">
+        This link expires on <strong>${expiresStr}</strong>. If it expires before you
+        finish, contact the office and we'll send you a new one.
+      </p>
+
+      <p style="color: #555; font-size: 0.9rem; margin-top: 24px;">
+        You'll still receive a separate email with login credentials for the caregiver app.
+        Please complete this onboarding packet first so we can finish setting up your account.
+      </p>
+    `),
+  });
+};
+
+// ── Background Check Status (admin notification) ──────────────────────
+const sendAdminBgcResult = async ({ to, caregiverName, status, summary, matches }) => {
+  const matchList = (matches || []).length === 0
+    ? '<p style="color:#065F46;">No statutory matches detected.</p>'
+    : '<ul style="color:#374151; padding-left:18px;">' +
+      (matches || []).map(m => `<li><strong>${m.statute}</strong> — ${m.short_title} (${m.severity})</li>`).join('') +
+      '</ul>';
+
+  const statusColor = status === 'clear' ? '#059669'
+                    : status === 'disqualified' ? '#B91C1C'
+                    : '#B45309';
+  const statusLabel = status === 'clear'          ? 'Cleared'
+                    : status === 'disqualified'   ? 'Disqualified'
+                    : status === 'rehab_review'   ? 'Rehabilitation Review Required'
+                    : 'Flagged for Review';
+
+  return sendEmail({
+    to,
+    subject: `Background check result for ${caregiverName}: ${statusLabel}`,
+    html: wrap(`
+      <p style="color: #333;">Background check processing complete for <strong>${caregiverName}</strong>.</p>
+
+      <div style="background: #F9FAFB; border-left: 4px solid ${statusColor}; padding: 12px 16px; margin: 16px 0; border-radius: 6px;">
+        <div style="font-weight: 700; color: ${statusColor}; font-size: 1rem;">${statusLabel}</div>
+        <div style="color: #374151; margin-top: 6px;">${summary}</div>
+      </div>
+
+      <p style="color: #6B7280; font-size: 0.9rem; margin-top: 20px;">Matched statutes:</p>
+      ${matchList}
+
+      <p style="color: #555; font-size: 0.9rem; margin-top: 16px;">
+        Log in to the CRM to review the full WORCS report and make a hiring decision.
+      </p>
+    `),
+  });
+};
+
 module.exports = {
   sendEmail,
   sendClientPortalInvite,
@@ -298,5 +375,7 @@ module.exports = {
   sendPasswordReset,
   sendInvoiceEmail,
   sendCaregiverWelcome,
+  sendOnboardingPacketInvite,
+  sendAdminBgcResult,
   isConfigured,
 };

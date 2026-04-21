@@ -163,6 +163,12 @@ app.use('/api/documents',         verifyToken, require('./routes/documentsRoutes
 app.use('/api/adl',               verifyToken, require('./routes/adlRoutes'));
 app.use('/api/performance-reviews', verifyToken, require('./routes/performanceReviewsRoutes'));
 app.use('/api/background-checks', verifyToken, require('./routes/backgroundChecksRoutes'));
+app.use('/api/job-postings',      verifyToken, require('./routes/jobPostingsRoutes'));
+app.use('/api/onboarding-packets', (req, res, next) => {
+  // Public tokenized routes bypass auth; everything else is admin.
+  if (req.path.startsWith('/public')) return next();
+  return verifyToken(req, res, next);
+}, require('./routes/onboardingPacketsRoutes'));
 app.use('/api/family-portal', (req, res, next) => {
   // Defense-in-depth: admin sub-routes require a valid admin token even though
   // familyPortalRoutes has its own auth. Belt AND suspenders.
@@ -442,6 +448,10 @@ if (require.main === module) {
     if (process.env.NODE_ENV !== 'test') {
       const { startCron } = require('./jobs/scheduledBackup');
       startCron();
+
+      // Start WORCS background-check polling (every 30 min)
+      const { startCron: startWorcsCron } = require('./jobs/worcsPoll');
+      startWorcsCron();
     }
   });
 }
