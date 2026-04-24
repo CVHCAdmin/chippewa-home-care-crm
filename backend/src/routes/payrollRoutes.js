@@ -306,7 +306,7 @@ router.get('/shifts', auth, async (req, res) => {
         psr.*,
         u.first_name AS caregiver_first,
         u.last_name AS caregiver_last,
-        COALESCE(u.hourly_rate, ${parseFloat(process.env.DEFAULT_HOURLY_RATE) || 15}) AS hourly_rate,
+        COALESCE(u.default_pay_rate, u.hourly_rate, ${parseFloat(process.env.DEFAULT_HOURLY_RATE) || 15}) AS hourly_rate,
         c.first_name AS client_first,
         c.last_name AS client_last,
         reviewer.first_name AS reviewer_first,
@@ -397,8 +397,10 @@ router.post('/shifts/approve-all', auth, async (req, res) => {
     const params = [req.user.id, startDate, endDate];
     let approvedClocked = 0, approvedScheduled = 0;
 
-    // Step 1: Approve shifts that have a clock-in as proof of attendance.
+    // Step 1: Approve SCHEDULED shifts that have a clock-in as proof of attendance.
     // payable_minutes is already = scheduled_minutes from generate-shifts (we pay scheduled, not clocked).
+    // Unscheduled clock-ins (schedule_id IS NULL) are left as 'pending' — admin must resolve
+    // manually since we don't pay work that wasn't on the schedule.
     let clockedQuery = `
       UPDATE payroll_shift_reviews SET
         status = 'approved',
@@ -408,6 +410,7 @@ router.post('/shifts/approve-all', auth, async (req, res) => {
       WHERE pay_period_start = $2 AND pay_period_end = $3
         AND status IN ('verified', 'pending')
         AND time_entry_id IS NOT NULL
+        AND schedule_id IS NOT NULL
     `;
     if (caregiverId) { params.push(caregiverId); clockedQuery += ` AND caregiver_id = $${params.length}`; }
     const clockedResult = await db.query(clockedQuery + ' RETURNING id', params);
@@ -453,7 +456,7 @@ router.post('/calculate', auth, async (req, res) => {
         u.id                                                        AS caregiver_id,
         u.first_name,
         u.last_name,
-        COALESCE(u.hourly_rate, $3::numeric)                       AS hourly_rate,
+        COALESCE(u.default_pay_rate, u.hourly_rate, $3::numeric)   AS hourly_rate,
 
         -- Scheduled hours (all shifts in period)
         COALESCE((
@@ -473,7 +476,9 @@ router.post('/calculate', auth, async (req, res) => {
             AND psr2.actual_minutes IS NOT NULL
         ), 0)                                                      AS clocked_hours,
 
-        -- Payable hours (only from approved/verified/manual shifts)
+        -- Payable hours: only SCHEDULED shifts that were verified/approved.
+        -- Unscheduled clock-ins don't count — per business rule, we only pay
+        -- scheduled hours (caregivers must be on the schedule to be paid).
         COALESCE((
           SELECT ROUND(SUM(psr2.payable_minutes)::numeric / 60, 2)
           FROM payroll_shift_reviews psr2
@@ -481,6 +486,7 @@ router.post('/calculate', auth, async (req, res) => {
             AND psr2.pay_period_start = $1 AND psr2.pay_period_end = $2
             AND psr2.status IN ('verified', 'approved', 'manual_entry')
             AND psr2.payable_minutes IS NOT NULL
+            AND psr2.schedule_id IS NOT NULL
         ), 0)                                                      AS total_hours,
 
         -- Shift counts
@@ -509,23 +515,25 @@ router.post('/calculate', auth, async (req, res) => {
             AND psr2.status IN ('pending', 'missing_punch', 'flagged')
         ), 0)                                                      AS unresolved_shifts,
 
-        -- Weekend hours (from approved shifts only)
+        -- Weekend hours (from approved SCHEDULED shifts only)
         COALESCE((
           SELECT ROUND(SUM(psr2.payable_minutes)::numeric / 60, 2)
           FROM payroll_shift_reviews psr2
           WHERE psr2.caregiver_id = u.id
             AND psr2.pay_period_start = $1 AND psr2.pay_period_end = $2
             AND psr2.status IN ('verified', 'approved', 'manual_entry')
+            AND psr2.schedule_id IS NOT NULL
             AND EXTRACT(DOW FROM psr2.shift_date) IN (0, 6)
         ), 0)                                                      AS weekend_hours,
 
-        -- Night hours (from approved shifts only)
+        -- Night hours (from approved SCHEDULED shifts only)
         COALESCE((
           SELECT ROUND(SUM(psr2.payable_minutes)::numeric / 60, 2)
           FROM payroll_shift_reviews psr2
           WHERE psr2.caregiver_id = u.id
             AND psr2.pay_period_start = $1 AND psr2.pay_period_end = $2
             AND psr2.status IN ('verified', 'approved', 'manual_entry')
+            AND psr2.schedule_id IS NOT NULL
             AND (psr2.scheduled_start >= '18:00' OR psr2.scheduled_start < '06:00'
                  OR psr2.actual_start IS NOT NULL AND (
                    EXTRACT(HOUR FROM psr2.actual_start) >= 18
@@ -739,7 +747,7 @@ router.post('/export', auth, async (req, res) => {
     const result = await db.query(`
       SELECT
         u.first_name, u.last_name,
-        COALESCE(u.hourly_rate, $3::numeric) AS hourly_rate,
+        COALESCE(u.default_pay_rate, u.hourly_rate, $3::numeric) AS hourly_rate,
         ROUND(COALESCE(SUM(psr.payable_minutes), 0)::numeric / 60, 2) AS total_hours
       FROM users u
       JOIN payroll_shift_reviews psr ON psr.caregiver_id = u.id
