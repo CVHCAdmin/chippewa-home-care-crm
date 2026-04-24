@@ -50,13 +50,15 @@ router.post('/generate-shifts', auth, async (req, res) => {
 
   try {
     // Step 1: Expand all schedule occurrences and match to time entries
-    // Two-pass matching: (1) each punch picks closest shift, (2) each shift picks best remaining punch
-    // With 2-hour max threshold to prevent wrong-shift matches (e.g. morning punch on afternoon shift)
+    // Tight pass: each punch picks closest shift within 2 hours, each shift picks best remaining punch.
+    // Loose pass: any leftover shift + leftover punch on same caregiver/client/date get paired,
+    //   regardless of time distance — prevents double-payment when a caregiver clocks the right shift
+    //   but logs their time >2hrs off the scheduled start.
     const matchResult = await db.query(`
       WITH ${SCHEDULE_EXPANSION_CTE},
 
-      -- All candidate (shift, punch) pairs within 2 hours of each other
-      candidates AS (
+      -- Tight candidates: (shift, punch) pairs within 2 hours of each other
+      tight_candidates AS (
         SELECT
           so.schedule_id,
           so.caregiver_id,
@@ -79,25 +81,81 @@ router.post('/generate-shifts', auth, async (req, res) => {
           AND ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) <= 7200
       ),
 
-      -- Pass 1: each punch picks its best (closest) shift — prevents one punch matching multiple shifts
-      punch_best AS (
+      tight_punch_best AS (
         SELECT *,
           ROW_NUMBER() OVER (
             PARTITION BY time_entry_id
             ORDER BY sched_rank, time_diff_secs
           ) AS punch_rn
-        FROM candidates
+        FROM tight_candidates
       ),
 
-      -- Pass 2: from punches that chose this shift, pick the best one per shift
-      shift_best AS (
+      tight_shift_best AS (
+        SELECT * FROM (
+          SELECT *,
+            ROW_NUMBER() OVER (
+              PARTITION BY schedule_id, shift_date
+              ORDER BY sched_rank, time_diff_secs
+            ) AS shift_rn
+          FROM tight_punch_best
+          WHERE punch_rn = 1
+        ) t WHERE shift_rn = 1
+      ),
+
+      -- Loose candidates: same caregiver/client/date, any time gap,
+      -- only for shifts and punches not already tight-matched.
+      loose_candidates AS (
+        SELECT
+          so.schedule_id,
+          so.caregiver_id,
+          so.client_id,
+          so.shift_date,
+          so.scheduled_start,
+          so.scheduled_end,
+          so.scheduled_minutes,
+          te.id AS time_entry_id,
+          te.start_time AS actual_start,
+          te.end_time AS actual_end,
+          COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
+          ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) AS time_diff_secs
+        FROM shift_occurrences so
+        INNER JOIN time_entries te
+          ON te.caregiver_id = so.caregiver_id
+          AND te.client_id = so.client_id
+          AND DATE(te.start_time) = so.shift_date
+        WHERE NOT EXISTS (
+            SELECT 1 FROM tight_shift_best tsb
+            WHERE tsb.schedule_id = so.schedule_id AND tsb.shift_date = so.shift_date
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM tight_shift_best tsb WHERE tsb.time_entry_id = te.id
+          )
+      ),
+
+      loose_punch_best AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY schedule_id, shift_date
-            ORDER BY sched_rank, time_diff_secs
-          ) AS shift_rn
-        FROM punch_best
-        WHERE punch_rn = 1
+            PARTITION BY time_entry_id ORDER BY time_diff_secs
+          ) AS punch_rn
+        FROM loose_candidates
+      ),
+
+      loose_shift_best AS (
+        SELECT * FROM (
+          SELECT *,
+            ROW_NUMBER() OVER (
+              PARTITION BY schedule_id, shift_date ORDER BY time_diff_secs
+            ) AS shift_rn
+          FROM loose_punch_best WHERE punch_rn = 1
+        ) t WHERE shift_rn = 1
+      ),
+
+      all_matches AS (
+        SELECT schedule_id, shift_date, time_entry_id, actual_start, actual_end, actual_minutes
+        FROM tight_shift_best
+        UNION ALL
+        SELECT schedule_id, shift_date, time_entry_id, actual_start, actual_end, actual_minutes
+        FROM loose_shift_best
       ),
 
       -- Final: all shifts with their matched punch (or NULL for missing)
@@ -105,23 +163,22 @@ router.post('/generate-shifts', auth, async (req, res) => {
         SELECT
           so.schedule_id, so.caregiver_id, so.client_id, so.shift_date,
           so.scheduled_start, so.scheduled_end, so.scheduled_minutes,
-          sb.time_entry_id, sb.actual_start, sb.actual_end, sb.actual_minutes,
+          am.time_entry_id, am.actual_start, am.actual_end, am.actual_minutes,
           CASE
-            WHEN sb.time_entry_id IS NOT NULL AND ABS(COALESCE(sb.actual_minutes, 0) - so.scheduled_minutes) <= 15
+            WHEN am.time_entry_id IS NOT NULL AND ABS(COALESCE(am.actual_minutes, 0) - so.scheduled_minutes) <= 15
               THEN 'verified'
-            WHEN sb.time_entry_id IS NOT NULL
+            WHEN am.time_entry_id IS NOT NULL
               THEN 'pending'
             ELSE 'missing_punch'
           END AS auto_status
         FROM shift_occurrences so
-        LEFT JOIN shift_best sb
-          ON sb.schedule_id = so.schedule_id
-          AND sb.shift_date = so.shift_date
-          AND sb.shift_rn = 1
+        LEFT JOIN all_matches am
+          ON am.schedule_id = so.schedule_id
+          AND am.shift_date = so.shift_date
 
         UNION ALL
 
-        -- Unscheduled clock-ins (punch exists but no matching schedule within 2hrs)
+        -- Truly unscheduled clock-ins: punches that didn't match any shift (tight or loose)
         SELECT
           NULL AS schedule_id,
           te.caregiver_id,
@@ -139,11 +196,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
         WHERE DATE(te.start_time) >= $1::date
           AND DATE(te.start_time) <= $2::date
           AND NOT EXISTS (
-            SELECT 1 FROM shift_occurrences so
-            WHERE so.caregiver_id = te.caregiver_id
-              AND so.client_id = te.client_id
-              AND so.shift_date = DATE(te.start_time)
-              AND ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) <= 7200
+            SELECT 1 FROM all_matches am WHERE am.time_entry_id = te.id
           )
       )
       SELECT * FROM matched
@@ -151,11 +204,14 @@ router.post('/generate-shifts', auth, async (req, res) => {
     `, [startDate, endDate]);
 
     // Step 2: Upsert into payroll_shift_reviews
+    // Payable rule: caregivers are paid their SCHEDULED hours; the clock-in is verification
+    // that they were actually there. Unscheduled clock-ins have no schedule to pay against,
+    // so payable defaults to actual — admin must review and resolve.
     let created = 0, updated = 0;
     for (const row of matchResult.rows) {
-      const payableMinutes = row.actual_minutes != null
-        ? (row.scheduled_minutes != null ? Math.min(row.actual_minutes, row.scheduled_minutes) : row.actual_minutes)
-        : (row.auto_status === 'missing_punch' ? null : row.scheduled_minutes);
+      const payableMinutes = row.scheduled_minutes != null
+        ? row.scheduled_minutes
+        : row.actual_minutes;
 
       const result = await db.query(`
         INSERT INTO payroll_shift_reviews (
@@ -179,13 +235,15 @@ router.post('/generate-shifts', auth, async (req, res) => {
           actual_end = EXCLUDED.actual_end,
           actual_minutes = EXCLUDED.actual_minutes,
           payable_minutes = CASE
-            WHEN payroll_shift_reviews.status IN ('approved', 'manual_entry', 'excused')
+            WHEN payroll_shift_reviews.status IN ('manual_entry', 'excused')
             THEN payroll_shift_reviews.payable_minutes
             ELSE EXCLUDED.payable_minutes
           END,
           status = CASE
-            WHEN payroll_shift_reviews.status IN ('approved', 'manual_entry', 'excused')
+            WHEN payroll_shift_reviews.status IN ('manual_entry', 'excused')
             THEN payroll_shift_reviews.status
+            WHEN payroll_shift_reviews.status = 'approved'
+            THEN 'approved'
             ELSE EXCLUDED.status
           END,
           updated_at = NOW()
@@ -202,7 +260,33 @@ router.post('/generate-shifts', auth, async (req, res) => {
       else updated++;
     }
 
-    res.json({ success: true, created, updated, totalShifts: matchResult.rows.length });
+    // Cleanup: remove orphan "unscheduled clock-in" rows whose punch is now linked
+    // to a scheduled shift via the new loose-match pass. Without this, old rows
+    // created by a previous run (with only tight matching) double-count the hours.
+    // Skip manual_entry / excused rows — those were individually reviewed.
+    const cleanup = await db.query(`
+      DELETE FROM payroll_shift_reviews psr
+      WHERE psr.pay_period_start = $1 AND psr.pay_period_end = $2
+        AND psr.schedule_id IS NULL
+        AND psr.time_entry_id IS NOT NULL
+        AND psr.status IN ('pending', 'verified', 'approved')
+        AND EXISTS (
+          SELECT 1 FROM payroll_shift_reviews other
+          WHERE other.pay_period_start = psr.pay_period_start
+            AND other.pay_period_end = psr.pay_period_end
+            AND other.schedule_id IS NOT NULL
+            AND other.time_entry_id = psr.time_entry_id
+            AND other.id <> psr.id
+        )
+    `, [startDate, endDate]);
+
+    res.json({
+      success: true,
+      created,
+      updated,
+      orphansRemoved: cleanup.rowCount,
+      totalShifts: matchResult.rows.length
+    });
   } catch (error) {
     console.error('Generate shifts error:', error);
     res.status(500).json({ error: error.message });
@@ -313,15 +397,11 @@ router.post('/shifts/approve-all', auth, async (req, res) => {
     const params = [req.user.id, startDate, endDate];
     let approvedClocked = 0, approvedScheduled = 0;
 
-    // Step 1: Approve clocked shifts (discard junk <2 min clock-ins by using scheduled hours instead)
+    // Step 1: Approve shifts that have a clock-in as proof of attendance.
+    // payable_minutes is already = scheduled_minutes from generate-shifts (we pay scheduled, not clocked).
     let clockedQuery = `
       UPDATE payroll_shift_reviews SET
         status = 'approved',
-        payable_minutes = CASE
-          WHEN actual_minutes IS NOT NULL AND actual_minutes >= 2 THEN payable_minutes
-          WHEN scheduled_minutes IS NOT NULL THEN scheduled_minutes
-          ELSE payable_minutes
-        END,
         reviewed_by = $1,
         reviewed_at = NOW(),
         updated_at = NOW()
@@ -333,14 +413,13 @@ router.post('/shifts/approve-all', auth, async (req, res) => {
     const clockedResult = await db.query(clockedQuery + ' RETURNING id', params);
     approvedClocked = clockedResult.rows.length;
 
-    // Step 2: If mode is 'all', also approve missing punches using scheduled hours
+    // Step 2: If mode is 'all', also approve missing punches (admin trusts caregiver was there).
     if (mode === 'all') {
       const schedParams = [req.user.id, startDate, endDate];
       let schedQuery = `
         UPDATE payroll_shift_reviews SET
           status = 'approved',
-          payable_minutes = scheduled_minutes,
-          resolution_notes = 'Bulk approved at scheduled hours',
+          resolution_notes = 'Bulk approved — no clock-in on record',
           reviewed_by = $1,
           reviewed_at = NOW(),
           updated_at = NOW()
