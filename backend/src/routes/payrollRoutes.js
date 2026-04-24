@@ -790,6 +790,165 @@ router.post('/export/quickbooks', auth, async (req, res) => {
   res.send(iif);
 });
 
+// ==================== CAREGIVER PAYDAY VERIFICATION ====================
+// Caregivers log in and verify (or dispute) their prior pay-period hours.
+// Pay cycle: Sun–Sat, paid the following Friday (period_end + 6 days).
+
+// Helper: compute the most recent pay period whose pay date has passed.
+// Returns { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD', payDate: 'YYYY-MM-DD' }
+// or null if no pay period is due yet.
+function getCurrentPayPeriod(today = new Date()) {
+  const d = new Date(today);
+  d.setHours(0, 0, 0, 0);
+  // DOW: 0=Sun ... 6=Sat. Last Saturday:
+  const daysSinceSat = (d.getDay() + 1) % 7;
+  const periodEnd = new Date(d);
+  periodEnd.setDate(d.getDate() - daysSinceSat);
+  const periodStart = new Date(periodEnd);
+  periodStart.setDate(periodEnd.getDate() - 6);
+  const payDate = new Date(periodEnd);
+  payDate.setDate(periodEnd.getDate() + 6); // Friday after period end
+  if (d < payDate) {
+    // This week's period isn't due yet — fall back to the prior period
+    periodEnd.setDate(periodEnd.getDate() - 7);
+    periodStart.setDate(periodStart.getDate() - 7);
+    payDate.setDate(payDate.getDate() - 7);
+    if (d < payDate) return null;
+  }
+  const fmt = (dt) => dt.toISOString().split('T')[0];
+  return { start: fmt(periodStart), end: fmt(periodEnd), payDate: fmt(payDate) };
+}
+
+// GET /api/payroll/caregiver/me/pending-verification
+// Returns { pending: {...} } if the caregiver has an unverified pay period, else { pending: null }.
+router.get('/caregiver/me/pending-verification', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'caregiver') return res.json({ pending: null });
+    const period = getCurrentPayPeriod();
+    if (!period) return res.json({ pending: null });
+
+    const existing = await db.query(
+      `SELECT verified_at, disputed_at FROM payroll_period_verifications
+       WHERE caregiver_id = $1 AND pay_period_start = $2 AND pay_period_end = $3`,
+      [req.user.id, period.start, period.end]
+    );
+    if (existing.rows.length > 0 && (existing.rows[0].verified_at || existing.rows[0].disputed_at)) {
+      return res.json({ pending: null });
+    }
+
+    const shiftsResult = await db.query(`
+      SELECT psr.id, psr.shift_date, psr.scheduled_start, psr.scheduled_end,
+             psr.scheduled_minutes, psr.actual_start, psr.actual_end,
+             psr.actual_minutes, psr.payable_minutes, psr.status,
+             c.first_name AS client_first, c.last_name AS client_last
+      FROM payroll_shift_reviews psr
+      LEFT JOIN clients c ON psr.client_id = c.id
+      WHERE psr.caregiver_id = $1
+        AND psr.pay_period_start = $2 AND psr.pay_period_end = $3
+        AND psr.status IN ('verified', 'approved', 'manual_entry')
+        AND psr.schedule_id IS NOT NULL
+      ORDER BY psr.shift_date, psr.scheduled_start
+    `, [req.user.id, period.start, period.end]);
+
+    if (shiftsResult.rows.length === 0) return res.json({ pending: null });
+
+    const userResult = await db.query(
+      `SELECT COALESCE(default_pay_rate, hourly_rate, $2::numeric) AS rate
+       FROM users WHERE id = $1`,
+      [req.user.id, parseFloat(process.env.DEFAULT_HOURLY_RATE) || 15]
+    );
+    const rate = parseFloat(userResult.rows[0].rate);
+    const totalMinutes = shiftsResult.rows.reduce((s, r) => s + (parseInt(r.payable_minutes) || 0), 0);
+    const totalHours = totalMinutes / 60;
+    const grossPay = totalHours * rate;
+
+    res.json({
+      pending: {
+        payPeriodStart: period.start,
+        payPeriodEnd: period.end,
+        payDate: period.payDate,
+        shifts: shiftsResult.rows,
+        totalHours: parseFloat(totalHours.toFixed(2)),
+        hourlyRate: rate,
+        grossPay: parseFloat(grossPay.toFixed(2))
+      }
+    });
+  } catch (error) {
+    console.error('Pending verification error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/payroll/caregiver/me/verify
+// Body: { payPeriodStart, payPeriodEnd, confirmed: bool, disputeReason?, reportedGrossPay?, reportedTotalHours? }
+router.post('/caregiver/me/verify', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'caregiver') return res.status(403).json({ error: 'Caregivers only' });
+    const { payPeriodStart, payPeriodEnd, confirmed, disputeReason, reportedGrossPay, reportedTotalHours } = req.body;
+    if (!payPeriodStart || !payPeriodEnd) {
+      return res.status(400).json({ error: 'payPeriodStart and payPeriodEnd are required' });
+    }
+
+    if (confirmed) {
+      await db.query(`
+        INSERT INTO payroll_period_verifications
+          (caregiver_id, pay_period_start, pay_period_end, verified_at,
+           reported_total_hours, reported_gross_pay)
+        VALUES ($1, $2, $3, NOW(), $4, $5)
+        ON CONFLICT (caregiver_id, pay_period_start, pay_period_end) DO UPDATE SET
+          verified_at = NOW(), disputed_at = NULL, dispute_reason = NULL,
+          reported_total_hours = EXCLUDED.reported_total_hours,
+          reported_gross_pay = EXCLUDED.reported_gross_pay,
+          updated_at = NOW()
+      `, [req.user.id, payPeriodStart, payPeriodEnd, reportedTotalHours ?? null, reportedGrossPay ?? null]);
+      return res.json({ success: true, status: 'verified' });
+    }
+
+    if (!disputeReason || !disputeReason.trim()) {
+      return res.status(400).json({ error: 'disputeReason is required when disputing' });
+    }
+
+    await db.query(`
+      INSERT INTO payroll_period_verifications
+        (caregiver_id, pay_period_start, pay_period_end, disputed_at, dispute_reason,
+         reported_total_hours, reported_gross_pay)
+      VALUES ($1, $2, $3, NOW(), $4, $5, $6)
+      ON CONFLICT (caregiver_id, pay_period_start, pay_period_end) DO UPDATE SET
+        disputed_at = NOW(), dispute_reason = EXCLUDED.dispute_reason, verified_at = NULL,
+        reported_total_hours = EXCLUDED.reported_total_hours,
+        reported_gross_pay = EXCLUDED.reported_gross_pay,
+        updated_at = NOW()
+    `, [req.user.id, payPeriodStart, payPeriodEnd, disputeReason.trim(),
+        reportedTotalHours ?? null, reportedGrossPay ?? null]);
+
+    // Notify admins so they can investigate
+    try {
+      const userInfo = await db.query('SELECT first_name, last_name FROM users WHERE id = $1', [req.user.id]);
+      const u = userInfo.rows[0];
+      const caregiverName = u ? `${u.first_name} ${u.last_name}` : 'A caregiver';
+      const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
+      for (const admin of admins.rows) {
+        await db.query(
+          `INSERT INTO notifications (id, user_id, type, title, message, status)
+           VALUES ($1, $2, $3, $4, $5, 'new')`,
+          [
+            uuidv4(), admin.id, 'payroll_dispute',
+            'Payroll Dispute Filed',
+            `${caregiverName} disputed ${payPeriodStart} to ${payPeriodEnd}: "${disputeReason.trim()}"`
+          ]
+        );
+      }
+    } catch (e) {
+      console.error('Failed to notify admins of payroll dispute:', e.message);
+    }
+
+    res.json({ success: true, status: 'disputed' });
+  } catch (error) {
+    console.error('Verify payroll error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;
 
 // ==================== PAYROLL CRUD (migrated from miscRoutes) ====================

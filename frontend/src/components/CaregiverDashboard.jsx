@@ -8,6 +8,7 @@ import MileageTracker from './MileageTracker';
 import ShiftMissReport from './caregiver/ShiftMissReport';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
+import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, isNative, platform } from '../hooks/useNative';
 import OfflineBanner from './OfflineBanner';
 
@@ -77,6 +78,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [showHelp, setShowHelp] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [pendingVerification, setPendingVerification] = useState(null);
   const [showMoreDrawer, setShowMoreDrawer] = useState(false);
   const [showAllClients, setShowAllClients] = useState(false);
   const [changeRequests, setChangeRequests] = useState([]);
@@ -125,6 +127,21 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     checkUnread();
     const interval = setInterval(checkUnread, 90000);
     return () => clearInterval(interval);
+  }, [token]);
+
+  // Check for pending payday verification on login (and whenever dashboard remounts)
+  useEffect(() => {
+    const checkPendingVerification = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/payroll/caregiver/me/pending-verification`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.pending) setPendingVerification(data.pending);
+      } catch (e) { }
+    };
+    checkPendingVerification();
   }, [token]);
 
   useEffect(() => {
@@ -766,6 +783,28 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     
     return (
     <>
+      {unreadMessages > 0 && (
+        <div
+          onClick={() => { setShowMessages(true); }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '0.75rem',
+            padding: '1rem 1.25rem', marginBottom: '1rem',
+            background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
+            color: '#fff', borderRadius: '12px', cursor: 'pointer',
+            boxShadow: '0 4px 12px rgba(217, 119, 6, 0.3)'
+          }}
+        >
+          <div style={{ fontSize: '2rem' }}>📨</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>
+              You have {unreadMessages} new message{unreadMessages === 1 ? '' : 's'}
+            </div>
+            <div style={{ fontSize: '0.85rem', opacity: 0.95 }}>Tap to read — important updates from your office</div>
+          </div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>›</div>
+        </div>
+      )}
+
       <div className="card" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: '#fff', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
@@ -1584,6 +1623,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
       {/* Messages Modal */}
       {showMessages && <CaregiverMessages token={token} onClose={() => { setShowMessages(false); setUnreadMessages(0); }} />}
+
+      {/* Payday Verification Modal — persistent until caregiver confirms or disputes */}
+      {pendingVerification && !showMessages && (
+        <PaydayVerificationModal
+          pending={pendingVerification}
+          token={token}
+          onResolved={() => setPendingVerification(null)}
+        />
+      )}
 
       {/* Help Modal */}
       {showHelp && <CaregiverHelp onClose={() => setShowHelp(false)} />}
