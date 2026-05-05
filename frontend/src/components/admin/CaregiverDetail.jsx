@@ -159,11 +159,17 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   };
 
   const resetPassword = async () => {
-    const newPwd = `CVHC${(form.lastName || 'X').charAt(0).toUpperCase()}${Math.random().toString(36).slice(-6)}`;
+    const suggested = `CVHC${(form.lastName || 'X').charAt(0).toUpperCase()}${Math.random().toString(36).slice(-6)}`;
+    const newPwd = window.prompt(
+      'Set a new password for this caregiver (min 8 chars).\n\nLeave as-is to use the suggested random password, or type your own:',
+      suggested
+    );
+    if (newPwd === null) return;
+    if (newPwd.length < 8) { toast('Password must be at least 8 characters', 'error'); return; }
     const r = await fetch(`${API_BASE_URL}/api/users/${caregiverId}/reset-password`, {
       method: 'PUT', headers: hdr, body: JSON.stringify({ newPassword: newPwd })
     });
-    if (r.ok) toast(`New temp password: ${newPwd} — send to caregiver`, 'success');
+    if (r.ok) window.alert(`Password set to:\n\n${newPwd}\n\nSend this to the caregiver.`);
     else toast('Password reset failed', 'error');
   };
 
