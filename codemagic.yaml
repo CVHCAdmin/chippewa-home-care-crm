@@ -4,7 +4,7 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      node: 20.18.0
+      node: 22.11.0
       java: 21
     scripts:
       - name: Install frontend dependencies
@@ -39,7 +39,7 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      node: 20.18.0
+      node: 22.11.0
       java: 21
       groups:
         - android_signing
@@ -96,7 +96,7 @@ workflows:
     integrations:
       app_store_connect: cvhc_app_store
     environment:
-      node: 20.18.0
+      node: 22.11.0
       xcode: latest
       cocoapods: default
       vars:
