@@ -1,0 +1,161 @@
+workflows:
+  android-debug:
+    name: Android Debug Build (Capacitor)
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      node: 20.18.0
+      java: 21
+    scripts:
+      - name: Install frontend dependencies
+        script: |
+          cd frontend
+          npm ci
+      - name: Build web bundle
+        script: |
+          cd frontend
+          npm run build
+      - name: Sync Capacitor to Android
+        script: |
+          cd frontend
+          npx cap sync android
+      - name: Build Android debug APK
+        script: |
+          cd frontend/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+    artifacts:
+      - frontend/android/app/build/outputs/**/*.apk
+    publishing:
+      email:
+        recipients:
+          - chippewavalleyhomecare@gmail.com
+        notify:
+          success: true
+          failure: true
+
+  android-release:
+    name: Android Release AAB (Play Store)
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      node: 20.18.0
+      java: 21
+      groups:
+        - android_signing
+      vars:
+        PACKAGE_NAME: com.cvhc.homecare
+    scripts:
+      - name: Install frontend dependencies
+        script: |
+          cd frontend
+          npm ci
+      - name: Build web bundle
+        script: |
+          cd frontend
+          npm run build
+      - name: Sync Capacitor to Android
+        script: |
+          cd frontend
+          npx cap sync android
+      - name: Set up release keystore
+        script: |
+          cd frontend/android
+          echo $CM_KEYSTORE | base64 --decode > release.keystore
+          cat <<EOF >> gradle.properties
+          MYAPP_RELEASE_STORE_FILE=release.keystore
+          MYAPP_RELEASE_KEY_ALIAS=$CM_KEY_ALIAS
+          MYAPP_RELEASE_STORE_PASSWORD=$CM_KEYSTORE_PASSWORD
+          MYAPP_RELEASE_KEY_PASSWORD=$CM_KEY_PASSWORD
+          EOF
+      - name: Build Android release AAB
+        script: |
+          cd frontend/android
+          chmod +x gradlew
+          ./gradlew bundleRelease --no-daemon
+    artifacts:
+      - frontend/android/app/build/outputs/**/*.aab
+      - frontend/android/app/build/outputs/**/mapping.txt
+    publishing:
+      email:
+        recipients:
+          - chippewavalleyhomecare@gmail.com
+        notify:
+          success: true
+          failure: true
+      # Uncomment after creating a Google Play service account
+      # google_play:
+      #   credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+      #   track: internal
+      #   submit_as_draft: true
+
+  ios-release:
+    name: iOS Release (TestFlight)
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    integrations:
+      app_store_connect: cvhc_app_store
+    environment:
+      node: 20.18.0
+      xcode: latest
+      cocoapods: default
+      vars:
+        BUNDLE_ID: com.cvhc.homecare
+        XCODE_WORKSPACE: ios/App/App.xcworkspace
+        XCODE_SCHEME: App
+        APP_STORE_APPLE_ID: TBD
+    scripts:
+      - name: Install frontend dependencies
+        script: |
+          cd frontend
+          npm ci
+      - name: Build web bundle
+        script: |
+          cd frontend
+          npm run build
+      - name: Add iOS platform if missing
+        script: |
+          cd frontend
+          if [ ! -d "ios" ]; then
+            npx cap add ios
+          fi
+      - name: Sync Capacitor to iOS
+        script: |
+          cd frontend
+          npx cap sync ios
+      - name: Install CocoaPods
+        script: |
+          cd frontend/ios/App
+          pod install
+      - name: Set up signing
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Increment build number
+        script: |
+          cd frontend/ios/App
+          BUILD_NUMBER=$(($(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID") + 1))
+          agvtool new-version -all $BUILD_NUMBER
+      - name: Build iOS app
+        script: |
+          cd frontend
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - frontend/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      email:
+        recipients:
+          - chippewavalleyhomecare@gmail.com
+        notify:
+          success: true
+          failure: true
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

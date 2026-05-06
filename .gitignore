@@ -37,9 +37,18 @@ Thumbs.db
 .idea/
 *.swp
 
-# Capacitor / Mobile builds
-frontend/android/
-frontend/ios/
+# Capacitor / Mobile builds — commit source, ignore generated artifacts
+frontend/android/build/
+frontend/android/.gradle/
+frontend/android/app/build/
+frontend/android/app/release/
+frontend/android/captures/
+frontend/android/local.properties
+frontend/android/.idea/
+frontend/android/app/release.keystore
+frontend/ios/build/
+frontend/ios/App/Pods/
+frontend/ios/App/build/
 frontend/.gradle/
 
 # Coverage / test output
