@@ -7,6 +7,7 @@ import AutoFillButton from './AutoFillButton';
 import DragDropScheduler from './DragDropScheduler';
 import ScheduleOptimizer from './ScheduleOptimizer';
 import RosterOptimizer from './RosterOptimizer';
+import MakeShiftAvailableModal from './MakeShiftAvailableModal';
 import { confirm } from '../ConfirmModal';
 
 function getWeekStart(date) {
@@ -62,6 +63,7 @@ const SchedulingHub = ({ token }) => {
 
   // ── Edit Schedule Modal ──
   const [editModal, setEditModal]   = useState(null);
+  const [makeAvailableModal, setMakeAvailableModal] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
 
   // ── Week View state ──
@@ -450,6 +452,7 @@ const SchedulingHub = ({ token }) => {
     const isRecurring = schedule.day_of_week !== null && schedule.day_of_week !== undefined;
     setEditModal({
       id: schedule.id, clientId: schedule.client_id,
+      caregiverId: schedule.caregiver_id || null,
       dayOfWeek: isRecurring ? schedule.day_of_week.toString() : '',
       date: schedule.date ? schedule.date.split('T')[0] : '',
       startTime: schedule.start_time || '09:00', endTime: schedule.end_time || '13:00',
@@ -1638,12 +1641,42 @@ const SchedulingHub = ({ token }) => {
               <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Notes</label>
               <textarea value={editModal.notes} onChange={(e) => setEditModal(prev => ({ ...prev, notes: e.target.value }))} placeholder='Optional notes...' rows={2} style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem', resize: 'vertical' }} />
             </div>
-            <div style={{ display: 'flex', gap: '0.75rem' }}>
-              <button onClick={handleSaveEdit} disabled={editSaving} className='btn btn-primary' style={{ flex: 1 }}>{editSaving ? 'Saving...' : '✓ Save Changes'}</button>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button onClick={handleSaveEdit} disabled={editSaving} className='btn btn-primary' style={{ flex: 1, minWidth: '160px' }}>{editSaving ? 'Saving...' : '✓ Save Changes'}</button>
+              <button
+                type='button'
+                onClick={() => {
+                  setMakeAvailableModal({
+                    schedule: editModal,
+                    clientName: getClientName(editModal.clientId),
+                    caregiverName: getCaregiverName(editModal.caregiverId || selectedCaregiverId)
+                  });
+                  setEditModal(null);
+                }}
+                className='btn'
+                style={{ background: '#F59E0B', color: '#fff', border: 'none' }}
+                title='Mark this shift as available for another caregiver to pick up'
+              >📋 Mark Available</button>
               <button onClick={() => setEditModal(null)} className='btn btn-secondary'>Cancel</button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* MAKE SHIFT AVAILABLE MODAL */}
+      {makeAvailableModal && (
+        <MakeShiftAvailableModal
+          token={token}
+          schedule={makeAvailableModal.schedule}
+          clientName={makeAvailableModal.clientName}
+          caregiverName={makeAvailableModal.caregiverName}
+          onClose={() => setMakeAvailableModal(null)}
+          onDone={({ notified }) => {
+            showMsg(notified > 0 ? `Shift posted — notified ${notified} caregiver${notified === 1 ? '' : 's'}` : 'Shift posted to open shift board');
+            loadCaregiverSchedules(selectedCaregiverId);
+            if (mainTab === 'staffing' && staffingTab === 'open-shifts') loadOpenShifts();
+          }}
+        />
       )}
 
       {/* CALENDAR DAY DETAIL MODAL */}

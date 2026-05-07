@@ -285,6 +285,165 @@ router.post('/:id/broadcast', auth, async (req, res) => {
   }
 });
 
+// Get caregivers available for a raw date/time slot, BEFORE an open_shift exists.
+// Used by the SchedulingHub "Mark Available" flow to populate the caregiver picker
+// before posting the open shift.
+// Query: ?date=YYYY-MM-DD&startTime=HH:MM&endTime=HH:MM&excludeScheduleId=UUID
+router.get('/caregivers-available', auth, async (req, res) => {
+  const { date, startTime, endTime, excludeScheduleId } = req.query;
+  if (!date || !startTime || !endTime) {
+    return res.status(400).json({ error: 'date, startTime, and endTime are required' });
+  }
+  try {
+    const result = await db.query(`
+      SELECT
+        u.id, u.first_name, u.last_name, u.phone, u.email,
+        EXISTS(
+          SELECT 1 FROM schedules sc
+          WHERE sc.caregiver_id = u.id
+            AND sc.date = $1
+            AND ((sc.start_time, sc.end_time) OVERLAPS ($2::time, $3::time))
+            AND COALESCE(sc.status, 'active') NOT IN ('cancelled')
+            AND (sc.id IS DISTINCT FROM $4)
+        ) AS has_conflict
+      FROM users u
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      ORDER BY u.first_name, u.last_name
+    `, [date, startTime, endTime, excludeScheduleId || null]);
+
+    res.json(result.rows.map(r => ({
+      id: r.id,
+      firstName: r.first_name,
+      lastName: r.last_name,
+      phone: r.phone,
+      email: r.email,
+      available: !r.has_conflict,
+      notified: false
+    })));
+  } catch (error) {
+    console.error('Caregivers available error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get caregivers eligible for a specific open shift's time slot.
+// Returns every active caregiver, marked with availability (no conflicting schedule)
+// and whether they've already been notified about this shift.
+router.get('/:id/eligible-caregivers', auth, async (req, res) => {
+  try {
+    const shift = await db.query('SELECT * FROM open_shifts WHERE id = $1', [req.params.id]);
+    if (shift.rows.length === 0) return res.status(404).json({ error: 'Shift not found' });
+    const s = shift.rows[0];
+
+    const result = await db.query(`
+      SELECT
+        u.id, u.first_name, u.last_name, u.phone, u.email,
+        EXISTS(
+          SELECT 1 FROM schedules sc
+          WHERE sc.caregiver_id = u.id
+            AND sc.date = $1
+            AND ((sc.start_time, sc.end_time) OVERLAPS ($2::time, $3::time))
+            AND COALESCE(sc.status, 'active') NOT IN ('cancelled')
+            AND (sc.id IS DISTINCT FROM $5)
+        ) AS has_conflict,
+        EXISTS(
+          SELECT 1 FROM open_shift_notifications osn
+          WHERE osn.open_shift_id = $4 AND osn.caregiver_id = u.id
+        ) AS already_notified
+      FROM users u
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      ORDER BY u.first_name, u.last_name
+    `, [s.shift_date, s.start_time, s.end_time, s.id, s.schedule_id || null]);
+
+    res.json(result.rows.map(r => ({
+      id: r.id,
+      firstName: r.first_name,
+      lastName: r.last_name,
+      phone: r.phone,
+      email: r.email,
+      available: !r.has_conflict,
+      notified: r.already_notified
+    })));
+  } catch (error) {
+    console.error('Eligible caregivers error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Notify a specific list of caregivers about an open shift.
+// Body: { caregiverIds: [...], customMessage?: string }
+// Creates an in-app notification for each, records the open_shift_notification, and (best-effort) sends push.
+router.post('/:id/notify', auth, async (req, res) => {
+  const { caregiverIds, customMessage } = req.body;
+  if (!Array.isArray(caregiverIds) || caregiverIds.length === 0) {
+    return res.status(400).json({ error: 'caregiverIds is required and must be a non-empty array' });
+  }
+
+  try {
+    const shift = await db.query(`
+      SELECT os.*, c.first_name AS client_first, c.last_name AS client_last
+      FROM open_shifts os
+      JOIN clients c ON os.client_id = c.id
+      WHERE os.id = $1
+    `, [req.params.id]);
+    if (shift.rows.length === 0) return res.status(404).json({ error: 'Shift not found' });
+    const s = shift.rows[0];
+
+    const dateStr = new Date(s.shift_date).toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric'
+    });
+    const timeStr = `${(s.start_time || '').slice(0, 5)}–${(s.end_time || '').slice(0, 5)}`;
+    const bonusStr = parseFloat(s.bonus_amount) > 0 ? ` (+$${s.bonus_amount} bonus)` : '';
+    const title = `Open Shift: ${s.client_first} ${s.client_last}`;
+    const baseMessage = `${dateStr} ${timeStr}${bonusStr}. Open the app to claim it.`;
+    const message = customMessage ? `${customMessage}\n\n${baseMessage}` : baseMessage;
+
+    let notified = 0;
+    for (const cgId of caregiverIds) {
+      try {
+        await db.query(`
+          INSERT INTO notifications (user_id, type, title, message)
+          VALUES ($1, 'open_shift_offer', $2, $3)
+        `, [cgId, title, message]);
+
+        await db.query(`
+          INSERT INTO open_shift_notifications (open_shift_id, caregiver_id, notification_type)
+          VALUES ($1, $2, 'in_app')
+          ON CONFLICT (open_shift_id, caregiver_id) DO NOTHING
+        `, [req.params.id, cgId]);
+
+        notified++;
+      } catch (innerErr) {
+        console.error(`Failed to notify caregiver ${cgId}:`, innerErr.message);
+      }
+    }
+
+    await db.query(`UPDATE open_shifts SET broadcast_sent = true WHERE id = $1`, [req.params.id]);
+
+    res.json({ success: true, notified, total: caregiverIds.length });
+  } catch (error) {
+    console.error('Notify error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cancel an open shift posting (admin changed their mind).
+// If linked to a source schedule, the schedule remains assigned to its original caregiver.
+router.post('/:id/cancel', auth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      UPDATE open_shifts SET status = 'cancelled' WHERE id = $1 AND status IN ('open', 'claimed')
+      RETURNING id, schedule_id
+    `, [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Shift cannot be cancelled (already filled or already cancelled)' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get claims for a shift
 router.get('/:id/claims', auth, async (req, res) => {
   try {
