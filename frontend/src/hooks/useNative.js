@@ -103,7 +103,13 @@ export function useGeolocation({ watch = false, highAccuracy = true } = {}) {
               setPosition(result);
               resolve(result);
             },
-            err => reject(new Error(err.message)),
+            err => {
+              // Preserve the PositionError code so callers can distinguish
+              // 1=PERMISSION_DENIED, 2=POSITION_UNAVAILABLE, 3=TIMEOUT
+              const e = new Error(err.message || 'Location error');
+              e.code = err.code;
+              reject(e);
+            },
             { enableHighAccuracy: highAccuracy, timeout: 15000 }
           );
         });

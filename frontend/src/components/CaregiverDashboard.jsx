@@ -538,28 +538,61 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const [clockingIn, setClockingIn] = useState(false);
 
+  // Translate a GPS failure into a caregiver-actionable message.
+  // Action describes what they were trying to do ("clock in" / "clock out").
+  const gpsErrorMessage = (err, action) => {
+    const code = err?.code;
+    if (code === 1) {
+      return `📍 Location permission is OFF — can't ${action}. Tap the 🔒 in your address bar (or Settings → Site permissions) → Location → Allow, then try again.`;
+    }
+    if (code === 2) {
+      return `📍 Can't get a GPS fix — can't ${action}. Make sure phone Location is ON, step near a window or outside, then try again.`;
+    }
+    if (code === 3) {
+      return `📍 GPS is taking too long — can't ${action}. Step outside or near a window and try again.`;
+    }
+    return `📍 GPS unavailable — can't ${action}. Make sure phone Location is ON and Chrome has Location permission, then try again.`;
+  };
+
   const handleClockIn = async () => {
     if (!selectedClient) return toast('Please select a client.');
     if (clockingIn) return;
     setClockingIn(true);
 
     try {
-      // ALWAYS grab a fresh fix for the EVV stamp — the watcher's cached
-      // value is unreliable on Android Chrome (gets killed when tab is
-      // backgrounded). Try fresh; fall back to cached only if fresh fails.
+      // GPS is REQUIRED for EVV-compliant clock-in. Always grab a fresh fix.
       let lat = null;
       let lng = null;
       try {
         const pos = await Promise.race([
           getPosition(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 12000))
+          new Promise((_, reject) => {
+            const e = new Error('GPS timeout');
+            e.code = 3;
+            setTimeout(() => reject(e), 12000);
+          })
         ]);
         lat = pos?.latitude || null;
         lng = pos?.longitude || null;
-      } catch {
-        // Fresh failed — use whatever the watcher last had, if anything
-        lat = location?.latitude || null;
-        lng = location?.longitude || null;
+      } catch (err) {
+        // Fall back to a cached watcher fix if it's recent (last 60 sec)
+        const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
+        if (location?.latitude && age < 60000) {
+          lat = location.latitude;
+          lng = location.longitude;
+        } else {
+          // No valid GPS — block the clock-in and tell them why
+          await hapticNotify('error');
+          toast(gpsErrorMessage(err, 'clock in'), 'error');
+          setClockingIn(false);
+          return;
+        }
+      }
+      if (!lat || !lng) {
+        await hapticNotify('error');
+        toast(gpsErrorMessage(null, 'clock in'), 'error');
+        setClockingIn(false);
+        return;
       }
 
       await impact('medium'); // native haptic on button press
@@ -604,19 +637,35 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     try {
       await impact('heavy'); // strong haptic for clock out
 
-      // Always fetch fresh GPS for the EVV stamp; fall back to cached if fresh fails.
+      // GPS is REQUIRED for EVV-compliant clock-out. Always grab a fresh fix.
       let lat = null;
       let lng = null;
       try {
         const pos = await Promise.race([
           getPosition(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 12000))
+          new Promise((_, reject) => {
+            const e = new Error('GPS timeout');
+            e.code = 3;
+            setTimeout(() => reject(e), 12000);
+          })
         ]);
         lat = pos?.latitude || null;
         lng = pos?.longitude || null;
-      } catch {
-        lat = location?.latitude || null;
-        lng = location?.longitude || null;
+      } catch (err) {
+        const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
+        if (location?.latitude && age < 60000) {
+          lat = location.latitude;
+          lng = location.longitude;
+        } else {
+          await hapticNotify('error');
+          toast(gpsErrorMessage(err, 'clock out'), 'error');
+          return;
+        }
+      }
+      if (!lat || !lng) {
+        await hapticNotify('error');
+        toast(gpsErrorMessage(null, 'clock out'), 'error');
+        return;
       }
 
       const res = await fetch(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
