@@ -544,22 +544,22 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     setClockingIn(true);
 
     try {
-      // Use whatever GPS we already have — don't block on a fresh fix
-      let lat = location?.latitude || null;
-      let lng = location?.longitude || null;
-      if (!lat) {
-        // No cached fix — wait up to 10s for one. Cold GPS fixes on Android
-        // typically take 5–15s, especially indoors at a client's home.
-        try {
-          const pos = await Promise.race([
-            getPosition(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 10000))
-          ]);
-          lat = pos?.latitude || null;
-          lng = pos?.longitude || null;
-        } catch {
-          // GPS unavailable — proceed without it
-        }
+      // ALWAYS grab a fresh fix for the EVV stamp — the watcher's cached
+      // value is unreliable on Android Chrome (gets killed when tab is
+      // backgrounded). Try fresh; fall back to cached only if fresh fails.
+      let lat = null;
+      let lng = null;
+      try {
+        const pos = await Promise.race([
+          getPosition(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 12000))
+        ]);
+        lat = pos?.latitude || null;
+        lng = pos?.longitude || null;
+      } catch {
+        // Fresh failed — use whatever the watcher last had, if anything
+        lat = location?.latitude || null;
+        lng = location?.longitude || null;
       }
 
       await impact('medium'); // native haptic on button press
@@ -604,21 +604,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     try {
       await impact('heavy'); // strong haptic for clock out
 
-      let lat = location?.latitude || null;
-      let lng = location?.longitude || null;
-      if (!lat) {
-        // Try a fresh fix on clock-out too, with a generous timeout so
-        // we don't lose EVV-quality location data when the watcher missed it.
-        try {
-          const pos = await Promise.race([
-            getPosition(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 10000))
-          ]);
-          lat = pos?.latitude || null;
-          lng = pos?.longitude || null;
-        } catch {
-          // proceed without GPS
-        }
+      // Always fetch fresh GPS for the EVV stamp; fall back to cached if fresh fails.
+      let lat = null;
+      let lng = null;
+      try {
+        const pos = await Promise.race([
+          getPosition(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 12000))
+        ]);
+        lat = pos?.latitude || null;
+        lng = pos?.longitude || null;
+      } catch {
+        lat = location?.latitude || null;
+        lng = location?.longitude || null;
       }
 
       const res = await fetch(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
