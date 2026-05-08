@@ -5,6 +5,16 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 
+// Lazy-load sendPushToUser to avoid circular require with pushNotificationRoutes.
+// Gracefully no-ops when VAPID keys aren't configured in env.
+let _sendPush = null;
+const sendPush = (...args) => {
+  if (!_sendPush) {
+    try { _sendPush = require('./pushNotificationRoutes').sendPushToUser; } catch { _sendPush = async () => {}; }
+  }
+  return _sendPush(...args);
+};
+
 // GET /api/time-entries/active
 router.get('/active', verifyToken, async (req, res) => {
   try {
@@ -399,6 +409,15 @@ router.post('/gps-failure', verifyToken, async (req, res) => {
           INSERT INTO notifications (user_id, type, title, message)
           VALUES ($1, 'gps_failure', $2, $3)
         `, [admin.id, title, message]);
+
+        sendPush(admin.id, {
+          title,
+          body: message,
+          icon: '/icon-192.png',
+          badge: '/badge-72.png',
+          tag: `gps-failure-${req.user.id}`,
+          data: { type: 'gps_failure', caregiverId: req.user.id }
+        }).catch(() => {});
       } catch (innerErr) {
         console.error(`gps-failure notify admin ${admin.id}:`, innerErr.message);
       }

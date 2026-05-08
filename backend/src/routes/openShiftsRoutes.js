@@ -6,6 +6,16 @@ const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
 
+// Lazy-load to avoid circular requires; sendPushToUser is exported from
+// pushNotificationRoutes and gracefully no-ops when VAPID isn't configured.
+let _sendPush = null;
+const sendPush = (...args) => {
+  if (!_sendPush) {
+    try { _sendPush = require('./pushNotificationRoutes').sendPushToUser; } catch { _sendPush = async () => {}; }
+  }
+  return _sendPush(...args);
+};
+
 // Get all open shifts
 router.get('/available', auth, async (req, res) => {
   try {
@@ -411,6 +421,15 @@ router.post('/:id/notify', auth, async (req, res) => {
           VALUES ($1, $2, 'in_app')
           ON CONFLICT (open_shift_id, caregiver_id) DO NOTHING
         `, [req.params.id, cgId]);
+
+        sendPush(cgId, {
+          title,
+          body: message,
+          icon: '/icon-192.png',
+          badge: '/badge-72.png',
+          tag: `open-shift-${req.params.id}`,
+          data: { type: 'open_shift_offer', openShiftId: req.params.id }
+        }).catch(() => {});
 
         notified++;
       } catch (innerErr) {
