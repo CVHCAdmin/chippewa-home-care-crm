@@ -548,11 +548,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = location?.latitude || null;
       let lng = location?.longitude || null;
       if (!lat) {
-        // Try a quick GPS grab but don't let it block clock-in
+        // No cached fix — wait up to 10s for one. Cold GPS fixes on Android
+        // typically take 5–15s, especially indoors at a client's home.
         try {
           const pos = await Promise.race([
             getPosition(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 3000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 10000))
           ]);
           lat = pos?.latitude || null;
           lng = pos?.longitude || null;
@@ -603,8 +604,22 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     try {
       await impact('heavy'); // strong haptic for clock out
 
-      const lat = location?.latitude || null;
-      const lng = location?.longitude || null;
+      let lat = location?.latitude || null;
+      let lng = location?.longitude || null;
+      if (!lat) {
+        // Try a fresh fix on clock-out too, with a generous timeout so
+        // we don't lose EVV-quality location data when the watcher missed it.
+        try {
+          const pos = await Promise.race([
+            getPosition(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 10000))
+          ]);
+          lat = pos?.latitude || null;
+          lng = pos?.longitude || null;
+        } catch {
+          // proceed without GPS
+        }
+      }
 
       const res = await fetch(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
         method: 'POST',
