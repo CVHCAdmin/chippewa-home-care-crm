@@ -368,6 +368,49 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// POST /api/time-entries/gps-failure
+// Logged by the caregiver dashboard when a clock-in/out is blocked because
+// GPS is unavailable. Notifies every active admin so they can help.
+router.post('/gps-failure', verifyToken, async (req, res) => {
+  const { action, errorCode, clientId } = req.body || {};
+  try {
+    const me = await db.query('SELECT first_name, last_name FROM users WHERE id = $1', [req.user.id]);
+    const caregiverName = me.rows[0]
+      ? `${me.rows[0].first_name || ''} ${me.rows[0].last_name || ''}`.trim() || 'A caregiver'
+      : 'A caregiver';
+
+    let clientName = '';
+    if (clientId) {
+      const c = await db.query('SELECT first_name, last_name FROM clients WHERE id = $1', [clientId]);
+      if (c.rows[0]) clientName = ` (client: ${c.rows[0].first_name} ${c.rows[0].last_name})`;
+    }
+
+    const codeNames = { 1: 'location permission denied', 2: 'no GPS signal', 3: 'GPS timeout' };
+    const reason = codeNames[errorCode] || 'unknown GPS error';
+    const actionName = action === 'clock-out' ? 'clock out' : 'clock in';
+
+    const title = `📍 GPS blocked: ${caregiverName}`;
+    const message = `${caregiverName} tried to ${actionName}${clientName} but GPS failed (${reason}). Check their phone's Location settings.`;
+
+    const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
+    for (const admin of admins.rows) {
+      try {
+        await db.query(`
+          INSERT INTO notifications (user_id, type, title, message)
+          VALUES ($1, 'gps_failure', $2, $3)
+        `, [admin.id, title, message]);
+      } catch (innerErr) {
+        console.error(`gps-failure notify admin ${admin.id}:`, innerErr.message);
+      }
+    }
+
+    res.json({ success: true, alerted: admins.rows.length });
+  } catch (error) {
+    console.error('GPS failure log error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/time-entries/:id/gps
 router.post('/:id/gps', verifyToken, async (req, res) => {
   try {

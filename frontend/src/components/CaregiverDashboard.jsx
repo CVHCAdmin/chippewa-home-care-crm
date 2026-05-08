@@ -538,6 +538,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const [clockingIn, setClockingIn] = useState(false);
 
+  // Notify admins (fire-and-forget) when the caregiver hits a GPS hard block.
+  const reportGpsFailure = (action, err, clientId) => {
+    fetch(`${API_BASE_URL}/api/time-entries/gps-failure`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action,
+        errorCode: err?.code ?? 0,
+        clientId: clientId || null
+      })
+    }).catch(() => {});
+  };
+
   // Translate a GPS failure into a caregiver-actionable message.
   // Action describes what they were trying to do ("clock in" / "clock out").
   const gpsErrorMessage = (err, action) => {
@@ -584,6 +597,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           // No valid GPS — block the clock-in and tell them why
           await hapticNotify('error');
           toast(gpsErrorMessage(err, 'clock in'), 'error');
+          reportGpsFailure('clock-in', err, selectedClient);
           setClockingIn(false);
           return;
         }
@@ -591,6 +605,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       if (!lat || !lng) {
         await hapticNotify('error');
         toast(gpsErrorMessage(null, 'clock in'), 'error');
+        reportGpsFailure('clock-in', null, selectedClient);
         setClockingIn(false);
         return;
       }
@@ -659,12 +674,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         } else {
           await hapticNotify('error');
           toast(gpsErrorMessage(err, 'clock out'), 'error');
+          reportGpsFailure('clock-out', err, activeSession?.client_id || selectedClient);
           return;
         }
       }
       if (!lat || !lng) {
         await hapticNotify('error');
         toast(gpsErrorMessage(null, 'clock out'), 'error');
+        reportGpsFailure('clock-out', null, activeSession?.client_id || selectedClient);
         return;
       }
 
