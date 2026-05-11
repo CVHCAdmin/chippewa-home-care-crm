@@ -538,6 +538,48 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   const [clockingIn, setClockingIn] = useState(false);
 
+  // Robust GPS acquisition for clock-in/out. Tries in order:
+  //   1. Cached watcher fix if recent (≤5 min) — instant
+  //   2. Fast low-accuracy fix (WiFi/cell triangulation, 6s timeout) — usually ~1-3s
+  //   3. High-accuracy GPS (20s timeout) — for outdoor / window scenarios
+  // Returns { latitude, longitude, source } or throws an error with .code matching PositionError codes.
+  const acquireLocationForClock = async () => {
+    // 1. Recent cached watcher fix
+    const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
+    if (location?.latitude && age < 300000) {
+      return { latitude: location.latitude, longitude: location.longitude, source: 'cache' };
+    }
+
+    // 2. Fast low-accuracy (network-based) fix
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      try {
+        const pos = await new Promise((resolve, reject) => {
+          let settled = false;
+          const t = setTimeout(() => { if (!settled) { settled = true; const e = new Error('low-accuracy timeout'); e.code = 3; reject(e); } }, 6000);
+          navigator.geolocation.getCurrentPosition(
+            p => { if (settled) return; settled = true; clearTimeout(t); resolve(p); },
+            e => { if (settled) return; settled = true; clearTimeout(t); const er = new Error(e.message); er.code = e.code; reject(er); },
+            { enableHighAccuracy: false, timeout: 6000, maximumAge: 60000 }
+          );
+        });
+        return { latitude: pos.coords.latitude, longitude: pos.coords.longitude, source: 'network' };
+      } catch (_) {
+        // fall through to high-accuracy
+      }
+    }
+
+    // 3. High-accuracy GPS with long timeout
+    const pos = await Promise.race([
+      getPosition(),
+      new Promise((_, reject) => {
+        const e = new Error('GPS timeout');
+        e.code = 3;
+        setTimeout(() => reject(e), 20000);
+      })
+    ]);
+    return { latitude: pos?.latitude, longitude: pos?.longitude, source: 'gps' };
+  };
+
   // Notify admins (fire-and-forget) when the caregiver hits a GPS hard block.
   const reportGpsFailure = (action, err, clientId) => {
     fetch(`${API_BASE_URL}/api/time-entries/gps-failure`, {
@@ -573,34 +615,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     setClockingIn(true);
 
     try {
-      // GPS is REQUIRED for EVV-compliant clock-in. Always grab a fresh fix.
+      // GPS is REQUIRED for EVV-compliant clock-in.
       let lat = null;
       let lng = null;
       try {
-        const pos = await Promise.race([
-          getPosition(),
-          new Promise((_, reject) => {
-            const e = new Error('GPS timeout');
-            e.code = 3;
-            setTimeout(() => reject(e), 12000);
-          })
-        ]);
-        lat = pos?.latitude || null;
-        lng = pos?.longitude || null;
+        const fix = await acquireLocationForClock();
+        lat = fix.latitude || null;
+        lng = fix.longitude || null;
       } catch (err) {
-        // Fall back to a cached watcher fix if it's recent (last 60 sec)
-        const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
-        if (location?.latitude && age < 60000) {
-          lat = location.latitude;
-          lng = location.longitude;
-        } else {
-          // No valid GPS — block the clock-in and tell them why
-          await hapticNotify('error');
-          toast(gpsErrorMessage(err, 'clock in'), 'error');
-          reportGpsFailure('clock-in', err, selectedClient);
-          setClockingIn(false);
-          return;
-        }
+        await hapticNotify('error');
+        toast(gpsErrorMessage(err, 'clock in'), 'error');
+        reportGpsFailure('clock-in', err, selectedClient);
+        setClockingIn(false);
+        return;
       }
       if (!lat || !lng) {
         await hapticNotify('error');
@@ -652,31 +679,18 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     try {
       await impact('heavy'); // strong haptic for clock out
 
-      // GPS is REQUIRED for EVV-compliant clock-out. Always grab a fresh fix.
+      // GPS is REQUIRED for EVV-compliant clock-out.
       let lat = null;
       let lng = null;
       try {
-        const pos = await Promise.race([
-          getPosition(),
-          new Promise((_, reject) => {
-            const e = new Error('GPS timeout');
-            e.code = 3;
-            setTimeout(() => reject(e), 12000);
-          })
-        ]);
-        lat = pos?.latitude || null;
-        lng = pos?.longitude || null;
+        const fix = await acquireLocationForClock();
+        lat = fix.latitude || null;
+        lng = fix.longitude || null;
       } catch (err) {
-        const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
-        if (location?.latitude && age < 60000) {
-          lat = location.latitude;
-          lng = location.longitude;
-        } else {
-          await hapticNotify('error');
-          toast(gpsErrorMessage(err, 'clock out'), 'error');
-          reportGpsFailure('clock-out', err, activeSession?.client_id || selectedClient);
-          return;
-        }
+        await hapticNotify('error');
+        toast(gpsErrorMessage(err, 'clock out'), 'error');
+        reportGpsFailure('clock-out', err, activeSession?.client_id || selectedClient);
+        return;
       }
       if (!lat || !lng) {
         await hapticNotify('error');
