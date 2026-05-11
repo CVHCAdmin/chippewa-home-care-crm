@@ -7,11 +7,24 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
   const [caregiverHours, setCaregiverHours] = useState([]);
   const [loading, setLoading] = useState(true);
   const [noShowStats, setNoShowStats] = useState(null);
+  const [gpsFailures, setGpsFailures] = useState({ count: 0, failures: [] });
 
   useEffect(() => {
     loadAnalytics();
     loadNoShowStats();
+    loadGpsFailures();
+    const t = setInterval(loadGpsFailures, 30000); // poll every 30s
+    return () => clearInterval(t);
   }, []);
+
+  const loadGpsFailures = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/time-entries/gps-failures-recent?minutes=60`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.ok) setGpsFailures(await r.json());
+    } catch { /* ignore */ }
+  };
 
   const loadAnalytics = async () => {
     try {
@@ -54,6 +67,35 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
 
   return (
     <>
+      {/* GPS Block Alert Banner — caregivers stuck unable to clock in/out */}
+      {gpsFailures.count > 0 && (
+        <div onClick={() => onNavigate && onNavigate('live-board')}
+          style={{ background: '#FEE2E2', border: '2px solid #FCA5A5', borderRadius: 12, padding: '0.85rem 1.25rem',
+            marginBottom: '1rem', cursor: 'pointer', boxShadow: '0 2px 8px rgba(239,68,68,0.15)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
+            <span style={{ fontSize: '1.5rem' }}>📍</span>
+            <strong style={{ color: '#991B1B', fontSize: '1rem' }}>
+              {gpsFailures.count} GPS block{gpsFailures.count !== 1 ? 's' : ''} in the last hour — caregiver may be stuck
+            </strong>
+            <span style={{ color: '#B91C1C', fontSize: '0.82rem', marginLeft: 'auto' }}>
+              Click to open Live Board →
+            </span>
+          </div>
+          <div style={{ paddingLeft: '2.25rem', fontSize: '0.85rem', color: '#7F1D1D' }}>
+            {gpsFailures.failures.slice(0, 3).map(f => (
+              <div key={f.id} style={{ marginBottom: '0.2rem' }}>
+                • {f.message} <span style={{ color: '#9F1239', fontSize: '0.75rem', marginLeft: '0.4rem' }}>{new Date(f.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+              </div>
+            ))}
+            {gpsFailures.count > 3 && (
+              <div style={{ color: '#9F1239', fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                +{gpsFailures.count - 3} more — check notifications bell for full list
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* No-Show Alert Banner */}
       {noShowStats && parseInt(noShowStats.open_count) > 0 && (
         <div onClick={() => onNavigate && onNavigate('no-show-alerts')}

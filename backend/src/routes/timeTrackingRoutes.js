@@ -378,6 +378,28 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// GET /api/time-entries/gps-failures-recent
+// Admin-only: list recent GPS block events (last hour by default) so the
+// admin dashboard can surface a banner showing who's currently stuck.
+router.get('/gps-failures-recent', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const minutes = Math.max(1, Math.min(parseInt(req.query.minutes) || 60, 240));
+    const result = await db.query(
+      `SELECT id, title, message, created_at
+       FROM notifications
+       WHERE user_id = $1
+         AND type = 'gps_failure'
+         AND created_at > NOW() - ($2 || ' minutes')::interval
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [req.user.id, String(minutes)]
+    );
+    res.json({ count: result.rows.length, failures: result.rows, windowMinutes: minutes });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/time-entries/gps-failure
 // Logged by the caregiver dashboard when a clock-in/out is blocked because
 // GPS is unavailable. Notifies every active admin so they can help.
