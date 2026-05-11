@@ -537,6 +537,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   }, [location]); // only restart interval when location first becomes available
 
   const [clockingIn, setClockingIn] = useState(false);
+  const [gpsRetry, setGpsRetry] = useState(null); // { message, retryFn } when GPS hard-blocks a clock action
 
   // Robust GPS acquisition for clock-in/out. Tries in order:
   //   1. Cached watcher fix if recent (≤5 min) — instant
@@ -624,14 +625,22 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         lng = fix.longitude || null;
       } catch (err) {
         await hapticNotify('error');
-        toast(gpsErrorMessage(err, 'clock in'), 'error');
+        setGpsRetry({
+          action: 'clock-in',
+          message: gpsErrorMessage(err, 'clock in'),
+          retryFn: () => { setGpsRetry(null); handleClockIn(); }
+        });
         reportGpsFailure('clock-in', err, selectedClient);
         setClockingIn(false);
         return;
       }
       if (!lat || !lng) {
         await hapticNotify('error');
-        toast(gpsErrorMessage(null, 'clock in'), 'error');
+        setGpsRetry({
+          action: 'clock-in',
+          message: gpsErrorMessage(null, 'clock in'),
+          retryFn: () => { setGpsRetry(null); handleClockIn(); }
+        });
         reportGpsFailure('clock-in', null, selectedClient);
         setClockingIn(false);
         return;
@@ -675,28 +684,39 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     setShowNoteModal(true);
   };
 
-  const completeClockOut = async () => {
+  const completeClockOut = async ({ skipGps = false } = {}) => {
     try {
       await impact('heavy'); // strong haptic for clock out
 
-      // GPS is REQUIRED for EVV-compliant clock-out.
       let lat = null;
       let lng = null;
-      try {
-        const fix = await acquireLocationForClock();
-        lat = fix.latitude || null;
-        lng = fix.longitude || null;
-      } catch (err) {
-        await hapticNotify('error');
-        toast(gpsErrorMessage(err, 'clock out'), 'error');
-        reportGpsFailure('clock-out', err, activeSession?.client_id || selectedClient);
-        return;
-      }
-      if (!lat || !lng) {
-        await hapticNotify('error');
-        toast(gpsErrorMessage(null, 'clock out'), 'error');
-        reportGpsFailure('clock-out', null, activeSession?.client_id || selectedClient);
-        return;
+      if (!skipGps) {
+        try {
+          const fix = await acquireLocationForClock();
+          lat = fix.latitude || null;
+          lng = fix.longitude || null;
+        } catch (err) {
+          await hapticNotify('error');
+          setGpsRetry({
+            action: 'clock-out',
+            message: gpsErrorMessage(err, 'clock out'),
+            retryFn: () => { setGpsRetry(null); completeClockOut(); },
+            forceFn: () => { setGpsRetry(null); completeClockOut({ skipGps: true }); }
+          });
+          reportGpsFailure('clock-out', err, activeSession?.client_id || selectedClient);
+          return;
+        }
+        if (!lat || !lng) {
+          await hapticNotify('error');
+          setGpsRetry({
+            action: 'clock-out',
+            message: gpsErrorMessage(null, 'clock out'),
+            retryFn: () => { setGpsRetry(null); completeClockOut(); },
+            forceFn: () => { setGpsRetry(null); completeClockOut({ skipGps: true }); }
+          });
+          reportGpsFailure('clock-out', null, activeSession?.client_id || selectedClient);
+          return;
+        }
       }
 
       const res = await fetch(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
@@ -1549,6 +1569,33 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       {message.text && (
         <div style={{ position: 'fixed', top: '1rem', right: '1rem', padding: '1rem 1.5rem', borderRadius: '8px', zIndex: 1001, background: message.type === 'error' ? '#FEE2E2' : '#D1FAE5', color: message.type === 'error' ? '#DC2626' : '#059669', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
           {message.text}
+        </div>
+      )}
+
+      {gpsRetry && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 2200, background: '#FEF2F2', borderBottom: '2px solid #FCA5A5', padding: '1rem 1.25rem', boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+          <div style={{ maxWidth: '720px', margin: '0 auto' }}>
+            <div style={{ color: '#991B1B', fontSize: '0.92rem', lineHeight: 1.4, marginBottom: '0.75rem' }}>
+              {gpsRetry.message}
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button
+                onClick={gpsRetry.retryFn}
+                style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer' }}
+              >🔄 Try Again</button>
+              {gpsRetry.action === 'clock-out' && gpsRetry.forceFn && (
+                <button
+                  onClick={gpsRetry.forceFn}
+                  style={{ background: '#fff', color: '#B45309', border: '1px solid #FCD34D', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer' }}
+                  title="Use only if GPS keeps failing — admin will be notified"
+                >Clock out anyway (no GPS)</button>
+              )}
+              <button
+                onClick={() => setGpsRetry(null)}
+                style={{ background: 'none', color: '#6B7280', border: '1px solid #D1D5DB', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.9rem', fontWeight: 500, cursor: 'pointer' }}
+              >Dismiss</button>
+            </div>
+          </div>
         </div>
       )}
 
