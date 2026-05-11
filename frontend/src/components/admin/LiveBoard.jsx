@@ -131,6 +131,36 @@ const LiveBoard = ({ token }) => {
                   </div>
                 )}
 
+                {/* Force clock-out button for active shifts */}
+                {shift.shift_status === 'clocked_in' && shift.time_entry_id && (
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const reason = window.prompt(`Force clock out ${shift.caregiver_first} ${shift.caregiver_last}?\n\nThis closes their session NOW (no clock-out GPS recorded; the shift will be flagged for approval). Enter a reason:`, 'GPS unavailable on caregiver phone');
+                      if (reason === null) return;
+                      try {
+                        const r = await fetch(`${API_BASE_URL}/api/time-entries/${shift.time_entry_id}/admin-force-clockout`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                          body: JSON.stringify({ reason })
+                        });
+                        if (!r.ok) {
+                          const d = await r.json().catch(() => ({}));
+                          throw new Error(d.error || 'Failed');
+                        }
+                        loadBoard();
+                      } catch (err) {
+                        window.alert('Failed to force clock-out: ' + err.message);
+                      }
+                    }}
+                    style={{
+                      marginTop: '0.5rem', width: '100%', padding: '0.45rem 0.6rem',
+                      background: '#fff', color: '#B45309', border: '1px solid #FCD34D',
+                      borderRadius: 6, fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer'
+                    }}
+                  >🛑 Force Clock Out</button>
+                )}
+
                 {/* Late warning */}
                 {shift.shift_status === 'late' && (
                   <div style={{ marginTop: '0.35rem', fontSize: '0.82rem', fontWeight: 700, color: '#DC2626' }}>

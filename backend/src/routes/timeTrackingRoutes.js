@@ -430,6 +430,69 @@ router.post('/gps-failure', verifyToken, async (req, res) => {
   }
 });
 
+// POST /api/time-entries/:id/admin-force-clockout
+// Admin-only: close an active time entry when the caregiver can't clock out
+// themselves (GPS failure, dead phone, etc.). Records the admin as the
+// actor in audit_log and flags the entry for approval.
+router.post('/:id/admin-force-clockout', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    const entry = await db.query(
+      `SELECT te.*, c.is_private_pay, c.referral_source_id, rs.payer_type as referral_payer_type
+       FROM time_entries te
+       LEFT JOIN clients c ON te.client_id = c.id
+       LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+       WHERE te.id = $1`,
+      [req.params.id]
+    );
+    if (entry.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
+    const e = entry.rows[0];
+    if (e.end_time) return res.status(400).json({ error: 'Time entry is already closed' });
+
+    const durationMinutes = Math.round((new Date() - new Date(e.start_time)) / 60000);
+    const allottedMinutes = e.allotted_minutes;
+    const isPrivatePay = e.is_private_pay === true || e.referral_payer_type === 'private_pay';
+
+    let billableMinutes;
+    if (isPrivatePay) billableMinutes = durationMinutes;
+    else if (allottedMinutes == null) billableMinutes = durationMinutes;
+    else billableMinutes = allottedMinutes;
+
+    const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
+    const adminTag = `[Admin force clock-out by ${req.user.email || req.user.id}${reason ? `: ${reason}` : ''}]`;
+    const combinedNotes = e.notes ? `${e.notes}\n${adminTag}` : adminTag;
+
+    const result = await db.query(
+      `UPDATE time_entries SET
+         end_time = NOW(),
+         clock_out_location = NULL,
+         duration_minutes = $1,
+         is_complete = true,
+         notes = $2,
+         discrepancy_minutes = $3,
+         billable_minutes = $4,
+         needs_approval = true,
+         approval_reason = COALESCE(approval_reason, 'admin_force_clockout'),
+         updated_at = NOW()
+       WHERE id = $5
+       RETURNING *`,
+      [durationMinutes, combinedNotes, discrepancyMinutes, billableMinutes, req.params.id]
+    );
+
+    await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, {
+      action: 'admin_force_clockout',
+      reason: reason || null,
+      caregiver_id: e.caregiver_id,
+      duration_minutes: durationMinutes
+    });
+
+    res.json({ success: true, entry: result.rows[0] });
+  } catch (error) {
+    console.error('Admin force clock-out error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/time-entries/:id/gps
 router.post('/:id/gps', verifyToken, async (req, res) => {
   try {
