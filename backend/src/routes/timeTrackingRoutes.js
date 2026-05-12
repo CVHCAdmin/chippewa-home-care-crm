@@ -389,6 +389,7 @@ router.get('/gps-failures-recent', verifyToken, requireAdmin, async (req, res) =
        FROM notifications
        WHERE user_id = $1
          AND type = 'gps_failure'
+         AND COALESCE(status, 'new') = 'new'
          AND created_at > NOW() - ($2 || ' minutes')::interval
        ORDER BY created_at DESC
        LIMIT 50`,
@@ -507,6 +508,27 @@ router.post('/:id/admin-force-clockout', verifyToken, requireAdmin, async (req, 
       caregiver_id: e.caregiver_id,
       duration_minutes: durationMinutes
     });
+
+    // Auto-resolve any open GPS-failure banners for this caregiver
+    try {
+      const cg = await db.query('SELECT first_name, last_name FROM users WHERE id = $1', [e.caregiver_id]);
+      if (cg.rows[0]) {
+        const fullName = `${cg.rows[0].first_name || ''} ${cg.rows[0].last_name || ''}`.trim();
+        if (fullName) {
+          await db.query(
+            `UPDATE notifications
+             SET is_read = true, status = 'handled', handled_at = NOW()
+             WHERE type = 'gps_failure'
+               AND title LIKE $1
+               AND COALESCE(status, 'new') = 'new'
+               AND created_at > NOW() - INTERVAL '6 hours'`,
+            [`%${fullName}%`]
+          );
+        }
+      }
+    } catch (resolveErr) {
+      console.error('GPS banner auto-resolve error:', resolveErr.message);
+    }
 
     res.json({ success: true, entry: result.rows[0] });
   } catch (error) {
