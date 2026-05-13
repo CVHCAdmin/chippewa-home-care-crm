@@ -141,6 +141,7 @@ app.use('/api', pricingRoutes);
 app.use('/api', absenceRoutes);
 app.use('/api', expenseRoutes);
 app.use('/api', clinicalRoutes);
+app.use('/api', verifyToken, require('./routes/clientTasksRoutes'));
 
 // Dedicated route files (mounted at their own prefixes — no conflicts)
 app.use('/api/reports',           verifyToken, require('./routes/reports'));

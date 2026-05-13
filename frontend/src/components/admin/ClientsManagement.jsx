@@ -3,6 +3,8 @@ import { toast } from '../Toast';
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import EditClientModal from './EditClientModal';
+import ClientReportModal from './ClientReportModal';
+import CareTasksManager from './CareTasksManager';
 
 // AddressLink component - opens Google Maps
 const AddressLink = ({ address, city, state, zip }) => {
@@ -25,7 +27,7 @@ const AddressLink = ({ address, city, state, zip }) => {
 };
 
 // Mobile-friendly client card
-const ClientCard = ({ client, getReferralSourceName, getCareTypeName, onEdit }) => (
+const ClientCard = ({ client, getReferralSourceName, getCareTypeName, onEdit, onReport }) => (
   <div className="card" style={{ marginBottom: '0.75rem', padding: '1rem' }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
       <div>
@@ -36,13 +38,21 @@ const ClientCard = ({ client, getReferralSourceName, getCareTypeName, onEdit }) 
           </div>
         )}
       </div>
-      <button 
-        className="btn btn-sm btn-primary"
-        onClick={() => onEdit(client)}
-        style={{ flexShrink: 0 }}
-      >
-        ✏️ Edit
-      </button>
+      <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0 }}>
+        <button
+          className="btn btn-sm btn-secondary"
+          onClick={() => onReport(client)}
+          title="Generate comprehensive report"
+        >
+          📄 Report
+        </button>
+        <button
+          className="btn btn-sm btn-primary"
+          onClick={() => onEdit(client)}
+        >
+          ✏️ Edit
+        </button>
+      </div>
     </div>
     
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
@@ -92,6 +102,8 @@ const ClientsManagement = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [selectedClient, setSelectedClient] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [reportClient, setReportClient] = useState(null);
+  const [careTasksClient, setCareTasksClient] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterReferral, setFilterReferral] = useState('');
   const [filterCareType, setFilterCareType] = useState('');
@@ -208,6 +220,10 @@ const ClientsManagement = ({ token }) => {
   const handleViewClient = (client) => {
     setSelectedClient(client);
     setShowEditModal(true);
+  };
+
+  const handleGenerateReport = (client) => {
+    setReportClient(client);
   };
 
   const getReferralSourceName = (id) => {
@@ -555,7 +571,7 @@ const ClientsManagement = ({ token }) => {
       ) : isMobile ? (
         <div>
           {filteredClients.map(client => (
-            <ClientCard key={client.id} client={client} getReferralSourceName={getReferralSourceName} getCareTypeName={getCareTypeName} onEdit={handleViewClient} />
+            <ClientCard key={client.id} client={client} getReferralSourceName={getReferralSourceName} getCareTypeName={getCareTypeName} onEdit={handleViewClient} onReport={handleGenerateReport} />
           ))}
         </div>
       ) : (
@@ -584,7 +600,13 @@ const ClientsManagement = ({ token }) => {
                   <td>{client.is_private_pay ? (<span className="text-muted">-</span>) : (getReferralSourceName(client.referral_source_id))}</td>
                   <td>{getCareTypeName(client.care_type_id)}</td>
                   <td>{client.is_private_pay ? (<span className="badge badge-info">Private Pay</span>) : (<span className="badge badge-success">Referred</span>)}</td>
-                  <td><button className="btn btn-sm btn-primary" onClick={() => handleViewClient(client)}>✏️ Edit</button></td>
+                  <td>
+                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                      <button className="btn btn-sm btn-secondary" onClick={() => setCareTasksClient(client)} title="Care tasks checklist">📋 Tasks</button>
+                      <button className="btn btn-sm btn-secondary" onClick={() => handleGenerateReport(client)} title="Generate comprehensive report">📄 Report</button>
+                      <button className="btn btn-sm btn-primary" onClick={() => handleViewClient(client)}>✏️ Edit</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -599,6 +621,12 @@ const ClientsManagement = ({ token }) => {
       )}
 
       <EditClientModal client={selectedClient} referralSources={referralSources} careTypes={careTypes} isOpen={showEditModal} onClose={() => { setShowEditModal(false); setSelectedClient(null); }} onSuccess={loadData} token={token} />
+
+      <ClientReportModal client={reportClient} isOpen={!!reportClient} onClose={() => setReportClient(null)} token={token} />
+
+      {careTasksClient && (
+        <CareTasksManager client={careTasksClient} token={token} onClose={() => setCareTasksClient(null)} />
+      )}
     </div>
   );
 };

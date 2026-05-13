@@ -10,6 +10,7 @@ import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, isNative, platform } from '../hooks/useNative';
+import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
 
 const subscribeToPush = async (token) => {
@@ -1108,6 +1109,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             >
               🛑 Clock Out
             </button>
+            {activeSession.id && !String(activeSession.id).startsWith('offline-') && (
+              <div style={{ marginTop: '1.25rem', background: '#fff', borderRadius: 12, padding: '0.25rem', textAlign: 'left' }}>
+                <CareTaskChecklist token={token} timeEntryId={activeSession.id} />
+              </div>
+            )}
           </div>
         ) : (
           // CLOCK IN — prominent select + button
