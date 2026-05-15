@@ -162,6 +162,101 @@ router.post('/bulk-assign-medicaid-ids', verifyToken, requireAdmin, async (req, 
   }
 });
 
+// POST /api/clients/resolve
+// Resolve a MIDAS member to exactly one CRM client for unattended care-task
+// import. Match priority: medicaid_id / mco_member_id (exact) → name (exact,
+// case-insensitive). Never guesses: 0 or >1 candidates returns a status the
+// caller must stop on. Optionally back-fills a missing medicaid_id when the
+// match was by name — but never overwrites a different existing ID (conflict).
+// Body: { medicaidId?, mcoMemberId?, name?, firstName?, lastName?, backfillMedicaidId? }
+router.post('/resolve', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { medicaidId, mcoMemberId, name, backfillMedicaidId } = req.body;
+    let { firstName, lastName } = req.body;
+    const mId = medicaidId && String(medicaidId).trim();
+    const mcoId = mcoMemberId && String(mcoMemberId).trim();
+
+    // 1. Exact ID match (the trustworthy path).
+    if (mId || mcoId) {
+      const idVal = mId || mcoId;
+      const byId = await db.query(
+        `SELECT id, first_name, last_name, medicaid_id, mco_member_id
+           FROM clients
+          WHERE is_active = true AND (medicaid_id = $1 OR mco_member_id = $1)`,
+        [idVal]
+      );
+      if (byId.rows.length === 1) {
+        return res.json({ status: 'matched', matchType: 'medicaid_id', backfilled: false, client: byId.rows[0] });
+      }
+      if (byId.rows.length > 1) {
+        return res.json({ status: 'ambiguous', matchType: 'medicaid_id', candidates: byId.rows });
+      }
+      // fall through to name match
+    }
+
+    // 2. Name fallback. Accept explicit firstName/lastName or parse `name`
+    //    ("Last, First" or "First Last") — same logic as bulk-assign.
+    if ((!firstName || !lastName) && name) {
+      const cleaned = String(name).replace(/"/g, '').trim();
+      if (cleaned.includes(',')) {
+        const parts = cleaned.split(',').map(s => s.trim());
+        lastName = lastName || parts[0];
+        firstName = firstName || parts[1] || '';
+      } else {
+        const parts = cleaned.split(/\s+/);
+        firstName = firstName || parts[0] || '';
+        lastName = lastName || parts.slice(1).join(' ') || '';
+      }
+    }
+    if (!firstName || !lastName) {
+      return res.status(400).json({ error: 'Provide medicaidId/mcoMemberId, or a name to match on' });
+    }
+
+    const byName = await db.query(
+      `SELECT id, first_name, last_name, medicaid_id, mco_member_id
+         FROM clients
+        WHERE is_active = true
+          AND LOWER(first_name) = LOWER($1) AND LOWER(last_name) = LOWER($2)`,
+      [firstName.trim(), lastName.trim()]
+    );
+
+    if (byName.rows.length === 0) {
+      return res.json({ status: 'not_found', matchType: 'name', searched: { firstName, lastName } });
+    }
+    if (byName.rows.length > 1) {
+      return res.json({ status: 'ambiguous', matchType: 'name', candidates: byName.rows });
+    }
+
+    const client = byName.rows[0];
+
+    // 3. Optional back-fill of a missing Medicaid ID on a name match.
+    let backfilled = false;
+    let conflict = null;
+    if (backfillMedicaidId && mId) {
+      if (!client.medicaid_id) {
+        const upd = await db.query(
+          `UPDATE clients SET medicaid_id = $1, updated_at = NOW() WHERE id = $2
+           RETURNING id, first_name, last_name, medicaid_id, mco_member_id`,
+          [mId, client.id]
+        );
+        await auditLog(req.user.id, 'UPDATE', 'clients', client.id,
+          { medicaid_id: null }, { medicaid_id: mId, source: 'midas_resolve_backfill' });
+        backfilled = true;
+        return res.json({ status: 'matched', matchType: 'name', backfilled, client: upd.rows[0] });
+      }
+      if (client.medicaid_id.trim() !== mId) {
+        // Do NOT overwrite — surface the mismatch for a human.
+        conflict = { existing: client.medicaid_id, fromMidas: mId };
+      }
+    }
+
+    res.json({ status: 'matched', matchType: 'name', backfilled, conflict, client });
+  } catch (error) {
+    console.error('Client resolve error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // DELETE /api/clients/:id
 router.delete('/:id', verifyToken, requireAdmin, async (req, res) => {
   try {

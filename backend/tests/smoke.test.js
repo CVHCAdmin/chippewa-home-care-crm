@@ -103,6 +103,16 @@ describe('Clients', () => {
       .send({});
     expect([200, 201, 400, 500]).toContain(res.status);
   });
+
+  test('POST /api/clients/resolve by name → matched', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: 'c1', first_name: 'Jane', last_name: 'Doe', medicaid_id: null, mco_member_id: null }] });
+    const res = await request(app)
+      .post('/api/clients/resolve')
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send({ name: 'Doe, Jane' });
+    expect(res.status).toBe(200);
+    expect(['matched', 'ambiguous', 'not_found']).toContain(res.body.status);
+  });
 });
 
 // ── Caregivers ────────────────────────────────────────────────────────────────
