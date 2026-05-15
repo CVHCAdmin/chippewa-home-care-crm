@@ -303,9 +303,11 @@ describe('Client Portal', () => {
 describe('Applications', () => {
   test('POST /api/applications (public) → responds', async () => {
     db.query.mockResolvedValue({ rows: [{ id: 'app-1' }] });
+    // Public application form posts camelCase (see frontend ApplicationForm.jsx);
+    // the route 400s on snake_case, which is correct — match the real contract.
     const res = await request(app)
       .post('/api/applications')
-      .send({ first_name: 'Test', last_name: 'User', email: 'test@test.com', phone: '555-0100' });
+      .send({ firstName: 'Test', lastName: 'User', email: 'test@test.com', phone: '555-0100' });
     expect([200, 201, 500]).toContain(res.status);
   });
 
