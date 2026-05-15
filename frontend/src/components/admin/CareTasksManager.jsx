@@ -1,5 +1,6 @@
 // src/components/admin/CareTasksManager.jsx
 // Admin modal: manage the recurring per-shift care tasks for a client.
+// Supports bulk import from a parsed MIDAS SHC Homemaking assessment.
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 
@@ -12,12 +13,23 @@ const CATEGORIES = [
   { value: 'other', label: 'Other' }
 ];
 
+const emptyForm = { taskName: '', description: '', category: 'iadl', allottedMinutes: 15, weeklyFrequency: 1, daysOfWeek: '', timeOfDay: 'any' };
+
 export default function CareTasksManager({ client, token, onClose }) {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [form, setForm] = useState({ taskName: '', description: '', category: 'adl', allottedMinutes: 15 });
+  const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
+
+  // MIDAS import panel state
+  const [showImport, setShowImport] = useState(false);
+  const [rawJson, setRawJson] = useState('');
+  const [parsed, setParsed] = useState(null);
+  const [parseError, setParseError] = useState('');
+  const [replaceExisting, setReplaceExisting] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   const hdr = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
@@ -33,7 +45,7 @@ export default function CareTasksManager({ client, token, onClose }) {
 
   useEffect(() => { if (client?.id) load(); /* eslint-disable-line */ }, [client?.id]);
 
-  const reset = () => { setForm({ taskName: '', description: '', category: 'adl', allottedMinutes: 15 }); setEditingId(null); setError(''); };
+  const reset = () => { setForm(emptyForm); setEditingId(null); setError(''); };
 
   const save = async () => {
     if (!form.taskName.trim()) { setError('Task name required'); return; }
@@ -61,7 +73,10 @@ export default function CareTasksManager({ client, token, onClose }) {
       taskName: t.task_name,
       description: t.description || '',
       category: t.category || 'other',
-      allottedMinutes: t.allotted_minutes || 0
+      allottedMinutes: t.allotted_minutes || 0,
+      weeklyFrequency: t.weekly_frequency || 1,
+      daysOfWeek: t.days_of_week || '',
+      timeOfDay: t.time_of_day || 'any'
     });
   };
 
@@ -75,23 +90,145 @@ export default function CareTasksManager({ client, token, onClose }) {
     } catch (e) { setError(e.message); }
   };
 
-  const totalMinutes = tasks.reduce((sum, t) => sum + (parseInt(t.allotted_minutes) || 0), 0);
+  // ── MIDAS import ────────────────────────────────────────────────────────
+  const parseJson = () => {
+    setParseError(''); setImportResult(null);
+    try {
+      const obj = JSON.parse(rawJson);
+      if (!obj || !Array.isArray(obj.tasks) || obj.tasks.length === 0) {
+        throw new Error('JSON must have a non-empty "tasks" array');
+      }
+      setParsed(obj);
+    } catch (e) {
+      setParsed(null);
+      setParseError(e.message);
+    }
+  };
+
+  const previewMinsPerWeek = parsed
+    ? parsed.tasks.reduce((s, t) => s + (parseInt(t.weeklyFrequency, 10) || 1) * (parseInt(t.allottedMinutes, 10) || 0), 0)
+    : 0;
+  const expectedMins = parsed?.assessmentTotals?.minsPerWeek;
+  const reconcileOk = expectedMins == null ? null : Number(expectedMins) === previewMinsPerWeek;
+
+  const runImport = async () => {
+    if (!parsed) return;
+    setImporting(true); setParseError(''); setImportResult(null);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/clients/${client.id}/care-tasks/import`, {
+        method: 'POST', headers: hdr,
+        body: JSON.stringify({
+          tasks: parsed.tasks,
+          replaceExisting,
+          source: parsed.source || 'midas_shc_homemaking',
+          assessmentTotals: parsed.assessmentTotals || null
+        })
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Import failed');
+      setImportResult(data);
+      setRawJson(''); setParsed(null);
+      load();
+    } catch (e) { setParseError(e.message); }
+    finally { setImporting(false); }
+  };
+
+  const weeklyMinutes = tasks.reduce(
+    (sum, t) => sum + ((parseInt(t.weekly_frequency, 10) || 1) * (parseInt(t.allotted_minutes, 10) || 0)), 0);
+
+  const inp = { padding: '0.5rem', borderRadius: 6, border: '1px solid #D1D5DB', fontSize: '0.9rem' };
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 720, maxHeight: '92vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 760, maxHeight: '92vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ margin: 0, fontSize: '1.1rem' }}>📋 Care Tasks — {client.first_name} {client.last_name}</h3>
             <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: '#6B7280' }}>
-              {tasks.length} task{tasks.length !== 1 ? 's' : ''} · {totalMinutes} min total allotted
+              {tasks.length} task{tasks.length !== 1 ? 's' : ''} · {weeklyMinutes} min/week · {(weeklyMinutes / 15).toFixed(2)} units/week
             </p>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9CA3AF' }}>×</button>
         </div>
 
         <div style={{ flex: 1, overflow: 'auto', padding: '1rem 1.25rem' }}>
+          {/* MIDAS import toggle */}
+          <button
+            onClick={() => setShowImport(v => !v)}
+            className="btn btn-sm btn-secondary"
+            style={{ marginBottom: '0.75rem' }}>
+            {showImport ? '▾ Hide MIDAS import' : '▸ Import from MIDAS assessment'}
+          </button>
+
+          {showImport && (
+            <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '0.9rem', marginBottom: '1rem' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem', marginBottom: '0.35rem' }}>📥 Import from MIDAS SHC Homemaking assessment</div>
+              <div style={{ fontSize: '0.8rem', color: '#1E40AF', marginBottom: '0.5rem' }}>
+                Paste the JSON produced by Claude reading the MIDAS assessment, then Parse → review the reconciliation → Import.
+              </div>
+              <textarea
+                placeholder='{ "source": "midas_shc_homemaking", "assessmentTotals": { "minsPerWeek": 291 }, "tasks": [ … ] }'
+                value={rawJson}
+                onChange={(e) => setRawJson(e.target.value)}
+                rows={5}
+                style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #93C5FD', fontFamily: 'monospace', fontSize: '0.78rem', resize: 'vertical', marginBottom: '0.5rem' }}
+              />
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button onClick={parseJson} className="btn btn-sm btn-secondary" disabled={!rawJson.trim()}>Parse &amp; preview</button>
+                <label style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <input type="checkbox" checked={replaceExisting} onChange={(e) => setReplaceExisting(e.target.checked)} />
+                  Replace existing tasks (re-import of updated assessment)
+                </label>
+              </div>
+              {parseError && <div style={{ marginTop: '0.5rem', color: '#B91C1C', fontSize: '0.83rem' }}>{parseError}</div>}
+
+              {parsed && (
+                <div style={{ marginTop: '0.6rem' }}>
+                  <div style={{
+                    padding: '0.5rem 0.7rem', borderRadius: 6, fontSize: '0.83rem', marginBottom: '0.5rem',
+                    background: reconcileOk === false ? '#FEE2E2' : reconcileOk === true ? '#D1FAE5' : '#F3F4F6',
+                    color: reconcileOk === false ? '#991B1B' : reconcileOk === true ? '#065F46' : '#374151'
+                  }}>
+                    {parsed.tasks.length} task(s) · computed <b>{previewMinsPerWeek} min/week</b> ({(previewMinsPerWeek / 15).toFixed(2)} units)
+                    {expectedMins != null && (reconcileOk
+                      ? ` · ✅ matches assessment total (${expectedMins})`
+                      : ` · ⚠️ assessment says ${expectedMins} — mismatch, recheck the read`)}
+                  </div>
+                  <div style={{ maxHeight: 180, overflow: 'auto', border: '1px solid #BFDBFE', borderRadius: 6, background: '#fff' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                      <thead><tr style={{ background: '#DBEAFE', textAlign: 'left' }}>
+                        <th style={{ padding: '0.3rem 0.5rem' }}>Task</th><th>Cat</th><th>x/wk</th><th>min</th><th>Days</th><th>Time</th>
+                      </tr></thead>
+                      <tbody>
+                        {parsed.tasks.map((t, i) => (
+                          <tr key={i} style={{ borderTop: '1px solid #EFF6FF' }}>
+                            <td style={{ padding: '0.3rem 0.5rem' }}>{t.taskName}</td>
+                            <td>{t.category || 'iadl'}</td>
+                            <td>{t.weeklyFrequency || 1}</td>
+                            <td>{t.allottedMinutes || 0}</td>
+                            <td>{t.daysOfWeek || '—'}</td>
+                            <td>{t.timeOfDay || 'any'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <button onClick={runImport} className="btn btn-sm btn-primary" disabled={importing} style={{ marginTop: '0.5rem' }}>
+                    {importing ? 'Importing…' : `Import ${parsed.tasks.length} task(s)${replaceExisting ? ' (replace current)' : ''}`}
+                  </button>
+                </div>
+              )}
+
+              {importResult && (
+                <div style={{ marginTop: '0.5rem', color: '#065F46', fontSize: '0.83rem' }}>
+                  ✅ Imported {importResult.imported} task(s){importResult.replacedExisting ? ', replaced previous list' : ''}.
+                  {importResult.reconciliation?.match === false && ' (⚠️ totals did not reconcile — review tasks below.)'}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Add/Edit form */}
           <div style={{ background: editingId ? '#FEF3C7' : '#F9FAFB', borderRadius: 10, padding: '0.9rem', marginBottom: '1rem' }}>
             <div style={{ fontWeight: 700, marginBottom: '0.5rem', fontSize: '0.92rem' }}>
@@ -99,22 +236,41 @@ export default function CareTasksManager({ client, token, onClose }) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
               <input
-                placeholder="Task name (e.g. Bathing assistance)"
+                placeholder="Task name (e.g. Dust/Vacuum)"
                 value={form.taskName}
                 onChange={(e) => setForm({ ...form, taskName: e.target.value })}
-                style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid #D1D5DB', fontSize: '0.9rem' }}
+                style={inp}
               />
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
-                style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid #D1D5DB', fontSize: '0.9rem' }}>
+              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={inp}>
                 {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
               <input
                 type="number" min="0" step="5"
-                placeholder="Minutes"
+                placeholder="Min/task"
                 value={form.allottedMinutes}
                 onChange={(e) => setForm({ ...form, allottedMinutes: parseInt(e.target.value) || 0 })}
-                style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid #D1D5DB', fontSize: '0.9rem' }}
+                style={inp}
               />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <input
+                type="number" min="1" step="1"
+                placeholder="x / week"
+                value={form.weeklyFrequency}
+                onChange={(e) => setForm({ ...form, weeklyFrequency: parseInt(e.target.value) || 1 })}
+                style={inp}
+              />
+              <input
+                placeholder="Days (e.g. Mon,Wed,Fri or Daily)"
+                value={form.daysOfWeek}
+                onChange={(e) => setForm({ ...form, daysOfWeek: e.target.value })}
+                style={inp}
+              />
+              <select value={form.timeOfDay} onChange={(e) => setForm({ ...form, timeOfDay: e.target.value })} style={inp}>
+                <option value="any">Any time</option>
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
             </div>
             <textarea
               placeholder="Optional description / instructions"
@@ -135,7 +291,7 @@ export default function CareTasksManager({ client, token, onClose }) {
             <div style={{ textAlign: 'center', padding: '2rem', color: '#9CA3AF' }}>Loading…</div>
           ) : tasks.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: '#9CA3AF', background: '#F9FAFB', borderRadius: 10 }}>
-              No care tasks yet. Add tasks above and caregivers will see them as a checklist during the shift.
+              No care tasks yet. Add tasks above, import a MIDAS assessment, and caregivers will see them as a checklist during the shift.
             </div>
           ) : (
             <div>
@@ -145,7 +301,10 @@ export default function CareTasksManager({ client, token, onClose }) {
                     <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{t.task_name}</div>
                     {t.description && <div style={{ color: '#6B7280', fontSize: '0.82rem', marginTop: '0.15rem' }}>{t.description}</div>}
                     <div style={{ color: '#9CA3AF', fontSize: '0.75rem', marginTop: '0.2rem' }}>
-                      {CATEGORIES.find(c => c.value === t.category)?.label || t.category} · {t.allotted_minutes} min
+                      {CATEGORIES.find(c => c.value === t.category)?.label || t.category}
+                      {' · '}{t.weekly_frequency || 1}×/wk × {t.allotted_minutes} min = <b>{(t.weekly_frequency || 1) * (t.allotted_minutes || 0)} min/wk</b>
+                      {t.days_of_week ? ` · ${t.days_of_week}` : ''}
+                      {t.time_of_day && t.time_of_day !== 'any' ? ` · ${t.time_of_day}` : ''}
                     </div>
                   </div>
                   <button onClick={() => edit(t)} className="btn btn-sm btn-secondary" style={{ fontSize: '0.78rem' }}>Edit</button>

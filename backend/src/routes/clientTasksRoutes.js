@@ -39,9 +39,22 @@ const ensureTables = async () => {
       UNIQUE (time_entry_id, task_template_id)
     );
     CREATE INDEX IF NOT EXISTS idx_shift_tasks_entry ON shift_task_completions(time_entry_id);
+
+    -- v35: weekly-assessment fields (MIDAS SHC Homemaking import).
+    ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS weekly_frequency INTEGER DEFAULT 1;
+    ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS days_of_week TEXT;
+    ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS time_of_day VARCHAR(10) DEFAULT 'any';
+    ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS assessment_source VARCHAR(60);
   `);
   _bootstrapped = true;
 };
+
+// Coerce/clamp a frequency value to a positive integer (defaults to 1).
+const normFreq = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+};
+const normTimeOfDay = (v) => (['AM', 'PM', 'any'].includes(v) ? v : 'any');
 
 // ──────────────────────────────────────────────────────────────────────────
 // Template CRUD (admin)
@@ -53,7 +66,10 @@ router.get('/clients/:clientId/care-tasks', verifyToken, async (req, res) => {
   try {
     await ensureTables();
     const result = await db.query(
-      `SELECT id, client_id, task_name, description, category, allotted_minutes, sort_order, is_active, created_at, updated_at
+      `SELECT id, client_id, task_name, description, category, allotted_minutes,
+              weekly_frequency, days_of_week, time_of_day, assessment_source,
+              (COALESCE(weekly_frequency, 1) * COALESCE(allotted_minutes, 0)) AS minutes_per_week,
+              sort_order, is_active, created_at, updated_at
        FROM client_task_templates
        WHERE client_id = $1 AND is_active = true
        ORDER BY sort_order, created_at`,
@@ -70,7 +86,8 @@ router.get('/clients/:clientId/care-tasks', verifyToken, async (req, res) => {
 router.post('/clients/:clientId/care-tasks', verifyToken, requireAdmin, async (req, res) => {
   try {
     await ensureTables();
-    const { taskName, description, category, allottedMinutes, sortOrder } = req.body;
+    const { taskName, description, category, allottedMinutes, sortOrder,
+            weeklyFrequency, daysOfWeek, timeOfDay, assessmentSource } = req.body;
     if (!taskName || !taskName.trim()) return res.status(400).json({ error: 'taskName is required' });
 
     const nextOrder = sortOrder ?? (await db.query(
@@ -79,9 +96,13 @@ router.post('/clients/:clientId/care-tasks', verifyToken, requireAdmin, async (r
     )).rows[0].next;
 
     const result = await db.query(
-      `INSERT INTO client_task_templates (client_id, task_name, description, category, allotted_minutes, sort_order, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [req.params.clientId, taskName.trim(), description || null, category || 'other', allottedMinutes || 0, nextOrder, req.user.id]
+      `INSERT INTO client_task_templates
+         (client_id, task_name, description, category, allotted_minutes,
+          weekly_frequency, days_of_week, time_of_day, assessment_source, sort_order, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [req.params.clientId, taskName.trim(), description || null, category || 'other', allottedMinutes || 0,
+       normFreq(weeklyFrequency), daysOfWeek || null, normTimeOfDay(timeOfDay), assessmentSource || null,
+       nextOrder, req.user.id]
     );
     await auditLog(req.user.id, 'CREATE', 'client_task_templates', result.rows[0].id, null, result.rows[0]);
     res.json(result.rows[0]);
@@ -94,7 +115,8 @@ router.post('/clients/:clientId/care-tasks', verifyToken, requireAdmin, async (r
 // PUT /api/care-tasks/:id
 router.put('/care-tasks/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { taskName, description, category, allottedMinutes, sortOrder } = req.body;
+    const { taskName, description, category, allottedMinutes, sortOrder,
+            weeklyFrequency, daysOfWeek, timeOfDay } = req.body;
     const result = await db.query(
       `UPDATE client_task_templates
        SET task_name = COALESCE($1, task_name),
@@ -102,9 +124,15 @@ router.put('/care-tasks/:id', verifyToken, requireAdmin, async (req, res) => {
            category = COALESCE($3, category),
            allotted_minutes = COALESCE($4, allotted_minutes),
            sort_order = COALESCE($5, sort_order),
+           weekly_frequency = COALESCE($7, weekly_frequency),
+           days_of_week = COALESCE($8, days_of_week),
+           time_of_day = COALESCE($9, time_of_day),
            updated_at = NOW()
        WHERE id = $6 RETURNING *`,
-      [taskName, description, category, allottedMinutes, sortOrder, req.params.id]
+      [taskName, description, category, allottedMinutes, sortOrder, req.params.id,
+       weeklyFrequency != null ? normFreq(weeklyFrequency) : null,
+       daysOfWeek ?? null,
+       timeOfDay ? normTimeOfDay(timeOfDay) : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Task not found' });
     await auditLog(req.user.id, 'UPDATE', 'client_task_templates', req.params.id, null, result.rows[0]);
@@ -130,6 +158,101 @@ router.delete('/care-tasks/:id', verifyToken, requireAdmin, async (req, res) => 
   }
 });
 
+// POST /api/clients/:clientId/care-tasks/import
+// Bulk-create care tasks from a parsed MIDAS SHC Homemaking assessment.
+// Body: {
+//   tasks: [{ taskName, category, allottedMinutes, weeklyFrequency,
+//             daysOfWeek, timeOfDay, description }],
+//   replaceExisting: bool,                 // soft-delete current active tasks first
+//   source: 'midas_shc_homemaking',
+//   assessmentTotals: { minsPerWeek }      // optional — used for reconciliation
+// }
+// Returns a reconciliation block so a misread assessment is caught before it
+// drives a caregiver's checklist.
+router.post('/clients/:clientId/care-tasks/import', verifyToken, requireAdmin, async (req, res) => {
+  const client = await db.pool.connect();
+  try {
+    await ensureTables();
+    const { tasks, replaceExisting, source, assessmentTotals } = req.body;
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      return res.status(400).json({ error: 'tasks must be a non-empty array' });
+    }
+
+    // Validate every row up front — all-or-nothing.
+    const clean = [];
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i] || {};
+      if (!t.taskName || !String(t.taskName).trim()) {
+        return res.status(400).json({ error: `Row ${i + 1}: taskName is required` });
+      }
+      const category = ['adl', 'iadl', 'medication', 'companion', 'safety', 'other']
+        .includes(t.category) ? t.category : 'iadl';
+      clean.push({
+        taskName: String(t.taskName).trim(),
+        description: t.description ? String(t.description).trim() : null,
+        category,
+        allottedMinutes: Math.max(0, parseInt(t.allottedMinutes, 10) || 0),
+        weeklyFrequency: normFreq(t.weeklyFrequency),
+        daysOfWeek: t.daysOfWeek ? String(t.daysOfWeek).trim() : null,
+        timeOfDay: normTimeOfDay(t.timeOfDay),
+      });
+    }
+
+    const computedMinsPerWeek = clean.reduce(
+      (sum, t) => sum + t.weeklyFrequency * t.allottedMinutes, 0);
+    const expectedMinsPerWeek = assessmentTotals && Number.isFinite(+assessmentTotals.minsPerWeek)
+      ? +assessmentTotals.minsPerWeek : null;
+    const reconciliation = {
+      computedMinsPerWeek,
+      expectedMinsPerWeek,
+      match: expectedMinsPerWeek == null ? null : computedMinsPerWeek === expectedMinsPerWeek,
+      computedUnitsPerWeek: +(computedMinsPerWeek / 15).toFixed(2),
+    };
+
+    await client.query('BEGIN');
+
+    if (replaceExisting) {
+      await client.query(
+        `UPDATE client_task_templates SET is_active = false, updated_at = NOW()
+         WHERE client_id = $1 AND is_active = true`,
+        [req.params.clientId]
+      );
+    }
+
+    const baseOrder = (await client.query(
+      `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM client_task_templates WHERE client_id = $1`,
+      [req.params.clientId]
+    )).rows[0].next;
+
+    const inserted = [];
+    for (let i = 0; i < clean.length; i++) {
+      const t = clean[i];
+      const r = await client.query(
+        `INSERT INTO client_task_templates
+           (client_id, task_name, description, category, allotted_minutes,
+            weekly_frequency, days_of_week, time_of_day, assessment_source, sort_order, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        [req.params.clientId, t.taskName, t.description, t.category, t.allottedMinutes,
+         t.weeklyFrequency, t.daysOfWeek, t.timeOfDay, source || 'midas_import',
+         baseOrder + i, req.user.id]
+      );
+      inserted.push(r.rows[0].id);
+    }
+
+    await client.query('COMMIT');
+    await auditLog(req.user.id, 'IMPORT', 'client_task_templates', null, null,
+      { clientId: req.params.clientId, count: inserted.length, replaceExisting: !!replaceExisting, source, reconciliation });
+
+    res.json({ success: true, imported: inserted.length, replacedExisting: !!replaceExisting, reconciliation });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Import care tasks error:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
 // ──────────────────────────────────────────────────────────────────────────
 // Per-shift completion (caregiver during active shift)
 // ──────────────────────────────────────────────────────────────────────────
@@ -145,7 +268,8 @@ router.get('/time-entries/:timeEntryId/task-completions', verifyToken, async (re
     const clientId = entry.rows[0].client_id;
 
     const result = await db.query(
-      `SELECT t.id AS task_id, t.task_name, t.description, t.category, t.allotted_minutes, t.sort_order,
+      `SELECT t.id AS task_id, t.task_name, t.description, t.category, t.allotted_minutes,
+              t.weekly_frequency, t.days_of_week, t.time_of_day, t.sort_order,
               c.id AS completion_id, COALESCE(c.status, 'pending') AS status,
               c.notes, c.completed_at, c.updated_at
        FROM client_task_templates t
