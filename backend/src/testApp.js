@@ -64,6 +64,11 @@ app.use('/api', pricingRoutes);
 app.use('/api', absenceRoutes);
 app.use('/api', expenseRoutes);
 app.use('/api', clinicalRoutes);
+// Mirror server.js: clientTasksRoutes is mounted broadly at /api and must NOT
+// carry a mount-level verifyToken (it self-protects per route). Kept here so
+// tests exercise the real route ordering — a mount-level wall here would break
+// public routes declared after it (e.g. /api/applications).
+app.use('/api', require('./routes/clientTasksRoutes'));
 app.use('/api/reports',           verifyToken, require('./routes/reports'));
 app.use('/api/payroll',           verifyToken, require('./routes/payrollRoutes'));
 app.use('/api/audit-logs',        verifyToken, require('./routes/auditLogs'));

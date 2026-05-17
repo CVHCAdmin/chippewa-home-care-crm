@@ -141,7 +141,11 @@ app.use('/api', pricingRoutes);
 app.use('/api', absenceRoutes);
 app.use('/api', expenseRoutes);
 app.use('/api', clinicalRoutes);
-app.use('/api', verifyToken, require('./routes/clientTasksRoutes'));
+// NOTE: no mount-level verifyToken here — that would act as a catch-all auth
+// wall for every /api/* route declared after this line (it broke the public
+// job-application and lead endpoints). clientTasksRoutes self-protects: every
+// route in it already applies verifyToken (+ requireAdmin where needed).
+app.use('/api', require('./routes/clientTasksRoutes'));
 
 // Dedicated route files (mounted at their own prefixes — no conflicts)
 app.use('/api/reports',           verifyToken, require('./routes/reports'));

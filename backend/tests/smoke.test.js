@@ -321,6 +321,24 @@ describe('Applications', () => {
     expect([200, 201, 500]).toContain(res.status);
   });
 
+  // Regression: a broad `app.use('/api', verifyToken, ...)` mount declared
+  // before /api/applications turned this public endpoint into a 401 wall in
+  // production. The public POST must never be auth-gated.
+  test('POST /api/applications is public — never 401', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: 'app-1' }] });
+    const res = await request(app)
+      .post('/api/applications')
+      .send({ firstName: 'Test', lastName: 'User', email: 'test@test.com', phone: '555-0100' });
+    expect(res.status).not.toBe(401);
+  });
+
+  // Counterpart: clientTasksRoutes must still self-protect even though its
+  // mount carries no verifyToken.
+  test('GET /api/clients/:id/care-tasks without token → 401', async () => {
+    const res = await request(app).get('/api/clients/abc/care-tasks');
+    expect(res.status).toBe(401);
+  });
+
   test('GET /api/applications → 200 for admin', async () => {
     db.query.mockResolvedValue({ rows: [] });
     const res = await request(app)
