@@ -77,7 +77,12 @@ const limiter = rateLimit({
   skip: (req) => req.path.includes('/api/messages/unread-count') || req.path.includes('/api/push/unread-count')
 });
 app.use(limiter);
-app.use(express.json({ limit: '10mb' }));
+// Stripe webhook needs the raw body for signature verification — skip the
+// JSON parser for that one path. Every other route still gets parsed JSON.
+app.use((req, res, next) => {
+  if (req.originalUrl === '/api/stripe/webhook') return next();
+  return express.json({ limit: '10mb' })(req, res, next);
+});
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 const authLimiter = rateLimit({

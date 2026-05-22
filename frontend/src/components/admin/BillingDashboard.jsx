@@ -380,6 +380,30 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   };
 
   const [sendingInvoiceEmail, setSendingInvoiceEmail] = useState(false);
+  const [creatingPaymentLink, setCreatingPaymentLink] = useState(false);
+
+  // Create (or surface) a Stripe payment link for this invoice and copy it
+  // to the clipboard so admin can paste into an email / text. Backend stores
+  // the URL on invoices.stripe_payment_link the first time it's generated.
+  const handleCreatePaymentLink = async (invoice) => {
+    if (!invoice?.id) return;
+    setCreatingPaymentLink(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/stripe/create-payment-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ invoiceId: invoice.id })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to create payment link');
+      try { await navigator.clipboard.writeText(data.paymentLink); } catch {}
+      toast(`Payment link copied to clipboard: ${data.paymentLink}`, 'success');
+    } catch (error) {
+      toast('Payment link failed: ' + error.message, 'error');
+    } finally {
+      setCreatingPaymentLink(false);
+    }
+  };
 
   const handleSendInvoiceEmail = async (invoice) => {
     if (!invoice?.id) return;
@@ -1655,6 +1679,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <>
                   <button className="btn btn-success" onClick={() => { setPaymentFormData({ ...paymentFormData, invoiceId: selectedInvoice.id }); setShowInvoiceModal(false); setShowPaymentModal(true); }}>💳 Record Payment</button>
                   <button className="btn btn-warning" onClick={() => handleMarkPaid(selectedInvoice.id)}>✓ Mark Paid</button>
+                  <button className="btn btn-primary" onClick={() => handleCreatePaymentLink(selectedInvoice)} disabled={creatingPaymentLink}>
+                    {creatingPaymentLink ? '🔗 Generating...' : '🔗 Get Stripe Pay Link'}
+                  </button>
                 </>
               )}
               <button className="btn btn-info" onClick={() => handleSendInvoiceEmail(selectedInvoice)} disabled={sendingInvoiceEmail}>

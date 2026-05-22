@@ -122,6 +122,25 @@ const PortalInvoices = ({ token }) => {
                   )}
                 </div>
               )}
+
+              {(inv.payment_status === 'pending' || inv.payment_status === 'overdue' || inv.payment_status === 'partial') && (
+                <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f0f0f0', textAlign: 'right' }}>
+                  <a
+                    href={`/pay/${inv.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: 'inline-block',
+                      background: '#1a5276', color: '#fff',
+                      padding: '8px 18px', borderRadius: '8px',
+                      fontWeight: 600, fontSize: '0.9rem',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    💳 Pay {formatMoney(inv.total)}
+                  </a>
+                </div>
+              )}
             </div>
           ))}
         </div>
