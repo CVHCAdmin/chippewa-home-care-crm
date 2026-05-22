@@ -11,6 +11,20 @@ const { sendInvoiceEmail, isConfigured: emailConfigured } = require('../services
 
 // ==================== HELPER FUNCTIONS ====================
 
+// Old invoices may have descriptions like "Home Care Services (13:30 - 17:30)"
+// that were stored before we converted to 12h on the way in. Reformat on read
+// so the printed invoice shows AM/PM regardless of when the row was created.
+const reformatTimesIn = (text) => {
+  if (typeof text !== 'string') return text;
+  return text.replace(/\b(\d{1,2}):(\d{2})\b/g, (match, h, m) => {
+    const hr = parseInt(h, 10);
+    if (hr < 0 || hr > 23) return match;
+    const ampm = hr < 12 ? 'AM' : 'PM';
+    const dh = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+    return `${dh}:${m} ${ampm}`;
+  });
+};
+
 /**
  * Generate line items for a client's billing period
  */
@@ -205,7 +219,7 @@ router.get('/invoices/:id', auth, async (req, res) => {
 
     res.json({
       ...invoice,
-      line_items: lineItems,
+      line_items: lineItems.map(li => ({ ...li, description: reformatTimesIn(li.description) })),
       total_hours: lineItems.reduce((sum, item) => sum + parseFloat(item.hours || 0), 0)
     });
 
@@ -386,10 +400,19 @@ router.post('/invoices/manual', auth, async (req, res) => {
     for (const item of lineItems) {
       const amount = parseFloat(item.hours || 0) * parseFloat(item.rate || 0);
       
-      // Build description with time info if provided
+      // Build description with time info if provided. Convert the 24h
+      // "HH:MM" dropdown values into 12h AM/PM so the printed invoice
+      // shows "1:30 PM" instead of "13:30".
+      const to12h = (hhmm) => {
+        if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return hhmm;
+        const [h, m] = hhmm.split(':').map(Number);
+        const ampm = h < 12 ? 'AM' : 'PM';
+        const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+        return `${dh}:${m.toString().padStart(2, '0')} ${ampm}`;
+      };
       let description = item.description || 'Home Care Services';
       if (detailedMode && item.startTime && item.endTime) {
-        description = `${description} (${item.startTime} - ${item.endTime})`;
+        description = `${description} (${to12h(item.startTime)} - ${to12h(item.endTime)})`;
       }
       
       await db.query(`
@@ -672,6 +695,8 @@ router.post('/invoices/:id/send-email', auth, async (req, res) => {
       ORDER BY ili.service_date, u.last_name
     `, [req.params.id]);
 
+    const emailLineItems = lineItemsResult.rows.map(li => ({ ...li, description: reformatTimesIn(li.description) }));
+
     let sent;
     try {
       sent = await sendInvoiceEmail({
@@ -684,7 +709,7 @@ router.post('/invoices/:id/send-email', auth, async (req, res) => {
         billingPeriodStart: invoice.billing_period_start,
         billingPeriodEnd: invoice.billing_period_end,
         dueDate: invoice.payment_due_date,
-        lineItems: lineItemsResult.rows,
+        lineItems: emailLineItems,
       });
     } catch (sendErr) {
       return res.status(502).json({ error: `SendGrid rejected: ${sendErr.message}` });
