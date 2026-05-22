@@ -3,7 +3,7 @@
 const sgMail = require('@sendgrid/mail');
 
 const SENDGRID_API_KEY  = process.env.SENDGRID_API_KEY;
-const FROM_EMAIL        = process.env.SENDGRID_FROM_EMAIL || 'noreply@chippewahomecare.com';
+const FROM_EMAIL        = process.env.SENDGRID_FROM_EMAIL || 'noreply@chippewavalleyhomecare.com';
 const AGENCY_NAME       = process.env.AGENCY_NAME || 'Chippewa Valley Home Care';
 const FRONTEND_URL      = process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com';
 
@@ -14,7 +14,10 @@ if (isConfigured) {
 }
 
 // ── Helper ────────────────────────────────────────────────────
-const sendEmail = async ({ to, subject, html }) => {
+// throwOnError: when true, propagate SendGrid's actual error so the route
+// can surface it to the UI. Defaults to false to preserve existing fire-and-
+// forget callers (password resets, portal invites, etc.) that just log.
+const sendEmail = async ({ to, subject, html }, { throwOnError = false } = {}) => {
   if (!isConfigured) {
     console.warn('[Email] SendGrid not configured — skipping email to', to);
     return false;
@@ -25,7 +28,16 @@ const sendEmail = async ({ to, subject, html }) => {
     console.log('[Email] Sent to', to, '—', subject);
     return true;
   } catch (error) {
-    console.error('[Email] Failed to send to', to, ':', error?.response?.body?.errors || error.message);
+    const sgErrors = error?.response?.body?.errors;
+    const detail = Array.isArray(sgErrors) && sgErrors.length
+      ? sgErrors.map(e => e.message).join('; ')
+      : error.message;
+    console.error('[Email] Failed to send to', to, ':', sgErrors || error.message);
+    if (throwOnError) {
+      const err = new Error(detail || 'SendGrid send failed');
+      err.sendgrid = sgErrors || null;
+      throw err;
+    }
     return false;
   }
 };
@@ -252,7 +264,7 @@ const sendInvoiceEmail = async ({ to, clientName, invoiceNumber, invoiceId, tota
         <strong>support@chippewavalleyhomecare.com</strong> or call our office.
       </p>
     `),
-  });
+  }, { throwOnError: true });
 };
 
 // ── Caregiver Welcome ─────────────────────────────────────────

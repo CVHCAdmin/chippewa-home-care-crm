@@ -672,21 +672,26 @@ router.post('/invoices/:id/send-email', auth, async (req, res) => {
       ORDER BY ili.service_date, u.last_name
     `, [req.params.id]);
 
-    const sent = await sendInvoiceEmail({
-      to: recipientEmail,
-      clientName: `${invoice.first_name} ${invoice.last_name}`,
-      invoiceNumber: invoice.invoice_number,
-      invoiceId: invoice.id,
-      total: invoice.total,
-      amountDue,
-      billingPeriodStart: invoice.billing_period_start,
-      billingPeriodEnd: invoice.billing_period_end,
-      dueDate: invoice.payment_due_date,
-      lineItems: lineItemsResult.rows,
-    });
+    let sent;
+    try {
+      sent = await sendInvoiceEmail({
+        to: recipientEmail,
+        clientName: `${invoice.first_name} ${invoice.last_name}`,
+        invoiceNumber: invoice.invoice_number,
+        invoiceId: invoice.id,
+        total: invoice.total,
+        amountDue,
+        billingPeriodStart: invoice.billing_period_start,
+        billingPeriodEnd: invoice.billing_period_end,
+        dueDate: invoice.payment_due_date,
+        lineItems: lineItemsResult.rows,
+      });
+    } catch (sendErr) {
+      return res.status(502).json({ error: `SendGrid rejected: ${sendErr.message}` });
+    }
 
     if (!sent) {
-      return res.status(500).json({ error: 'Failed to send email. Check SendGrid configuration.' });
+      return res.status(503).json({ error: 'Email service not configured on server.' });
     }
 
     // Track that the invoice was emailed
