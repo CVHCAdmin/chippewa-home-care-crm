@@ -58,6 +58,8 @@ const wrap = (body) => `
 `;
 
 // ── Client Portal Invite ──────────────────────────────────────
+// throwOnError so the admin UI can surface the real SendGrid reason
+// (sender not verified, etc.) instead of a silent failure.
 const sendClientPortalInvite = async ({ to, clientName, inviteUrl }) => {
   return sendEmail({
     to,
@@ -82,7 +84,7 @@ const sendClientPortalInvite = async ({ to, clientName, inviteUrl }) => {
         This link expires in 48 hours. If it has expired, please contact your care coordinator for a new invite.
       </p>
     `),
-  });
+  }, { throwOnError: true });
 };
 
 // ── Family Portal Welcome ─────────────────────────────────────

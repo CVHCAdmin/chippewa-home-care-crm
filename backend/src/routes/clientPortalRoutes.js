@@ -569,16 +569,28 @@ router.post('/admin/invite', auth, async (req, res) => {
     const inviteUrl = `${process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com'}/portal/setup?token=${inviteToken}`;
     const clientName = `${client.rows[0].first_name} ${client.rows[0].last_name}`;
 
-    // Send invite email (non-blocking — still returns success if email fails)
-    const emailSent = await sendClientPortalInvite({ to: email, clientName, inviteUrl });
+    // Send invite email. We catch any SendGrid error so the invite record
+    // still gets created (admin can fall back to copy/paste the link), but
+    // we surface the actual reason so they know whether to fix SendGrid or
+    // just deliver the link manually.
+    let emailSent = false;
+    let emailError = null;
+    try {
+      emailSent = await sendClientPortalInvite({ to: email, clientName, inviteUrl });
+    } catch (sgErr) {
+      emailError = sgErr.message || 'SendGrid send failed';
+    }
 
     res.json({
       success:   true,
       inviteUrl,
       emailSent,
+      emailError,
       message:   emailSent
         ? `Invite email sent to ${email} for ${clientName}`
-        : `Invite created for ${clientName} (email not sent — share link manually)`,
+        : emailError
+          ? `Invite created. Email delivery failed: ${emailError}. Share the link manually.`
+          : `Invite created for ${clientName} (email not configured — share link manually)`,
       expiresAt: inviteExpires,
     });
   } catch (error) {

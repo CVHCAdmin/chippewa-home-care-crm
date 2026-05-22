@@ -233,7 +233,12 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
       if (!res.ok) throw new Error(data.error || 'Failed to create invite');
       setInviteUrl(data.inviteUrl);
       setPortalStatus('invite_pending');
-      setPortalMessage({ text: `Invite created for ${portalEmail}. Copy the link below and send it to the client.`, type: 'success' });
+      // Reflect whether SendGrid actually delivered the email so admin
+      // knows whether to copy the link manually or just confirm with client.
+      const msg = data.emailSent
+        ? `✉️ Invite email sent to ${portalEmail}. Link is also shown below as a backup.`
+        : `⚠️ Invite created but email could NOT be sent. Copy the link below and send it to ${portalEmail} manually.`;
+      setPortalMessage({ text: msg, type: data.emailSent ? 'success' : 'warning' });
     } catch (err) {
       setPortalMessage({ text: err.message, type: 'error' });
     } finally {
@@ -826,36 +831,50 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                 </div>
               )}
 
-              {/* Invite form — shown when not yet invited or expired */}
-              {(portalStatus === 'not_invited' || portalStatus === 'invite_expired' || portalStatus === 'invite_pending') && (
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <h5 style={{ marginBottom: '0.75rem', color: '#333' }}>
-                    {portalStatus === 'invite_pending' ? 'Resend Invite' : 'Invite Client to Portal'}
-                  </h5>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                      <input
-                        type="email"
-                        value={portalEmail}
-                        onChange={e => setPortalEmail(e.target.value)}
-                        placeholder="client@email.com"
-                      />
+              {/* Invite form — always available so admins can resend at any
+                  point (lost password, new email address, etc.). For active
+                  clients it acts as a re-invite that regenerates the token. */}
+              {(() => {
+                const isResend = portalStatus === 'invite_pending' || portalStatus === 'invite_expired' || portalStatus === 'active' || portalStatus === 'disabled';
+                const heading =
+                  portalStatus === 'invite_pending' ? 'Resend Invite' :
+                  portalStatus === 'invite_expired' ? 'Resend Expired Invite' :
+                  portalStatus === 'active'         ? 'Send New Invite (resets account setup)' :
+                  portalStatus === 'disabled'       ? 'Re-invite Client' :
+                                                      'Invite Client to Portal';
+                const buttonLabel = portalLoading
+                  ? (isResend ? 'Resending...' : 'Creating...')
+                  : (isResend ? '✉️ Resend Invite' : '✉️ Create Invite');
+                return (
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <h5 style={{ marginBottom: '0.75rem', color: '#333' }}>{heading}</h5>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                        <input
+                          type="email"
+                          value={portalEmail}
+                          onChange={e => setPortalEmail(e.target.value)}
+                          placeholder="client@email.com"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleSendInvite}
+                        disabled={portalLoading}
+                        style={{ flexShrink: 0 }}
+                      >
+                        {buttonLabel}
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={handleSendInvite}
-                      disabled={portalLoading}
-                      style={{ flexShrink: 0 }}
-                    >
-                      {portalLoading ? 'Creating...' : '✉️ Create Invite'}
-                    </button>
+                    <small style={{ color: '#666', marginTop: '6px', display: 'block' }}>
+                      {isResend
+                        ? 'Generates a fresh 48-hour invite link and emails it to the client. The old link (if any) will stop working.'
+                        : 'An invite link will be generated and emailed to the client. If email delivery fails, the link will be shown below for you to copy manually.'}
+                    </small>
                   </div>
-                  <small style={{ color: '#666', marginTop: '6px', display: 'block' }}>
-                    An invite link will be generated. Copy it and send it to the client — they'll set their own password.
-                  </small>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Enable/Disable toggle — shown when portal account exists */}
               {(portalStatus === 'active' || portalStatus === 'disabled') && (
