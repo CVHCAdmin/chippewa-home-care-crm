@@ -8,21 +8,27 @@ const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 // POST /api/clients
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { firstName, lastName, dateOfBirth, phone, email, address, city, state, zip,
+    const { firstName, lastName, dateOfBirth, gender, phone, email, address, city, state, zip,
       referredBy, serviceType, referralSourceId, careTypeId,
       isPrivatePay, privatePayRate, privatePayRateType, weeklyAuthorizedUnits,
-      medicaidId, mcoMemberId } = req.body;
+      medicaidId, mcoMemberId,
+      emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
+      notes } = req.body;
     const clientId = uuidv4();
     const result = await db.query(
-      `INSERT INTO clients (id, first_name, last_name, date_of_birth, phone, email, address, city, state, zip,
+      `INSERT INTO clients (id, first_name, last_name, date_of_birth, gender, phone, email, address, city, state, zip,
         referred_by, service_type, start_date, referral_source_id, care_type_id,
         is_private_pay, private_pay_rate, private_pay_rate_type, weekly_authorized_units,
-        medicaid_id, mco_member_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_DATE,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-      [clientId, firstName, lastName, dateOfBirth, phone, email, address, city, state, zip,
+        medicaid_id, mco_member_id,
+        emergency_contact_name, emergency_contact_phone, emergency_contact_relationship,
+        notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CURRENT_DATE,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
+      [clientId, firstName, lastName, dateOfBirth, gender || null, phone, email, address, city, state, zip,
        referredBy || referralSourceId, serviceType, referralSourceId, careTypeId,
        isPrivatePay || false, privatePayRate, privatePayRateType || 'hourly', weeklyAuthorizedUnits || null,
-       medicaidId || null, mcoMemberId || null]
+       medicaidId || null, mcoMemberId || null,
+       emergencyContactName || null, emergencyContactPhone || null, emergencyContactRelationship || null,
+       notes || null]
     );
     await db.query(`INSERT INTO client_onboarding (client_id) VALUES ($1)`, [clientId]);
     await auditLog(req.user.id, 'CREATE', 'clients', clientId, null, result.rows[0]);
