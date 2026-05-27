@@ -21,6 +21,17 @@ const ClientPortal = ({ user, token, onLogout }) => {
   const [profile, setProfile]               = useState(null);
   const [unreadCount, setUnreadCount]       = useState(0);
   const [menuOpen, setMenuOpen]             = useState(false);
+  const [isMobile, setIsMobile]             = useState(window.innerWidth <= 768);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
 
   useEffect(() => {
     // Load profile
@@ -102,14 +113,14 @@ const ClientPortal = ({ user, token, onLogout }) => {
         </div>
       </div>
 
-      {/* ── Desktop Nav ── */}
+      {/* ── Nav (responsive — distributes evenly on mobile so all tabs fit in portrait) ── */}
       <div style={{
         background: '#fff',
         borderBottom: '1px solid #e8ecf0',
         display: 'flex',
-        padding: '0 20px',
-        gap: '4px',
-        overflowX: 'auto',
+        padding: isMobile ? '0' : '0 20px',
+        gap: isMobile ? 0 : '4px',
+        overflowX: isMobile ? 'visible' : 'auto',
       }}>
         {NAV.map(tab => (
           <button
@@ -118,21 +129,27 @@ const ClientPortal = ({ user, token, onLogout }) => {
             style={{
               background: 'none',
               border: 'none',
-              padding: '14px 18px',
+              padding: isMobile ? '10px 2px' : '14px 18px',
               cursor: 'pointer',
-              fontSize: '0.88rem',
+              fontSize: isMobile ? '0.7rem' : '0.88rem',
               fontWeight: activeTab === tab.key ? 600 : 400,
               color: activeTab === tab.key ? '#1a5276' : '#555',
               borderBottom: activeTab === tab.key ? '3px solid #1a5276' : '3px solid transparent',
               whiteSpace: 'nowrap',
               display: 'flex',
+              flexDirection: isMobile ? 'column' : 'row',
               alignItems: 'center',
-              gap: '6px',
+              justifyContent: 'center',
+              gap: isMobile ? '2px' : '6px',
               position: 'relative',
+              flex: isMobile ? '1 1 0' : '0 0 auto',
+              minWidth: 0,
             }}
           >
-            <span>{tab.icon}</span>
-            {tab.label}
+            <span style={{ fontSize: isMobile ? '1.15rem' : 'inherit' }}>{tab.icon}</span>
+            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+              {tab.label}
+            </span>
             {tab.key === 'notifications' && unreadCount > 0 && (
               <span style={{
                 background: '#e74c3c',
@@ -141,6 +158,9 @@ const ClientPortal = ({ user, token, onLogout }) => {
                 padding: '1px 6px',
                 fontSize: '0.7rem',
                 fontWeight: 700,
+                position: isMobile ? 'absolute' : 'static',
+                top: isMobile ? 4 : 'auto',
+                right: isMobile ? 6 : 'auto',
               }}>
                 {unreadCount}
               </span>
