@@ -25,12 +25,112 @@ const reformatTimesIn = (text) => {
   });
 };
 
+// ── Helpers for schedule expansion ─────────────────────────────────────────
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const toDateOnly = (d) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+
+const ymd = (d) => toDateOnly(d).toISOString().slice(0, 10);
+
+// Returns true if a recurring schedule should produce an occurrence on `target`
+function isRecurringActiveOn(schedule, target) {
+  if (schedule.effective_date) {
+    if (toDateOnly(target) < toDateOnly(schedule.effective_date)) return false;
+  }
+  if (schedule.end_date) {
+    if (toDateOnly(target) > toDateOnly(schedule.end_date)) return false;
+  }
+  if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
+    const diffDays = Math.round((toDateOnly(target) - toDateOnly(schedule.anchor_date)) / DAY_MS);
+    if (Math.floor(diffDays / 7) % 2 !== 0) return false;
+  }
+  return true;
+}
+
+// "HH:MM[:SS]" + "YYYY-MM-DD" → JS Date
+function combineDateAndTime(dateOnly, hms) {
+  if (!hms) return null;
+  const [h, m] = hms.split(':').map(Number);
+  const d = toDateOnly(dateOnly);
+  d.setHours(h || 0, m || 0, 0, 0);
+  return d;
+}
+
+// hours between two "HH:MM" times on the same day, accounting for overnight
+function hoursBetween(startHms, endHms) {
+  if (!startHms || !endHms) return 0;
+  const [sh, sm] = startHms.split(':').map(Number);
+  const [eh, em] = endHms.split(':').map(Number);
+  let mins = (eh * 60 + em) - (sh * 60 + sm);
+  if (mins < 0) mins += 24 * 60; // overnight shift
+  return mins / 60;
+}
+
+function fmtTime12(hms) {
+  if (!hms) return '';
+  const [h, m] = hms.split(':').map(Number);
+  const ampm = h < 12 ? 'AM' : 'PM';
+  const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${dh}:${(m || 0).toString().padStart(2, '0')} ${ampm}`;
+}
+
 /**
- * Generate line items for a client's billing period
+ * Generate line items for a client's billing period.
+ *
+ * Strategy: expand the schedule (one-time + recurring, minus exceptions),
+ * cross-reference each scheduled visit with completed EVV time entries.
+ * - If a matching time entry exists → bill the ACTUAL clocked hours (source=evv_confirmed)
+ * - If no time entry yet → bill the SCHEDULED hours (source=scheduled)
+ * - Time entries with no matching schedule → bill as-is (source=unscheduled_evv)
+ *
+ * This means billing works even when caregivers haven't clocked in/out via EVV
+ * yet, and surfaces variances between scheduled and actual when EVV is in use.
  */
 async function generateLineItems(clientId, referralSourceId, careTypeId, billingPeriodStart, billingPeriodEnd) {
+  // ── Rate lookup ──────────────────────────────────────────────────────────
+  let rate = 25.00;
+  let rateType = 'hourly';
+
+  if (referralSourceId) {
+    const rateResult = await db.query(`
+      SELECT rate_amount, rate_type
+      FROM referral_source_rates
+      WHERE referral_source_id = $1
+        AND (care_type_id = $2 OR care_type_id IS NULL)
+        AND (is_active = true OR is_active IS NULL)
+        AND (effective_date IS NULL OR effective_date <= $3)
+        AND (end_date IS NULL OR end_date >= $4)
+      ORDER BY
+        CASE WHEN care_type_id = $2 THEN 0 ELSE 1 END,
+        effective_date DESC NULLS LAST
+      LIMIT 1
+    `, [referralSourceId, careTypeId, billingPeriodEnd, billingPeriodStart]);
+
+    if (rateResult.rows.length > 0) {
+      rate = parseFloat(rateResult.rows[0].rate_amount);
+      rateType = rateResult.rows[0].rate_type || 'hourly';
+    }
+  }
+
+  // Fall back to private-pay rate if no referral-source rate found
+  if (rate === 25.00 && !referralSourceId) {
+    const clientRate = await db.query(
+      `SELECT private_pay_rate, private_pay_rate_type FROM clients WHERE id = $1`,
+      [clientId]
+    );
+    if (clientRate.rows[0]?.private_pay_rate) {
+      rate = parseFloat(clientRate.rows[0].private_pay_rate);
+      rateType = clientRate.rows[0].private_pay_rate_type || 'hourly';
+    }
+  }
+
+  // ── Pull completed time entries for the period ───────────────────────────
   const entriesResult = await db.query(`
-    SELECT 
+    SELECT
       te.id as time_entry_id,
       te.caregiver_id,
       u.first_name as caregiver_first_name,
@@ -49,41 +149,146 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     ORDER BY te.start_time
   `, [clientId, billingPeriodStart, billingPeriodEnd]);
 
-  let rate = 25.00;
-  let rateType = 'hourly';
+  // ── Pull schedules that could produce occurrences in the period ──────────
+  const schedulesResult = await db.query(`
+    SELECT s.*,
+      u.first_name as caregiver_first_name,
+      u.last_name  as caregiver_last_name
+    FROM schedules s
+    JOIN users u ON s.caregiver_id = u.id
+    WHERE s.client_id = $1
+      AND (s.is_active = true OR s.is_active IS NULL)
+      AND (
+        (s.date IS NOT NULL AND s.date BETWEEN $2 AND $3)
+        OR (s.day_of_week IS NOT NULL)
+      )
+  `, [clientId, billingPeriodStart, billingPeriodEnd]);
 
-  if (referralSourceId) {
-    const rateResult = await db.query(`
-      SELECT rate_amount, rate_type 
-      FROM referral_source_rates 
-      WHERE referral_source_id = $1 
-        AND (care_type_id = $2 OR care_type_id IS NULL)
-        AND (is_active = true OR is_active IS NULL)
-        AND (effective_date IS NULL OR effective_date <= $3)
-        AND (end_date IS NULL OR end_date >= $4)
-      ORDER BY 
-        CASE WHEN care_type_id = $2 THEN 0 ELSE 1 END,
-        effective_date DESC NULLS LAST
-      LIMIT 1
-    `, [referralSourceId, careTypeId, billingPeriodEnd, billingPeriodStart]);
-
-    if (rateResult.rows.length > 0) {
-      rate = parseFloat(rateResult.rows[0].rate_amount);
-      rateType = rateResult.rows[0].rate_type || 'hourly';
+  // ── Pull exceptions for those schedules in range ─────────────────────────
+  let exceptionsByScheduleDate = new Map(); // key: `${schedule_id}|${YYYY-MM-DD}`
+  if (schedulesResult.rows.length > 0) {
+    const scheduleIds = schedulesResult.rows.map(s => s.id);
+    const excResult = await db.query(`
+      SELECT * FROM schedule_exceptions
+      WHERE schedule_id = ANY($1::uuid[])
+        AND exception_date BETWEEN $2 AND $3
+    `, [scheduleIds, billingPeriodStart, billingPeriodEnd]);
+    for (const ex of excResult.rows) {
+      exceptionsByScheduleDate.set(`${ex.schedule_id}|${ymd(ex.exception_date)}`, ex);
     }
   }
 
+  // ── Expand schedules → expected visits per date ──────────────────────────
+  // Each visit: { date, caregiver_id, caregiver_first/last, start_time, end_time, schedule_id }
+  const expectedVisits = [];
+  const periodStart = toDateOnly(billingPeriodStart);
+  const periodEnd   = toDateOnly(billingPeriodEnd);
+
+  for (const sched of schedulesResult.rows) {
+    // One-time schedule
+    if (sched.date) {
+      const occDate = toDateOnly(sched.date);
+      if (occDate < periodStart || occDate > periodEnd) continue;
+      const exc = exceptionsByScheduleDate.get(`${sched.id}|${ymd(occDate)}`);
+      if (exc && exc.exception_type === 'cancelled') continue;
+      const startHms = (exc && exc.override_start_time) ? exc.override_start_time : sched.start_time;
+      const endHms   = (exc && exc.override_end_time)   ? exc.override_end_time   : sched.end_time;
+      expectedVisits.push({
+        date: occDate,
+        caregiver_id: (exc && exc.override_caregiver_id) ? exc.override_caregiver_id : sched.caregiver_id,
+        caregiver_first_name: sched.caregiver_first_name,
+        caregiver_last_name: sched.caregiver_last_name,
+        start_time: startHms,
+        end_time: endHms,
+        schedule_id: sched.id,
+        notes: sched.notes,
+      });
+      continue;
+    }
+
+    // Recurring schedule → expand across the period
+    if (sched.day_of_week === null || sched.day_of_week === undefined) continue;
+    for (let d = new Date(periodStart); d <= periodEnd; d = new Date(d.getTime() + DAY_MS)) {
+      if (d.getDay() !== sched.day_of_week) continue;
+      if (!isRecurringActiveOn(sched, d)) continue;
+      const exc = exceptionsByScheduleDate.get(`${sched.id}|${ymd(d)}`);
+      if (exc && exc.exception_type === 'cancelled') continue;
+      const startHms = (exc && exc.override_start_time) ? exc.override_start_time : sched.start_time;
+      const endHms   = (exc && exc.override_end_time)   ? exc.override_end_time   : sched.end_time;
+      expectedVisits.push({
+        date: new Date(d),
+        caregiver_id: (exc && exc.override_caregiver_id) ? exc.override_caregiver_id : sched.caregiver_id,
+        caregiver_first_name: sched.caregiver_first_name,
+        caregiver_last_name: sched.caregiver_last_name,
+        start_time: startHms,
+        end_time: endHms,
+        schedule_id: sched.id,
+        notes: sched.notes,
+      });
+    }
+  }
+
+  // ── Match time entries to expected visits (by caregiver + date) ─────────
+  const unmatchedEntries = [...entriesResult.rows];
+  const visitsWithMatch = expectedVisits.map(v => {
+    // Same caregiver, same calendar date — pick closest by start time
+    const candidates = unmatchedEntries.filter(te =>
+      te.caregiver_id === v.caregiver_id &&
+      ymd(te.start_time) === ymd(v.date)
+    );
+    if (candidates.length === 0) return { visit: v, entry: null };
+    const visitStartMs = combineDateAndTime(v.date, v.start_time)?.getTime() || 0;
+    candidates.sort((a, b) => {
+      const da = Math.abs(new Date(a.start_time).getTime() - visitStartMs);
+      const db = Math.abs(new Date(b.start_time).getTime() - visitStartMs);
+      return da - db;
+    });
+    const matched = candidates[0];
+    const idx = unmatchedEntries.indexOf(matched);
+    if (idx >= 0) unmatchedEntries.splice(idx, 1);
+    return { visit: v, entry: matched };
+  });
+
+  // ── Build line items ────────────────────────────────────────────────────
   const lineItems = [];
   let invoiceTotal = 0;
 
-  for (const entry of entriesResult.rows) {
+  // Sort scheduled-visit lines by date for stable output
+  visitsWithMatch.sort((a, b) => {
+    const aT = a.visit.date.getTime();
+    const bT = b.visit.date.getTime();
+    if (aT !== bT) return aT - bT;
+    return (a.visit.start_time || '').localeCompare(b.visit.start_time || '');
+  });
+
+  for (const { visit, entry } of visitsWithMatch) {
     let hours = 0;
-    if (entry.duration_minutes) {
-      hours = entry.duration_minutes / 60.0;
-    } else if (entry.start_time && entry.end_time) {
-      const start = new Date(entry.start_time);
-      const end = new Date(entry.end_time);
-      hours = (end - start) / (1000 * 60 * 60);
+    let startISO = null, endISO = null, timeRangeLabel = '';
+    let source = 'scheduled';
+    let timeEntryId = null;
+
+    if (entry) {
+      // EVV-confirmed → bill actual
+      source = 'evv_confirmed';
+      timeEntryId = entry.time_entry_id;
+      if (entry.duration_minutes) {
+        hours = entry.duration_minutes / 60.0;
+      } else if (entry.start_time && entry.end_time) {
+        hours = (new Date(entry.end_time) - new Date(entry.start_time)) / (1000 * 60 * 60);
+      }
+      startISO = entry.start_time;
+      endISO = entry.end_time;
+      const st = new Date(entry.start_time);
+      const et = entry.end_time ? new Date(entry.end_time) : null;
+      timeRangeLabel = et
+        ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
+        : '';
+    } else {
+      // No EVV → bill scheduled
+      hours = hoursBetween(visit.start_time, visit.end_time);
+      startISO = combineDateAndTime(visit.date, visit.start_time);
+      endISO   = combineDateAndTime(visit.date, visit.end_time);
+      timeRangeLabel = `${fmtTime12(visit.start_time)} - ${fmtTime12(visit.end_time)}`;
     }
 
     if (hours <= 0) continue;
@@ -91,29 +296,71 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     const amount = rateType === 'hourly' ? hours * rate : rate;
     invoiceTotal += amount;
 
-    // Format times for display
-    const startTime = new Date(entry.start_time);
-    const endTime = entry.end_time ? new Date(entry.end_time) : null;
-    const timeRange = endTime 
-      ? `${startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
+    const baseDesc = entry?.notes || visit.notes || 'Home Care Services';
+    const description = timeRangeLabel
+      ? `${baseDesc} (${timeRangeLabel})`
+      : baseDesc;
+
+    lineItems.push({
+      time_entry_id: timeEntryId,
+      schedule_id: visit.schedule_id,
+      caregiver_id: visit.caregiver_id,
+      caregiver_first_name: visit.caregiver_first_name,
+      caregiver_last_name: visit.caregiver_last_name,
+      service_date: ymd(visit.date),
+      start_time: startISO,
+      end_time: endISO,
+      time_range: timeRangeLabel,
+      description,
+      hours,
+      rate,
+      rate_type: rateType,
+      amount,
+      source, // 'evv_confirmed' or 'scheduled'
+    });
+  }
+
+  // Orphan time entries (worked but not on schedule) → bill as unscheduled
+  for (const entry of unmatchedEntries) {
+    let hours = 0;
+    if (entry.duration_minutes) {
+      hours = entry.duration_minutes / 60.0;
+    } else if (entry.start_time && entry.end_time) {
+      hours = (new Date(entry.end_time) - new Date(entry.start_time)) / (1000 * 60 * 60);
+    }
+    if (hours <= 0) continue;
+
+    const amount = rateType === 'hourly' ? hours * rate : rate;
+    invoiceTotal += amount;
+
+    const st = new Date(entry.start_time);
+    const et = entry.end_time ? new Date(entry.end_time) : null;
+    const timeRangeLabel = et
+      ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
       : '';
+    const baseDesc = entry.notes || 'Home Care Services (unscheduled)';
 
     lineItems.push({
       time_entry_id: entry.time_entry_id,
+      schedule_id: null,
       caregiver_id: entry.caregiver_id,
       caregiver_first_name: entry.caregiver_first_name,
       caregiver_last_name: entry.caregiver_last_name,
-      service_date: entry.service_date,
+      service_date: ymd(entry.start_time),
       start_time: entry.start_time,
       end_time: entry.end_time,
-      time_range: timeRange,
-      description: entry.notes || 'Home Care Services',
-      hours: hours,
-      rate: rate,
+      time_range: timeRangeLabel,
+      description: timeRangeLabel ? `${baseDesc} (${timeRangeLabel})` : baseDesc,
+      hours,
+      rate,
       rate_type: rateType,
-      amount: amount
+      amount,
+      source: 'unscheduled_evv',
     });
   }
+
+  // Final sort by date for the invoice
+  lineItems.sort((a, b) => (a.service_date || '').localeCompare(b.service_date || ''));
 
   return { lineItems, total: invoiceTotal };
 }
@@ -229,6 +476,42 @@ router.get('/invoices/:id', auth, async (req, res) => {
   }
 });
 
+// Preview line items WITHOUT saving an invoice. Used by the manual invoice
+// form's "Import from Schedule + EVV" button so the user can review and edit
+// auto-generated line items before saving.
+router.post('/invoices/preview', auth, async (req, res) => {
+  const { clientId, billingPeriodStart, billingPeriodEnd } = req.body;
+  if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
+    return res.status(400).json({ error: 'clientId, billingPeriodStart, billingPeriodEnd are required' });
+  }
+  try {
+    const clientResult = await db.query(`
+      SELECT id, referral_source_id, care_type_id, is_private_pay
+      FROM clients WHERE id = $1
+    `, [clientId]);
+    if (clientResult.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
+
+    const c = clientResult.rows[0];
+    const { lineItems, total } = await generateLineItems(
+      clientId, c.referral_source_id, c.care_type_id, billingPeriodStart, billingPeriodEnd
+    );
+
+    res.json({
+      lineItems,
+      total,
+      counts: {
+        total: lineItems.length,
+        evvConfirmed: lineItems.filter(li => li.source === 'evv_confirmed').length,
+        scheduled:    lineItems.filter(li => li.source === 'scheduled').length,
+        unscheduled:  lineItems.filter(li => li.source === 'unscheduled_evv').length,
+      }
+    });
+  } catch (error) {
+    console.error('Error in invoice preview:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Generate single invoice
 router.post('/invoices/generate-with-rates', auth, async (req, res) => {
   const { clientId, billingPeriodStart, billingPeriodEnd, notes } = req.body;
@@ -272,8 +555,8 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
     );
 
     if (lineItems.length === 0) {
-      return res.status(400).json({ 
-        error: 'No completed time entries found for this client in the selected period' 
+      return res.status(400).json({
+        error: 'No scheduled visits or completed EVV entries found for this client in the selected period'
       });
     }
 

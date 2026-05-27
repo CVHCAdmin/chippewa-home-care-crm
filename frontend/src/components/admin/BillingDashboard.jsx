@@ -62,6 +62,7 @@ const BillingDashboard = ({ token }) => {
   const [showGenerateForm, setShowGenerateForm] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
   const [showBatchForm, setShowBatchForm] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -197,6 +198,88 @@ const BillingDashboard = ({ token }) => {
       setShowInvoiceModal(true);
     } catch (error) {
       toast('Failed to generate invoice: ' + error.message, 'error');
+    }
+  };
+
+  // Round an ISO timestamp or "HH:MM[:SS]" string to the nearest 15-min slot
+  // and return "HH:MM" so it matches the TIME_OPTIONS dropdown values.
+  const toQuarterHourHHMM = (input) => {
+    if (!input) return '';
+    let h, m;
+    if (typeof input === 'string' && /^\d{1,2}:\d{2}/.test(input)) {
+      const parts = input.split(':');
+      h = parseInt(parts[0], 10);
+      m = parseInt(parts[1], 10);
+    } else {
+      const d = new Date(input);
+      if (isNaN(d)) return '';
+      h = d.getHours();
+      m = d.getMinutes();
+    }
+    const rounded = Math.round(m / 15) * 15;
+    let hh = h + Math.floor(rounded / 60);
+    const mm = rounded % 60;
+    if (hh >= 24) hh -= 24;
+    return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`;
+  };
+
+  // "📥 Import from Schedule + EVV" → pulls scheduled visits + completed EVV
+  // entries for the selected client + date range and populates the manual line
+  // items. Saves having to type each shift one by one.
+  const handleImportFromSchedule = async () => {
+    if (!manualFormData.clientId || !manualFormData.billingPeriodStart || !manualFormData.billingPeriodEnd) {
+      toast('Select client and billing period dates first', 'error');
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/billing/invoices/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          clientId: manualFormData.clientId,
+          billingPeriodStart: manualFormData.billingPeriodStart,
+          billingPeriodEnd: manualFormData.billingPeriodEnd,
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Preview failed');
+
+      if (!data.lineItems || data.lineItems.length === 0) {
+        toast('No scheduled visits or EVV entries found for this client in this period.', 'error');
+        return;
+      }
+
+      // Map server line items → form line item shape
+      const mapped = data.lineItems.map(li => {
+        const baseDesc = (li.description || 'Home Care Services').replace(/\s*\([^)]*\)\s*$/, '').trim();
+        return {
+          caregiverId: li.caregiver_id || '',
+          caregiverName: `${li.caregiver_first_name || ''} ${li.caregiver_last_name || ''}`.trim(),
+          description: baseDesc || 'Home Care Services',
+          hours: parseFloat(li.hours || 0).toFixed(2),
+          rate: parseFloat(li.rate || 0).toFixed(2),
+          serviceDate: li.service_date || '',
+          startTime: toQuarterHourHHMM(li.start_time),
+          endTime: toQuarterHourHHMM(li.end_time),
+          _source: li.source, // for UI badge
+        };
+      });
+
+      setManualLineItems(mapped);
+      setDetailedMode(true); // detailed mode needed for dates
+
+      const { counts } = data;
+      const parts = [];
+      if (counts.evvConfirmed) parts.push(`${counts.evvConfirmed} EVV-confirmed`);
+      if (counts.scheduled)    parts.push(`${counts.scheduled} scheduled-only`);
+      if (counts.unscheduled)  parts.push(`${counts.unscheduled} unscheduled EVV`);
+      setMessage(`✓ Imported ${counts.total} line items (${parts.join(', ')}). Total: ${formatCurrency(data.total)}`);
+      setTimeout(() => setMessage(''), 6000);
+    } catch (err) {
+      toast('Import failed: ' + err.message, 'error');
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -689,7 +772,34 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <input type="date" value={manualFormData.billingPeriodEnd} onChange={(e) => setManualFormData({ ...manualFormData, billingPeriodEnd: e.target.value })} required />
               </div>
             </div>
-            
+
+            {/* Import from Schedule + EVV — pulls all shifts for the selected client + dates so you don't have to type each one */}
+            <div style={{
+              marginTop: '1rem',
+              padding: '0.75rem 1rem',
+              background: '#eef6ff',
+              border: '1px solid #b6dafd',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '1rem',
+              flexWrap: 'wrap',
+            }}>
+              <div style={{ fontSize: '0.88rem', color: '#1a4a7a' }}>
+                <strong>📥 Auto-fill line items</strong> from this client's schedule and any
+                completed EVV visits in the period. You can edit before saving.
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleImportFromSchedule}
+                disabled={previewLoading}
+              >
+                {previewLoading ? 'Loading…' : '📥 Import from Schedule + EVV'}
+              </button>
+            </div>
+
             {/* Mode Toggle */}
             <div style={{ 
               display: 'flex', 
@@ -730,8 +840,25 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 marginBottom: '0.75rem',
                 background: '#fafafa'
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                  <strong style={{ color: '#666' }}>Line Item {index + 1}</strong>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <strong style={{ color: '#666' }}>Line Item {index + 1}</strong>
+                    {item._source === 'evv_confirmed' && (
+                      <span style={{ background: '#dcfce7', color: '#166534', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>
+                        ✓ EVV CONFIRMED
+                      </span>
+                    )}
+                    {item._source === 'scheduled' && (
+                      <span style={{ background: '#fef3c7', color: '#854d0e', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>
+                        📅 SCHEDULED (no EVV)
+                      </span>
+                    )}
+                    {item._source === 'unscheduled_evv' && (
+                      <span style={{ background: '#e0e7ff', color: '#3730a3', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>
+                        ⚠ UNSCHEDULED EVV
+                      </span>
+                    )}
+                  </div>
                   {manualLineItems.length > 1 && (
                     <button type="button" className="btn btn-sm btn-danger" onClick={() => removeManualLineItem(index)}>✕ Remove</button>
                   )}
