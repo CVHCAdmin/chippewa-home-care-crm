@@ -80,7 +80,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   // ── Drag & drop ──
   const [dragShift, setDragShift]   = useState(null); // { shift, fromDate }
   const [dropTarget, setDropTarget] = useState(null); // { shift, fromDate, toCaregiverId, toDate, toDayIndex }
-  const [dropScope, setDropScope]   = useState('this');
+  const [dropScope, setDropScope]   = useState('all');
   const [dragOverKey, setDragOverKey] = useState(null); // `${caregiverId}:${dayIndex}` for hover highlight
 
   const clientMap = Object.fromEntries(clients.map(c => [c.id, c]));
@@ -543,7 +543,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
       if (isRecurring && dropScope === 'this') {
         // Cancel the original occurrence, create a one-off at the new spot
-        await fetch(`${API_BASE_URL}/api/schedule-exceptions`, {
+        const cRes = await fetch(`${API_BASE_URL}/api/schedule-exceptions`, {
           method:'POST', headers: hdrs,
           body: JSON.stringify({
             scheduleId: shift.id,
@@ -551,7 +551,11 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             exceptionType: 'cancelled',
           }),
         });
-        await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
+        if (!cRes.ok) {
+          const errBody = await cRes.json().catch(() => ({}));
+          throw new Error(errBody.error || 'Could not cancel original occurrence');
+        }
+        const nRes = await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
           method:'POST', headers: hdrs,
           body: JSON.stringify({
             caregiverId: toCaregiverId,
@@ -563,6 +567,10 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             notes: shift.notes,
           }),
         });
+        if (!nRes.ok) {
+          const errBody = await nRes.json().catch(() => ({}));
+          throw new Error(errBody.error || 'Could not create new occurrence');
+        }
         showToast('Occurrence moved');
 
       } else if (isRecurring && dropScope === 'following') {
@@ -928,7 +936,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                           toDate,
                           toDayIndex: dayIndex,
                         });
-                        setDropScope(isRecurring ? 'this' : 'all');
+                        setDropScope('all');
                         setDragShift(null);
                       }}
                       style={{
