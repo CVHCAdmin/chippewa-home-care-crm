@@ -394,15 +394,53 @@ router.get('/week-view', verifyToken, async (req, res) => {
       db.query(`SELECT s.*, c.first_name as client_first_name, c.last_name as client_last_name FROM schedules s LEFT JOIN clients c ON s.client_id=c.id WHERE s.is_active=true AND (s.date>=$1 AND s.date<=$2 OR s.day_of_week IS NOT NULL) ORDER BY s.start_time`, [wsStr, weStr]),
     ]);
 
+    // Load exceptions for any recurring schedules in this week, keyed by schedule_id + date
+    const recurringIds = schedules.rows
+      .filter(s => s.day_of_week !== null && s.day_of_week !== undefined)
+      .map(s => s.id);
+    const excByKey = {};
+    if (recurringIds.length > 0) {
+      try {
+        const excResult = await db.query(
+          `SELECT * FROM schedule_exceptions
+           WHERE schedule_id = ANY($1) AND exception_date >= $2 AND exception_date <= $3`,
+          [recurringIds, wsStr, weStr]
+        );
+        excResult.rows.forEach(ex => {
+          const dateStr = (ex.exception_date instanceof Date ? ex.exception_date.toISOString().split('T')[0] : String(ex.exception_date)).slice(0,10);
+          excByKey[`${ex.schedule_id}|${dateStr}`] = ex;
+        });
+      } catch (e) {
+        if (!e.message.includes('does not exist')) throw e;
+      }
+    }
+
     const weekData = {};
     caregivers.rows.forEach(cg => { weekData[cg.id] = { caregiver: cg, days: { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] } }; });
+    const toDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     schedules.rows.forEach(s => {
-      if (!weekData[s.caregiver_id]) return;
-      if (s.date) { weekData[s.caregiver_id].days[new Date(s.date).getDay()].push({ ...s, isRecurring: false }); }
-      else if (s.day_of_week !== null) {
-        const dayDate = new Date(weekStart); dayDate.setDate(dayDate.getDate() + s.day_of_week);
-        if (isScheduleActiveForDate(s, dayDate)) weekData[s.caregiver_id].days[s.day_of_week].push({ ...s, isRecurring: true });
+      if (s.date) {
+        if (!weekData[s.caregiver_id]) return;
+        weekData[s.caregiver_id].days[new Date(s.date).getDay()].push({ ...s, isRecurring: false });
+        return;
       }
+      if (s.day_of_week === null || s.day_of_week === undefined) return;
+      const dayDate = new Date(weekStart); dayDate.setDate(dayDate.getDate() + s.day_of_week);
+      if (!isScheduleActiveForDate(s, dayDate)) return;
+      const exc = excByKey[`${s.id}|${toDateStr(dayDate)}`];
+      if (exc && exc.exception_type === 'cancelled') return;
+      const effectiveCaregiverId = (exc && exc.override_caregiver_id) || s.caregiver_id;
+      if (!weekData[effectiveCaregiverId]) return;
+      const item = (exc && exc.exception_type === 'modified')
+        ? { ...s,
+            caregiver_id: effectiveCaregiverId,
+            start_time: exc.override_start_time || s.start_time,
+            end_time: exc.override_end_time || s.end_time,
+            client_id: exc.override_client_id || s.client_id,
+            notes: exc.override_notes != null ? exc.override_notes : s.notes,
+            isRecurring: true }
+        : { ...s, isRecurring: true };
+      weekData[effectiveCaregiverId].days[s.day_of_week].push(item);
     });
     res.json({ weekStart: wsStr, weekEnd: weStr, caregivers: Object.values(weekData) });
   } catch (error) { res.status(500).json({ error: error.message }); }
