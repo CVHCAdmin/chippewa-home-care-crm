@@ -2,12 +2,14 @@
 // Real-time shift status board — shows all today's shifts with live EVV status
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../../config';
+import VisitGpsMap from './VisitGpsMap';
 
 const LiveBoard = ({ token }) => {
   const [data, setData] = useState({ shifts: [], stats: {}, asOf: null });
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [selectedShift, setSelectedShift] = useState(null);
+  const [mapShift, setMapShift] = useState(null);
   const intervalRef = useRef(null);
 
   const loadBoard = async () => {
@@ -161,6 +163,19 @@ const LiveBoard = ({ token }) => {
                   >🛑 Force Clock Out</button>
                 )}
 
+                {/* Map button — show GPS trail for any shift with a time entry */}
+                {shift.time_entry_id && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMapShift(shift); }}
+                    style={{
+                      marginTop: '0.5rem', width: '100%', padding: '0.45rem 0.6rem',
+                      background: '#fff', color: '#6D28D9', border: '1px solid #C4B5FD',
+                      borderRadius: 6, fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer'
+                    }}
+                    title="View GPS trail on map"
+                  >🗺️ View on Map</button>
+                )}
+
                 {/* Late warning */}
                 {shift.shift_status === 'late' && (
                   <div style={{ marginTop: '0.35rem', fontSize: '0.82rem', fontWeight: 700, color: '#DC2626' }}>
@@ -216,6 +231,30 @@ const LiveBoard = ({ token }) => {
           50% { box-shadow: 0 0 20px rgba(239,68,68,0.4); }
         }
       `}</style>
+
+      {/* GPS trail map modal for the selected shift */}
+      {mapShift && (
+        <div onClick={() => setMapShift(null)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20,
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 10, maxWidth: 900, width: '95%', maxHeight: '90vh', overflow: 'auto', padding: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h3 style={{ margin: 0, fontSize: '1rem' }}>
+                🗺️ GPS — {mapShift.caregiver_first} {mapShift.caregiver_last} → {mapShift.client_first} {mapShift.client_last}
+              </h3>
+              <button onClick={() => setMapShift(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6B7280' }}>×</button>
+            </div>
+            <VisitGpsMap
+              token={token}
+              timeEntryId={mapShift.time_entry_id}
+              clientLat={mapShift.client_lat}
+              clientLng={mapShift.client_lng}
+              clientName={`${mapShift.client_first} ${mapShift.client_last}`}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

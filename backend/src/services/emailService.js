@@ -1,45 +1,103 @@
 // services/emailService.js
-// SendGrid email service for portal invites and notifications
-const sgMail = require('@sendgrid/mail');
+// Amazon SES email service for portal invites and notifications
+const { SESv2Client, SendEmailCommand } = require('@aws-sdk/client-sesv2');
 
-const SENDGRID_API_KEY  = process.env.SENDGRID_API_KEY;
-const FROM_EMAIL        = process.env.SENDGRID_FROM_EMAIL || 'noreply@chippewavalleyhomecare.com';
-const AGENCY_NAME       = process.env.AGENCY_NAME || 'Chippewa Valley Home Care';
-const FRONTEND_URL      = process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com';
+const AWS_REGION   = process.env.AWS_REGION || 'us-east-1';
+const FROM_EMAIL   = process.env.EMAIL_FROM || process.env.SENDGRID_FROM_EMAIL || 'noreply@chippewavalleyhomecare.com';
+const AGENCY_NAME  = process.env.AGENCY_NAME || 'Chippewa Valley Home Care';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com';
 
-const isConfigured = SENDGRID_API_KEY && SENDGRID_API_KEY !== 'optional';
+// SES authenticates via the standard AWS credential chain (AWS_ACCESS_KEY_ID /
+// AWS_SECRET_ACCESS_KEY env vars, or an IAM role on the host). Treat email as
+// configured only when credentials are actually present.
+const isConfigured = !!(
+  (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+  process.env.AWS_PROFILE ||
+  process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+);
 
-if (isConfigured) {
-  sgMail.setApiKey(SENDGRID_API_KEY);
-}
+const ses = isConfigured ? new SESv2Client({ region: AWS_REGION }) : null;
 
 // ── Helper ────────────────────────────────────────────────────
-// throwOnError: when true, propagate SendGrid's actual error so the route
+// throwOnError: when true, propagate SES's actual error so the route
 // can surface it to the UI. Defaults to false to preserve existing fire-and-
 // forget callers (password resets, portal invites, etc.) that just log.
-const sendEmail = async ({ to, subject, html }, { throwOnError = false } = {}) => {
+//
+// userId + eventType opt the send into per-user notification preferences:
+//   - if both are set, sendEmail consults notificationPrefs.shouldNotify
+//     before calling SES. Caller can pass urgent: true to bypass quiet hours.
+const sendEmail = async ({ to, subject, html, userId, eventType, urgent }, { throwOnError = false } = {}) => {
+  // Honor per-user prefs when caller provides the recipient's userId
+  if (userId && eventType) {
+    try {
+      const { shouldNotify } = require('../helpers/notificationPrefs');
+      const ok = await shouldNotify(userId, 'email', eventType, { urgent: !!urgent });
+      if (!ok) {
+        console.log('[Email] skipped per user prefs:', { userId, eventType });
+        return false;
+      }
+    } catch { /* prefs failure → don't block transactional sends */ }
+  }
+
   if (!isConfigured) {
-    console.warn('[Email] SendGrid not configured — skipping email to', to);
+    console.warn('[Email] SES not configured — skipping email to', to);
     return false;
   }
 
+  const recipients = Array.isArray(to) ? to : [to];
+
   try {
-    await sgMail.send({ to, from: { email: FROM_EMAIL, name: AGENCY_NAME }, subject, html });
+    await ses.send(new SendEmailCommand({
+      FromEmailAddress: `${AGENCY_NAME} <${FROM_EMAIL}>`,
+      Destination: { ToAddresses: recipients },
+      Content: {
+        Simple: {
+          Subject: { Data: subject, Charset: 'UTF-8' },
+          Body: { Html: { Data: html, Charset: 'UTF-8' } },
+        },
+      },
+    }));
     console.log('[Email] Sent to', to, '—', subject);
     return true;
   } catch (error) {
-    const sgErrors = error?.response?.body?.errors;
-    const detail = Array.isArray(sgErrors) && sgErrors.length
-      ? sgErrors.map(e => e.message).join('; ')
-      : error.message;
-    console.error('[Email] Failed to send to', to, ':', sgErrors || error.message);
+    console.error('[Email] Failed to send to', to, ':', error.message);
     if (throwOnError) {
-      const err = new Error(detail || 'SendGrid send failed');
-      err.sendgrid = sgErrors || null;
-      throw err;
+      throw new Error(error.message || 'SES send failed');
     }
     return false;
   }
+};
+
+// sendCriticalNotification — for things like password resets, portal invites,
+// no-show alerts where the user MUST know. Tries email first; if email fails
+// (SES down, recipient bounce, prefs blocked) and a phone number is provided,
+// falls back to SMS via Twilio. Returns { email, sms } booleans.
+//
+// Caller passes a smsBody (short — 160 chars or it'll segment) suitable for
+// the fallback path. Skip the SMS fallback by omitting smsTo or smsBody.
+const sendCriticalNotification = async ({
+  to, subject, html, smsTo, smsBody, userId, eventType = 'message',
+}) => {
+  let emailOk = false, smsOk = false;
+  try {
+    emailOk = await sendEmail({ to, subject, html, userId, eventType, urgent: true });
+  } catch (e) { console.error('[Critical] email failed:', e.message); }
+  if (!emailOk && smsTo && smsBody) {
+    try {
+      const twilio = require('twilio');
+      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+        const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+        await client.messages.create({
+          body: smsBody, from: process.env.TWILIO_PHONE_NUMBER, to: smsTo,
+        });
+        smsOk = true;
+        console.log('[Critical] email failed, SMS fallback sent to', smsTo);
+      } else {
+        console.warn('[Critical] email failed and Twilio not configured — message NOT delivered to', to);
+      }
+    } catch (e) { console.error('[Critical] SMS fallback failed:', e.message); }
+  }
+  return { email: emailOk, sms: smsOk };
 };
 
 // ── Email wrapper ─────────────────────────────────────────────
@@ -383,6 +441,7 @@ const sendAdminBgcResult = async ({ to, caregiverName, status, summary, matches 
 
 module.exports = {
   sendEmail,
+  sendCriticalNotification,
   sendClientPortalInvite,
   sendFamilyPortalWelcome,
   sendFamilyPasswordReset,

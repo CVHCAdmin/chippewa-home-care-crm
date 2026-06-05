@@ -297,7 +297,7 @@ router.post('/forgot-password', async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
-    const result = await db.query('SELECT id, email, first_name FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase().trim()]);
+    const result = await db.query('SELECT id, email, first_name, phone FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase().trim()]);
 
     // Always return success to prevent email enumeration
     if (!result.rows.length) return res.json({ success: true, message: 'If an account exists with that email, a reset link has been sent.' });
@@ -311,12 +311,20 @@ router.post('/forgot-password', async (req, res) => {
       [resetToken, expiresAt, user.id]
     );
 
-    // Send reset email
-    const { sendPasswordReset } = require('../services/emailService');
+    // Send reset via email; fall back to SMS if email fails AND we have a phone
+    const { sendCriticalNotification } = require('../services/emailService');
     const frontendUrl = process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com';
     const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
-
-    await sendPasswordReset({ to: user.email, userName: user.first_name, resetUrl });
+    const html = `<p>Hi ${user.first_name || ''},</p>
+      <p>Click the link below to reset your password. The link expires in 1 hour.</p>
+      <p><a href="${resetUrl}">Reset password</a></p>
+      <p>If you did not request this, ignore this email — your password is unchanged.</p>`;
+    const smsBody = `Reset your password: ${resetUrl} (expires in 1 hour). If you didn't request this, ignore it.`;
+    await sendCriticalNotification({
+      to: user.email, subject: 'Reset your password', html,
+      smsTo: user.phone || null, smsBody,
+      userId: user.id, eventType: 'message',
+    });
 
     res.json({ success: true, message: 'If an account exists with that email, a reset link has been sent.' });
   } catch (error) {

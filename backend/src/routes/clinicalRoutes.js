@@ -90,6 +90,8 @@ router.post('/care-plans', verifyToken, requireAdmin, async (req, res) => {
 router.put('/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { serviceType, serviceDescription, frequency, careGoals, specialInstructions, precautions, medicationNotes, mobilityNotes, dietaryNotes, communicationNotes, startDate, endDate } = req.body;
+    // Set session GUC so the snapshot trigger can record changed_by
+    await db.query(`SELECT set_config('crm.user_id', $1, true)`, [req.user.id]);
     const result = await db.query(
       `UPDATE care_plans SET service_type=COALESCE($1,service_type), service_description=COALESCE($2,service_description), frequency=COALESCE($3,frequency), care_goals=COALESCE($4,care_goals), special_instructions=COALESCE($5,special_instructions), precautions=COALESCE($6,precautions), medication_notes=COALESCE($7,medication_notes), mobility_notes=COALESCE($8,mobility_notes), dietary_notes=COALESCE($9,dietary_notes), communication_notes=COALESCE($10,communication_notes), start_date=COALESCE($11,start_date), end_date=COALESCE($12,end_date), updated_at=NOW() WHERE id=$13 RETURNING *`,
       [serviceType, serviceDescription, frequency, careGoals, specialInstructions, precautions, medicationNotes, mobilityNotes, dietaryNotes, communicationNotes, startDate, endDate, req.params.id]
@@ -97,6 +99,21 @@ router.put('/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
     await auditLog(req.user.id, 'UPDATE', 'care_plans', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/clinical/care-plans/:id/revisions — list snapshots of prior versions
+router.get('/care-plans/:id/revisions', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT cpr.*, u.first_name AS changed_by_first, u.last_name AS changed_by_last
+         FROM care_plan_revisions cpr
+         LEFT JOIN users u ON cpr.changed_by = u.id
+        WHERE cpr.care_plan_id = $1
+        ORDER BY cpr.revision_number DESC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

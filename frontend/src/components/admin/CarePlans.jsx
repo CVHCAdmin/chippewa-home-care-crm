@@ -15,6 +15,19 @@ const CarePlans = ({ token }) => {
   const [templates, setTemplates] = useState([]);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [templateClientId, setTemplateClientId] = useState('');
+  const [revisionsFor, setRevisionsFor] = useState(null); // care plan being inspected
+  const [revisions, setRevisions] = useState([]);
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
+
+  const loadRevisions = async (plan) => {
+    setRevisionsFor(plan);
+    setRevisionsLoading(true); setRevisions([]);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/care-plans/${plan.id}/revisions`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setRevisions(await r.json());
+    } catch { /* ignore */ }
+    finally { setRevisionsLoading(false); }
+  };
   const [genForm, setGenForm] = useState({
     caregiverId: '', startTime: '09:00', endTime: '13:00', daysOfWeek: [], startDate: '', endDate: ''
   });
@@ -547,6 +560,12 @@ const CarePlans = ({ token }) => {
                                   </button>
                                   <button
                                     className="btn btn-sm btn-secondary"
+                                    title="View previous versions of this care plan"
+                                    onClick={(e) => { e.stopPropagation(); loadRevisions(plan); }}>
+                                    📜 History
+                                  </button>
+                                  <button
+                                    className="btn btn-sm btn-secondary"
                                     title="Download a printable PDF"
                                     onClick={async (e) => {
                                       e.stopPropagation();
@@ -711,6 +730,85 @@ const CarePlans = ({ token }) => {
           </div>
         </div>
       )}
+
+      {/* Revision history modal */}
+      {revisionsFor && (() => {
+        const FIELDS = [
+          ['service_type', 'Service Type'],
+          ['service_description', 'Service Description'],
+          ['frequency', 'Frequency'],
+          ['care_goals', 'Care Goals'],
+          ['special_instructions', 'Special Instructions'],
+          ['precautions', 'Precautions'],
+          ['medication_notes', 'Medication Notes'],
+          ['mobility_notes', 'Mobility Notes'],
+          ['dietary_notes', 'Dietary Notes'],
+          ['communication_notes', 'Communication Notes'],
+          ['start_date', 'Start Date'],
+          ['end_date', 'End Date'],
+          ['status', 'Status'],
+        ];
+        // Walk newest revision → current, then chain back so each row shows
+        // "what was at revision N" vs "what was at revision N+1 / current".
+        // We compare each revision's OLD snapshot against the next-newer one
+        // (or against the current plan for the most-recent revision).
+        const sorted = [...revisions].sort((a, b) => b.revision_number - a.revision_number);
+        const newerOf = (idx) => idx === 0 ? revisionsFor : sorted[idx - 1];
+        return (
+          <div className="modal active" onClick={() => setRevisionsFor(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 820, maxHeight: '90vh', overflow: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <h3 style={{ margin: 0 }}>📜 Revision History</h3>
+                <button onClick={() => setRevisionsFor(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6B7280' }}>×</button>
+              </div>
+              {revisionsLoading ? (
+                <p style={{ color: '#6B7280' }}>Loading…</p>
+              ) : revisions.length === 0 ? (
+                <p style={{ color: '#9CA3AF' }}>No changes recorded yet for this care plan.</p>
+              ) : (
+                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                  {sorted.map((rev, idx) => {
+                    const newer = newerOf(idx);
+                    const changes = FIELDS
+                      .map(([k, label]) => ({ k, label, old: rev[k], next: newer[k] }))
+                      .filter(c => (c.old || '') !== (c.next || ''));
+                    return (
+                      <div key={rev.id} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: '0.75rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <strong>Revision #{rev.revision_number}</strong>
+                          <span style={{ fontSize: '0.78rem', color: '#6B7280' }}>
+                            {new Date(rev.changed_at).toLocaleString()}
+                            {rev.changed_by_first && ` · by ${rev.changed_by_first} ${rev.changed_by_last?.[0] || ''}.`}
+                          </span>
+                        </div>
+                        {changes.length === 0 ? (
+                          <p style={{ color: '#9CA3AF', fontSize: '0.85rem', margin: 0 }}>(snapshot; no field changes captured)</p>
+                        ) : (
+                          <div style={{ display: 'grid', gap: 6 }}>
+                            {changes.map(c => (
+                              <div key={c.k} style={{ background: '#F9FAFB', padding: '0.5rem 0.75rem', borderRadius: 6, fontSize: '0.85rem' }}>
+                                <div style={{ fontWeight: 700, color: '#374151', marginBottom: 2 }}>{c.label}</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                                  <div style={{ background: '#FEE2E2', color: '#7F1D1D', padding: 6, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+                                    − {c.old == null || c.old === '' ? <em style={{ color: '#9CA3AF' }}>(empty)</em> : String(c.old)}
+                                  </div>
+                                  <div style={{ background: '#D1FAE5', color: '#065F46', padding: 6, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+                                    + {c.next == null || c.next === '' ? <em style={{ color: '#9CA3AF' }}>(empty)</em> : String(c.next)}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
