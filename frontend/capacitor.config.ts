@@ -6,6 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     androidScheme: 'https',
+    iosScheme: 'https',
     // In development, point to your local server:
     // url: 'http://192.168.1.x:5173',
     // cleartext: true,
@@ -14,6 +15,13 @@ const config: CapacitorConfig = {
     buildOptions: {
       releaseType: 'APK',
     },
+  },
+  ios: {
+    contentInset: 'always',
+    scrollEnabled: true,
+    // Allow the in-app webview to load https://api.chippewavalleyhomecare.com etc.
+    // (background fetch requires capabilities set in Xcode separately.)
+    limitsNavigationsToAppBoundDomains: false,
   },
   plugins: {
     SplashScreen: {

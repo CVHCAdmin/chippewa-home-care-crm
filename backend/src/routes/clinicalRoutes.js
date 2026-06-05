@@ -109,6 +109,80 @@ router.delete('/care-plans/:id', verifyToken, requireAdmin, async (req, res) => 
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// ─── CARE PLAN TEMPLATES ─────────────────────────────────────────────────────
+
+router.get('/care-plan-templates', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT * FROM care_plan_templates WHERE is_active = true ORDER BY is_built_in DESC, template_name`
+    );
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+router.post('/care-plan-templates', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { templateName, templateDescription, category, serviceType, serviceDescription,
+      frequency, careGoals, specialInstructions, precautions, medicationNotes,
+      mobilityNotes, dietaryNotes, communicationNotes } = req.body;
+    if (!templateName) return res.status(400).json({ error: 'templateName is required' });
+    const result = await db.query(
+      `INSERT INTO care_plan_templates
+       (template_name, template_description, category, service_type, service_description, frequency,
+        care_goals, special_instructions, precautions, medication_notes, mobility_notes,
+        dietary_notes, communication_notes, is_built_in, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,false,$14) RETURNING *`,
+      [templateName, templateDescription, category, serviceType, serviceDescription, frequency,
+       careGoals, specialInstructions, precautions, medicationNotes, mobilityNotes,
+       dietaryNotes, communicationNotes, req.user.id]
+    );
+    await auditLog(req.user.id, 'CREATE', 'care_plan_templates', result.rows[0].id, null, result.rows[0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+router.delete('/care-plan-templates/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    // Built-in templates can't be deleted (only deactivated by the user creating
+    // a custom one with the same name). Custom templates can be hard-deleted.
+    const existing = await db.query(`SELECT is_built_in FROM care_plan_templates WHERE id = $1`, [req.params.id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Template not found' });
+    if (existing.rows[0].is_built_in) {
+      // Soft-deactivate built-ins instead
+      await db.query(`UPDATE care_plan_templates SET is_active = false, updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      return res.json({ message: 'Built-in template deactivated' });
+    }
+    await db.query(`DELETE FROM care_plan_templates WHERE id = $1`, [req.params.id]);
+    res.json({ message: 'Template deleted' });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// Create a new care_plans row from a template. The admin gets a fully
+// pre-filled plan to edit instead of a blank form.
+router.post('/care-plans/from-template/:templateId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { clientId, startDate, endDate } = req.body;
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' });
+    const tpl = await db.query(`SELECT * FROM care_plan_templates WHERE id = $1`, [req.params.templateId]);
+    if (tpl.rows.length === 0) return res.status(404).json({ error: 'Template not found' });
+    const t = tpl.rows[0];
+    const { v4: uuidv4 } = require('uuid');
+    const planId = uuidv4();
+    const result = await db.query(
+      `INSERT INTO care_plans
+       (id, client_id, service_type, service_description, frequency, care_goals,
+        special_instructions, precautions, medication_notes, mobility_notes,
+        dietary_notes, communication_notes, start_date, end_date, created_by, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'draft') RETURNING *`,
+      [planId, clientId, t.service_type, t.service_description, t.frequency, t.care_goals,
+       t.special_instructions, t.precautions, t.medication_notes, t.mobility_notes,
+       t.dietary_notes, t.communication_notes, startDate || null, endDate || null, req.user.id]
+    );
+    await auditLog(req.user.id, 'CREATE', 'care_plans', planId, null, { ...result.rows[0], _from_template: t.template_name });
+    res.status(201).json({ carePlan: result.rows[0], appliedTemplate: t.template_name });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // ─── CARE PLAN → SCHEDULE GENERATION ─────────────────────────────────────────
 
 router.post('/care-plans/:id/generate-schedule', verifyToken, requireAdmin, async (req, res) => {

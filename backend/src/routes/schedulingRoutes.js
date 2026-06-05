@@ -75,6 +75,7 @@ router.get('/suggest-caregivers', verifyToken, async (req, res) => {
 
     const client = await db.query(`
       SELECT c.id, c.first_name, c.last_name, c.care_type_id, c.latitude, c.longitude,
+             c.preferred_caregivers, c.do_not_use_caregivers, c.gender,
              ct.name as care_type_name, ct.required_certifications
       FROM clients c LEFT JOIN care_types ct ON c.care_type_id = ct.id
       WHERE c.id = $1
@@ -86,21 +87,38 @@ router.get('/suggest-caregivers', verifyToken, async (req, res) => {
     const shiftHours = startTime && endTime
       ? (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60) : 4;
 
+    // Day-of-week + time-of-day availability check uses caregiver_availability
+    // {monday|...|sunday}_{available|start_time|end_time}
+    const dow = date ? new Date(date + 'T12:00:00Z').getUTCDay() : null;
+    const dayMap = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    const dayCol = dow != null ? dayMap[dow] : null;
+    const availableCol  = dayCol ? `ca.${dayCol}_available`  : 'NULL::boolean';
+    const startTimeCol  = dayCol ? `ca.${dayCol}_start_time` : 'NULL::time';
+    const endTimeCol    = dayCol ? `ca.${dayCol}_end_time`   : 'NULL::time';
+
     const caregivers = await db.query(`
       SELECT u.id, u.first_name, u.last_name, u.phone, u.default_pay_rate,
-             u.latitude, u.longitude, u.certifications,
+             u.latitude, u.longitude, u.certifications, u.gender,
              ca.status as availability_status, ca.max_hours_per_week,
+             ${availableCol} AS day_available,
+             ${startTimeCol} AS day_start_time,
+             ${endTimeCol}   AS day_end_time,
              ARRAY_AGG(DISTINCT cc.certification_name)
                FILTER (WHERE cc.certification_name IS NOT NULL AND (cc.expiration_date IS NULL OR cc.expiration_date > CURRENT_DATE))
-               as active_certifications
+               as active_certifications,
+             (SELECT EXISTS (SELECT 1 FROM caregiver_blackout_dates b
+                WHERE b.caregiver_id = u.id
+                  AND $1::date IS NOT NULL
+                  AND b.start_date <= $1::date AND b.end_date >= $1::date)) AS is_blacked_out
       FROM users u
       LEFT JOIN caregiver_availability ca ON u.id = ca.caregiver_id
       LEFT JOIN caregiver_certifications cc ON u.id = cc.caregiver_id
       WHERE u.role = 'caregiver' AND u.is_active = true
-      GROUP BY u.id, u.first_name, u.last_name, u.phone, u.default_pay_rate,
-               u.latitude, u.longitude, u.certifications, ca.status, ca.max_hours_per_week
+      GROUP BY u.id, u.first_name, u.last_name, u.phone, u.default_pay_rate, u.gender,
+               u.latitude, u.longitude, u.certifications, ca.status, ca.max_hours_per_week,
+               ${availableCol}, ${startTimeCol}, ${endTimeCol}
       ORDER BY u.first_name
-    `);
+    `, [date || null]);
 
     const weekStart = date ? getWeekStart(new Date(date)) : getWeekStart(new Date());
     const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 6);
@@ -118,6 +136,14 @@ router.get('/suggest-caregivers', verifyToken, async (req, res) => {
     const historyMap = {}; historyResult.rows.forEach(r => historyMap[r.caregiver_id] = parseInt(r.visit_count)||0);
     const conflictIds = new Set(conflictsResult.rows.map(r => r.caregiver_id));
 
+    // Client preferences — DNU is a hard exclude, preferred gets a big boost
+    const preferredIds = new Set((clientData.preferred_caregivers || []).map(String));
+    const dnuIds       = new Set((clientData.do_not_use_caregivers || []).map(String));
+
+    const toMin = (t) => { if (!t) return null; const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+    const shiftStart = toMin(startTime);
+    const shiftEnd   = toMin(endTime);
+
     const ranked = caregivers.rows.map(cg => {
       const weeklyHours = hoursMap[cg.id] || 0;
       const maxHours = cg.max_hours_per_week || 40;
@@ -130,33 +156,105 @@ router.get('/suggest-caregivers', verifyToken, async (req, res) => {
       const estimatedDriveTime = distance ? Math.round(distance * 2) : null;
       const certCheck = checkRequiredCerts(cg.active_certifications, requiredCerts);
 
+      const isPreferred = preferredIds.has(String(cg.id));
+      const isDnu       = dnuIds.has(String(cg.id));
+      const isBlackedOut = cg.is_blacked_out === true;
+
+      // Day-of-week + time-of-day availability check
+      const cgAvailStart = toMin(cg.day_start_time);
+      const cgAvailEnd   = toMin(cg.day_end_time);
+      const dayAvailable = cg.day_available === true;
+      const timeFitsWindow = (cgAvailStart != null && cgAvailEnd != null && shiftStart != null && shiftEnd != null)
+        ? (shiftStart >= cgAvailStart && shiftEnd <= cgAvailEnd)
+        : null; // unknown — don't penalize
+
       let score = 100;
+
+      // Hard exclusions: massive negative so they sink to the bottom
+      if (isDnu)        score -= 1000;
+      if (isBlackedOut) score -= 1000;
+      if (hasConflict)  score -= 200;
+      if (!isAvailable) score -= 200;
+
+      // Preferred caregiver = big positive
+      if (isPreferred)  score += 60;
+
+      // History / continuity (capped so a single super-familiar caregiver
+      // doesn't dominate when distance/cert are bad)
       score += Math.min(visitCount * 3, 30);
-      if (!isAvailable) score -= 100;
-      if (hasConflict) score -= 100;
+
+      // Capacity load — prefer caregivers below 70% of cap
       score -= (weeklyHours / maxHours) * 20;
-      if (wouldExceedHours) score -= 50;
-      if (approachingOvertime) score -= 10;
-      if (distance !== null) { if (distance <= 5) score += 20; else if (distance <= 10) score += 10; else if (distance <= 20) score += 5; else if (distance > 30) score -= 15; }
+      if (wouldExceedHours)     score -= 50;
+      if (approachingOvertime)  score -= 10;
+
+      // Distance
+      if (distance !== null) {
+        if (distance <= 5) score += 20;
+        else if (distance <= 10) score += 10;
+        else if (distance <= 20) score += 5;
+        else if (distance > 30) score -= 15;
+      }
+
+      // Cert match
       if (!certCheck.hasAll) score -= 40;
 
+      // Day-of-week availability window from caregiver_availability
+      if (dayCol) {
+        if (dayAvailable === false) score -= 50;
+        else if (timeFitsWindow === true) score += 15;
+        else if (timeFitsWindow === false) score -= 20;
+      }
+
       const reasons = [];
+      if (isDnu) reasons.push('🚫 Client do-not-use list');
+      if (isBlackedOut) reasons.push('🚫 PTO/blackout on this date');
+      if (isPreferred) reasons.push('⭐ Preferred caregiver');
       if (visitCount > 5) reasons.push(`✓ Familiar (${visitCount} visits)`);
       else if (visitCount > 0) reasons.push(`${visitCount} prior visits`);
-      if (hasConflict) reasons.push('⚠️ Conflict');
-      if (!isAvailable) reasons.push('⚠️ Unavailable');
+      if (hasConflict) reasons.push('⚠️ Conflicting shift');
+      if (!isAvailable) reasons.push('⚠️ Marked unavailable');
       if (wouldExceedHours) reasons.push('⚠️ Exceeds max hours');
       else if (approachingOvertime) reasons.push(`⚠️ ${weeklyHours.toFixed(0)}h this week`);
       else if (weeklyHours < 20) reasons.push('✓ Has availability');
-      if (distance !== null) { if (distance <= 5) reasons.push(`✓ Nearby (${distance.toFixed(1)} mi)`); else if (distance <= 15) reasons.push(`${distance.toFixed(1)} mi away`); else if (distance > 20) reasons.push(`⚠️ Far (${distance.toFixed(1)} mi)`); }
-      if (!certCheck.hasAll) reasons.push(`⚠️ Missing: ${certCheck.missing.join(', ')}`);
+      if (dayCol && dayAvailable === false) reasons.push(`⚠️ Not available ${dayMap[dow]}s`);
+      else if (timeFitsWindow === true) reasons.push('✓ Time fits availability window');
+      else if (timeFitsWindow === false) reasons.push('⚠️ Outside availability window');
+      if (distance !== null) {
+        if (distance <= 5) reasons.push(`✓ Nearby (${distance.toFixed(1)} mi)`);
+        else if (distance <= 15) reasons.push(`${distance.toFixed(1)} mi away`);
+        else if (distance > 20) reasons.push(`⚠️ Far (${distance.toFixed(1)} mi)`);
+      }
+      if (!certCheck.hasAll) reasons.push(`⚠️ Missing certs: ${certCheck.missing.join(', ')}`);
       else if (requiredCerts.length > 0) reasons.push('✓ Has required certs');
 
-      return { ...cg, weeklyHours: weeklyHours.toFixed(2), maxHours, visitCount, hasConflict, isAvailable, wouldExceedHours, approachingOvertime, distance: distance ? distance.toFixed(1) : null, estimatedDriveTime, hasRequiredSkills: certCheck.hasAll, missingCertifications: certCheck.missing, score: Math.round(score), reasons };
+      // Tier label for the UI to badge cleanly
+      let tier;
+      if (score >= 130) tier = 'excellent';
+      else if (score >= 100) tier = 'good';
+      else if (score >= 60) tier = 'maybe';
+      else tier = 'avoid';
+
+      return {
+        ...cg,
+        weeklyHours: weeklyHours.toFixed(2), maxHours,
+        visitCount, hasConflict, isAvailable, isPreferred, isDnu, isBlackedOut,
+        wouldExceedHours, approachingOvertime,
+        distance: distance ? distance.toFixed(1) : null, estimatedDriveTime,
+        hasRequiredSkills: certCheck.hasAll, missingCertifications: certCheck.missing,
+        score: Math.round(score), tier, reasons,
+      };
     });
 
-    ranked.sort((a, b) => b.score - a.score);
-    res.json({ client: clientData, suggestions: ranked, shiftHours, requiredCertifications: requiredCerts });
+    // Filter out DNU/blacked-out from the default response (still in DB if
+    // caller asks with ?includeBlocked=true)
+    const blockedFiltered = req.query.includeBlocked === 'true'
+      ? ranked
+      : ranked.filter(c => !c.isDnu && !c.isBlackedOut);
+
+    blockedFiltered.sort((a, b) => b.score - a.score);
+    const ranked_out = blockedFiltered;
+    res.json({ client: clientData, suggestions: ranked_out, shiftHours, requiredCertifications: requiredCerts });
   } catch (error) {
     console.error('Suggest caregivers error:', error);
     res.status(500).json({ error: error.message });

@@ -12,6 +12,9 @@ const CarePlans = ({ token }) => {
   const [showForm, setShowForm] = useState(false);
   const [showGenModal, setShowGenModal] = useState(null);
   const [caregivers, setCaregivers] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templateClientId, setTemplateClientId] = useState('');
   const [genForm, setGenForm] = useState({
     caregiverId: '', startTime: '09:00', endTime: '13:00', daysOfWeek: [], startDate: '', endDate: ''
   });
@@ -41,6 +44,7 @@ const CarePlans = ({ token }) => {
   useEffect(() => {
     loadData();
     loadCaregivers();
+    loadTemplates();
   }, []);
 
   const loadCaregivers = async () => {
@@ -48,6 +52,31 @@ const CarePlans = ({ token }) => {
       const r = await fetch(`${API_BASE_URL}/api/caregivers`, { headers: { 'Authorization': `Bearer ${token}` } });
       if (r.ok) setCaregivers(await r.json());
     } catch (e) {}
+  };
+
+  const loadTemplates = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/care-plan-templates`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (r.ok) setTemplates(await r.json());
+    } catch (e) {}
+  };
+
+  const applyTemplate = async (templateId) => {
+    if (!templateClientId) { setMessage('Pick a client first'); return; }
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/care-plans/from-template/${templateId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ clientId: templateClientId, startDate: new Date().toISOString().split('T')[0] }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Failed');
+      setMessage(`Created draft care plan from "${data.appliedTemplate}"`);
+      setShowTemplateModal(false);
+      setTemplateClientId('');
+      loadData();
+      setTimeout(() => setMessage(''), 5000);
+    } catch (err) { setMessage('Error: ' + err.message); }
   };
 
   const handleGenerateSchedule = async (e) => {
@@ -215,13 +244,71 @@ const CarePlans = ({ token }) => {
     <div>
       <div className="page-header">
         <h2>Care Plans & Service Agreements</h2>
-        <button
-          className="btn btn-primary"
-          onClick={() => setShowForm(!showForm)}
-        >
-          {showForm ? 'Cancel' : 'Add Care Plan'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowTemplateModal(true)}
+            title="Start from a pre-built template"
+          >
+            📋 Use Template ({templates.length})
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowForm(!showForm)}
+          >
+            {showForm ? 'Cancel' : 'Add Care Plan'}
+          </button>
+        </div>
       </div>
+
+      {showTemplateModal && (
+        <div className="modal active" onClick={() => setShowTemplateModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
+            <div className="modal-header">
+              <h2>📋 Create from Template</h2>
+              <button className="close-btn" onClick={() => setShowTemplateModal(false)}>×</button>
+            </div>
+            <div style={{ padding: '0 1rem 1rem' }}>
+              <div className="form-group">
+                <label>Client *</label>
+                <select value={templateClientId} onChange={(e) => setTemplateClientId(e.target.value)} required>
+                  <option value="">Select client...</option>
+                  {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'grid', gap: '0.5rem', maxHeight: '60vh', overflow: 'auto' }}>
+                {templates.length === 0 && <p className="text-muted">No templates available.</p>}
+                {templates.map(t => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={!templateClientId}
+                    onClick={() => applyTemplate(t.id)}
+                    style={{
+                      textAlign: 'left', padding: '1rem',
+                      background: templateClientId ? '#fff' : '#F9FAFB',
+                      border: '1px solid #E5E7EB', borderRadius: 8,
+                      cursor: templateClientId ? 'pointer' : 'not-allowed',
+                      opacity: templateClientId ? 1 : 0.6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+                      <strong style={{ fontSize: '1rem' }}>{t.template_name}</strong>
+                      {t.is_built_in && <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>built-in</span>}
+                    </div>
+                    {t.template_description && (
+                      <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>{t.template_description}</div>
+                    )}
+                    <div style={{ fontSize: '0.75rem', color: '#9CA3AF', marginTop: 4 }}>
+                      {t.service_type} · {t.frequency}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {message && (
         <div className={`alert ${message.includes('Error') ? 'alert-error' : 'alert-success'}`}>

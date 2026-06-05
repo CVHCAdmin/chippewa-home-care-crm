@@ -190,6 +190,84 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
   }
 });
 
+// ─── eSIGNATURE ─────────────────────────────────────────────────────────────
+// POST /api/documents/:id/sign
+// Body: { signatureImageBase64, signerRole?, typedName? }
+router.post('/:id/sign', auth, async (req, res) => {
+  const { signatureImageBase64, signerRole, typedName } = req.body;
+  if (!signatureImageBase64 || !signatureImageBase64.startsWith('data:image')) {
+    return res.status(400).json({ error: 'signatureImageBase64 (data URI) is required' });
+  }
+  if (signatureImageBase64.length > 2_000_000) {
+    return res.status(400).json({ error: 'Signature image too large (max ~1.5MB)' });
+  }
+  try {
+    const doc = await db.query(
+      `SELECT id, entity_type, entity_id, requires_signature FROM documents WHERE id = $1`,
+      [req.params.id]
+    );
+    if (doc.rows.length === 0) return res.status(404).json({ error: 'Document not found' });
+
+    // Authz: admin can sign any; the entity owner can sign their own
+    const d = doc.rows[0];
+    if (req.user?.role !== 'admin') {
+      if (d.entity_type === 'caregiver' && d.entity_id !== req.user.id) {
+        return res.status(403).json({ error: 'Not allowed to sign this document' });
+      }
+      if (d.entity_type !== 'caregiver' && d.entity_type !== 'company') {
+        return res.status(403).json({ error: 'Not allowed to sign this document' });
+      }
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.connection?.remoteAddress || '').toString().slice(0, 45);
+    const ua = (req.headers['user-agent'] || '').toString().slice(0, 300);
+
+    // Update the document's latest-signature columns
+    const updated = await db.query(
+      `UPDATE documents
+          SET signed_at = NOW(),
+              signed_by = $2,
+              signature_image_base64 = $3,
+              signature_ip = $4,
+              signature_user_agent = $5,
+              signature_typed_name = $6,
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, signed_at, signed_by, signature_typed_name`,
+      [req.params.id, req.user.id, signatureImageBase64, ip, ua, typedName || null]
+    );
+
+    // Append to history table for audit
+    await db.query(
+      `INSERT INTO document_signatures
+       (document_id, signed_by, signer_role, signer_typed_name, signature_image_base64, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [req.params.id, req.user.id, signerRole || null, typedName || null, signatureImageBase64, ip, ua]
+    );
+
+    res.json({ success: true, document: updated.rows[0] });
+  } catch (error) {
+    console.error('[documents/sign]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/documents/:id/signatures — list signature history
+router.get('/:id/signatures', auth, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT ds.id, ds.signer_role, ds.signer_typed_name, ds.signed_at, ds.ip_address,
+              u.first_name, u.last_name, u.email
+         FROM document_signatures ds
+         LEFT JOIN users u ON ds.signed_by = u.id
+        WHERE ds.document_id = $1
+        ORDER BY ds.signed_at DESC`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // Delete document
 router.delete('/:id', auth, async (req, res) => {
   try {

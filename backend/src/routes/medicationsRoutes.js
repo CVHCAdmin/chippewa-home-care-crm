@@ -77,19 +77,98 @@ router.put('/:id/discontinue', auth, async (req, res) => {
 
 // Log medication administration
 router.post('/log', auth, async (req, res) => {
-  const { clientId, medicationId, caregiverId, timeEntryId, scheduledTime, administeredTime, status, dosageGiven, notes } = req.body;
-  
+  const { clientId, medicationId, caregiverId, timeEntryId, scheduledTime, administeredTime, status, dosageGiven, notes, witnessedBy } = req.body;
+
+  // Validate status. 'given' is the historical default; the v39 migration
+  // added a stricter effective_status column for new entries.
+  const ALLOWED = ['given', 'refused', 'held', 'self_administered', 'missed'];
+  const effStatus = ALLOWED.includes(status) ? status : 'given';
+
   try {
     const result = await db.query(`
-      INSERT INTO medication_logs 
-      (client_id, medication_id, caregiver_id, time_entry_id, scheduled_time, administered_time, status, dosage_given, notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO medication_logs
+      (client_id, medication_id, caregiver_id, time_entry_id, scheduled_time, administered_time,
+       status, effective_status, dosage_given, notes, witnessed_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10)
       RETURNING *
-    `, [clientId, medicationId, caregiverId, timeEntryId, scheduledTime, administeredTime || new Date(), status, dosageGiven, notes]);
+    `, [clientId, medicationId, caregiverId, timeEntryId, scheduledTime,
+        administeredTime || new Date(), effStatus, dosageGiven, notes, witnessedBy || null]);
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// ─── VITALS ─────────────────────────────────────────────────────────────────
+// POST /api/medications/vitals — record a vitals snapshot
+router.post('/vitals', auth, async (req, res) => {
+  const {
+    clientId, caregiverId, timeEntryId,
+    systolicBp, diastolicBp, pulse, respirations, oxygenSaturation,
+    temperatureF, bloodGlucose, weightLbs,
+    painScale, painLocation, notes,
+  } = req.body;
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' });
+  // At least one vital must be present — empty submissions are useless
+  const anyVital = [systolicBp, diastolicBp, pulse, respirations, oxygenSaturation,
+    temperatureF, bloodGlucose, weightLbs, painScale].some(v => v != null && v !== '');
+  if (!anyVital) return res.status(400).json({ error: 'At least one vital measurement is required' });
+
+  try {
+    const result = await db.query(
+      `INSERT INTO client_vitals
+       (client_id, caregiver_id, time_entry_id, systolic_bp, diastolic_bp, pulse, respirations,
+        oxygen_saturation, temperature_f, blood_glucose, weight_lbs, pain_scale, pain_location, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+      [clientId, caregiverId || req.user?.id || null, timeEntryId || null,
+       systolicBp || null, diastolicBp || null, pulse || null, respirations || null,
+       oxygenSaturation || null, temperatureF || null, bloodGlucose || null, weightLbs || null,
+       painScale != null && painScale !== '' ? parseInt(painScale) : null, painLocation || null, notes || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    // CHECK constraint failures bubble up as friendly 400s
+    if (error.message.includes('vitals_')) {
+      return res.status(400).json({ error: 'One or more values out of plausible range: ' + error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/medications/vitals/client/:clientId — list a client's vitals
+router.get('/vitals/client/:clientId', auth, async (req, res) => {
+  const { limit = 50, startDate, endDate } = req.query;
+  const params = [req.params.clientId];
+  let where = 'cv.client_id = $1';
+  if (startDate) { params.push(startDate); where += ` AND cv.recorded_at >= $${params.length}::timestamptz`; }
+  if (endDate)   { params.push(endDate);   where += ` AND cv.recorded_at <= $${params.length}::timestamptz`; }
+  params.push(Math.min(parseInt(limit) || 50, 500));
+  try {
+    const result = await db.query(`
+      SELECT cv.*, u.first_name AS caregiver_first, u.last_name AS caregiver_last
+        FROM client_vitals cv
+        LEFT JOIN users u ON cv.caregiver_id = u.id
+       WHERE ${where}
+       ORDER BY cv.recorded_at DESC
+       LIMIT $${params.length}
+    `, params);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/medications/vitals/latest/:clientId — latest single snapshot
+router.get('/vitals/latest/:clientId', auth, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT cv.*, u.first_name AS caregiver_first, u.last_name AS caregiver_last
+         FROM client_vitals cv
+         LEFT JOIN users u ON cv.caregiver_id = u.id
+        WHERE cv.client_id = $1
+        ORDER BY cv.recorded_at DESC LIMIT 1`,
+      [req.params.clientId]
+    );
+    res.json(result.rows[0] || null);
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 // Get medication logs for a client
