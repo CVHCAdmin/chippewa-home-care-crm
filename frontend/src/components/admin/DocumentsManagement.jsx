@@ -3,6 +3,7 @@ import { toast } from '../Toast';
 // src/components/admin/DocumentsManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import SignaturePad from '../SignaturePad';
 
 const DocumentsManagement = ({ token }) => {
   const [documents, setDocuments] = useState([]);
@@ -11,6 +12,7 @@ const DocumentsManagement = ({ token }) => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [clients, setClients] = useState([]);
   const [caregivers, setCaregivers] = useState([]);
+  const [signTarget, setSignTarget] = useState(null); // document being signed
 
   useEffect(() => {
     loadDocuments();
@@ -92,6 +94,22 @@ const DocumentsManagement = ({ token }) => {
     } catch (error) {
       toast('Failed: ' + error.message, 'error');
     }
+  };
+
+  const submitSignature = async (dataUri, typedName) => {
+    if (!signTarget) return;
+    const res = await fetch(`${API_BASE_URL}/api/documents/${signTarget.id}/sign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ signatureImageBase64: dataUri, typedName }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Sign failed (${res.status})`);
+    }
+    toast('Signature captured ✓');
+    setSignTarget(null);
+    loadDocuments();
   };
 
   const downloadDocument = async (doc) => {
@@ -288,15 +306,31 @@ const DocumentsManagement = ({ token }) => {
                     ) : '-'}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: '0.25rem' }}>
-                      <button 
+                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                      {doc.requires_signature && !doc.signed_at && (
+                        <button
+                          className="btn btn-sm"
+                          style={{ background: '#2ABBA7', color: '#fff', border: 'none' }}
+                          onClick={() => setSignTarget(doc)}
+                          title="Capture electronic signature"
+                        >
+                          ✍️ Sign
+                        </button>
+                      )}
+                      {doc.signed_at && (
+                        <span title={`Signed ${new Date(doc.signed_at).toLocaleString()}`}
+                          style={{ background: '#D1FAE5', color: '#065F46', fontSize: '0.72rem', fontWeight: 700, padding: '2px 6px', borderRadius: 4, alignSelf: 'center' }}>
+                          ✓ Signed
+                        </span>
+                      )}
+                      <button
                         className="btn btn-sm btn-secondary"
                         onClick={() => downloadDocument(doc)}
                         title="Download"
                       >
                         ⬇️
                       </button>
-                      <button 
+                      <button
                         className="btn btn-sm btn-danger"
                         onClick={() => deleteDocument(doc.id)}
                         title="Delete"
@@ -329,6 +363,13 @@ const DocumentsManagement = ({ token }) => {
           </div>
         </div>
       )}
+
+      <SignaturePad
+        open={!!signTarget}
+        onClose={() => setSignTarget(null)}
+        documentName={signTarget?.document_name || signTarget?.file_name}
+        onSign={submitSignature}
+      />
     </div>
   );
 };

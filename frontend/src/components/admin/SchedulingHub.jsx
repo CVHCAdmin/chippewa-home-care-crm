@@ -93,6 +93,11 @@ const SchedulingHub = ({ token }) => {
   const [coverageLoading, setCoverageLoading] = useState(false);
   const [coverageWeekOf, setCoverageWeekOf]   = useState(getWeekStart(new Date()).toISOString().split('T')[0]);
 
+  // ── Caregiver suggestion state (for the create-shift form) ──
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+
   // ── Open Shifts state ──
   const [openShifts, setOpenShifts]                 = useState([]);
   const [openShiftsLoading, setOpenShiftsLoading]   = useState(false);
@@ -212,6 +217,33 @@ const SchedulingHub = ({ token }) => {
     try { const data = await api(`/api/scheduling/coverage-overview?weekOf=${coverageWeekOf}`); setCoverageData(data); }
     catch (e) { console.error(e); }
     finally { setCoverageLoading(false); }
+  };
+
+  const loadSuggestions = async () => {
+    if (!formData.clientId) { showMsg('Pick a client first', 'error'); return; }
+    setSuggestLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        clientId: formData.clientId,
+        ...(formData.date ? { date: formData.date } : {}),
+        ...(formData.startTime ? { startTime: formData.startTime } : {}),
+        ...(formData.endTime ? { endTime: formData.endTime } : {}),
+      });
+      const data = await api(`/api/scheduling/suggest-caregivers?${qs}`);
+      setSuggestions(data?.suggestions || []);
+      setShowSuggestions(true);
+    } catch (e) { showMsg('Suggest failed: ' + e.message, 'error'); }
+    finally { setSuggestLoading(false); }
+  };
+
+  const tierStyle = (tier) => {
+    const colors = {
+      excellent: { bg: '#D1FAE5', fg: '#065F46', label: '★ Excellent' },
+      good:      { bg: '#DBEAFE', fg: '#1E40AF', label: '✓ Good' },
+      maybe:     { bg: '#FEF3C7', fg: '#92400E', label: '? Maybe' },
+      avoid:     { bg: '#FEE2E2', fg: '#991B1B', label: '⚠ Avoid' },
+    };
+    return colors[tier] || colors.maybe;
   };
 
   const loadCalendarData = async () => {
@@ -1249,12 +1281,58 @@ const SchedulingHub = ({ token }) => {
           <div style={{ flex: '0 0 480px', minWidth: 0 }}>
 
             <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Caregiver *</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                <label style={{ fontWeight: '600', fontSize: '0.9rem', margin: 0 }}>Caregiver *</label>
+                <button type='button' onClick={loadSuggestions} disabled={suggestLoading || !formData.clientId}
+                  title={formData.clientId ? 'Rank caregivers by fit (preferences, availability, distance, certs, OT)' : 'Pick a client first'}
+                  style={{ background: 'none', border: '1px solid #2ABBA7', color: '#0F766E', borderRadius: 6,
+                           padding: '0.2rem 0.55rem', fontSize: '0.78rem', fontWeight: 700,
+                           cursor: formData.clientId ? 'pointer' : 'not-allowed', opacity: formData.clientId ? 1 : 0.5 }}>
+                  {suggestLoading ? '…' : '✨ Suggest'}
+                </button>
+              </div>
               <select value={selectedCaregiverId} onChange={(e) => handleCaregiverSelectCreate(e.target.value)}
                 style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }}>
                 <option value=''>Choose a caregiver...</option>
                 {caregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
               </select>
+
+              {showSuggestions && (
+                <div style={{ marginTop: '0.5rem', border: '1px solid #E5E7EB', borderRadius: 8, padding: '0.5rem', background: '#FAFAFA', maxHeight: 320, overflow: 'auto' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <strong style={{ fontSize: '0.82rem', color: '#374151' }}>Ranked suggestions ({suggestions.length})</strong>
+                    <button type='button' onClick={() => setShowSuggestions(false)}
+                      style={{ background: 'none', border: 'none', color: '#6B7280', cursor: 'pointer', fontSize: '0.85rem' }}>✕</button>
+                  </div>
+                  {suggestions.length === 0 && (
+                    <div style={{ padding: '0.5rem', fontSize: '0.82rem', color: '#9CA3AF' }}>No matches found. Try a different time or date.</div>
+                  )}
+                  {suggestions.slice(0, 12).map((sg, idx) => {
+                    const t = tierStyle(sg.tier);
+                    return (
+                      <button key={sg.id} type='button'
+                        onClick={() => { handleCaregiverSelectCreate(sg.id); setShowSuggestions(false); }}
+                        style={{
+                          display: 'block', width: '100%', textAlign: 'left', padding: '0.55rem 0.6rem',
+                          marginBottom: 4, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 6,
+                          cursor: 'pointer', fontSize: '0.85rem',
+                        }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontWeight: 700 }}>{idx + 1}. {sg.first_name} {sg.last_name}</span>
+                          <span style={{ background: t.bg, color: t.fg, fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 10 }}>
+                            {t.label} · {sg.score}
+                          </span>
+                        </div>
+                        {sg.reasons && sg.reasons.length > 0 && (
+                          <div style={{ marginTop: 3, fontSize: '0.72rem', color: '#6B7280' }}>
+                            {sg.reasons.slice(0, 4).join(' · ')}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {cgPatterns && cgPatterns.riskDays?.length > 0 && (

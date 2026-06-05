@@ -3,6 +3,7 @@ import { toast } from '../Toast';
 // src/components/admin/MedicationsManagement.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
+import VitalsTracker from './VitalsTracker';
 
 const MedicationsManagement = ({ token }) => {
   const [clients, setClients] = useState([]);
@@ -160,6 +161,8 @@ const MedicationsManagement = ({ token }) => {
   const getLogStatusBadge = (status) => {
     const colors = {
       administered: '#4caf50',
+      given: '#4caf50',
+      self_administered: '#0891B2',
       refused: '#ff9800',
       missed: '#f44336',
       held: '#9e9e9e'
@@ -217,11 +220,17 @@ const MedicationsManagement = ({ token }) => {
             >
               Medications ({activeMeds.length})
             </button>
-            <button 
+            <button
               className={`btn ${activeTab === 'logs' ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => setActiveTab('logs')}
             >
               Administration Log ({logs.length})
+            </button>
+            <button
+              className={`btn ${activeTab === 'vitals' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setActiveTab('vitals')}
+            >
+              📋 Vitals
             </button>
             <div style={{ marginLeft: 'auto' }}>
               {activeTab === 'medications' && (
@@ -236,6 +245,11 @@ const MedicationsManagement = ({ token }) => {
               )}
             </div>
           </div>
+
+          {/* Vitals Tab */}
+          {activeTab === 'vitals' && (
+            <VitalsTracker token={token} clientId={selectedClient} />
+          )}
 
           {/* Medications Tab */}
           {activeTab === 'medications' && (
@@ -342,6 +356,7 @@ const MedicationsManagement = ({ token }) => {
                       <th>Dosage</th>
                       <th>Status</th>
                       <th>Caregiver</th>
+                      <th>Witnessed</th>
                       <th>Notes</th>
                     </tr>
                   </thead>
@@ -351,8 +366,9 @@ const MedicationsManagement = ({ token }) => {
                         <td>{new Date(log.administered_time).toLocaleString()}</td>
                         <td><strong>{log.medication_name}</strong></td>
                         <td>{log.dosage_given || log.dosage || '-'}</td>
-                        <td>{getLogStatusBadge(log.status)}</td>
+                        <td>{getLogStatusBadge(log.effective_status || log.status)}</td>
                         <td>{log.caregiver_first || ''} {log.caregiver_last || ''}</td>
+                        <td>{log.witnessed_by || <span style={{ color: '#9CA3AF' }}>—</span>}</td>
                         <td>{log.notes || '-'}</td>
                       </tr>
                     ))}
@@ -565,12 +581,20 @@ const MedicationForm = ({ medication, onSubmit, onCancel }) => {
 
 // Log Administration Form
 const LogForm = ({ medications, onSubmit, onCancel }) => {
+  // Status uses the v39 MAR enum exactly so the server's strict validation
+  // accepts the value as both `status` and `effective_status`.
   const [formData, setFormData] = useState({
     medicationId: '',
-    status: 'administered',
+    status: 'given',
     dosageGiven: '',
-    notes: ''
+    notes: '',
+    witnessedBy: ''
   });
+
+  const selectedMed = medications.find(m => m.id === formData.medicationId);
+  // Controlled substances typically benefit from a witness. We don't have a
+  // is_controlled flag on client_medications, so trigger on common heuristics.
+  const looksControlled = selectedMed && /(oxy|hydroco|fentanyl|morphine|methadone|adderall|ritalin|xanax|valium|ativan|klonopin|tramadol|codeine|lorazepam|alprazolam|clonazepam)/i.test(selectedMed.medication_name || '');
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -588,7 +612,7 @@ const LogForm = ({ medications, onSubmit, onCancel }) => {
     <form onSubmit={handleSubmit}>
       <div className="form-group">
         <label>Medication *</label>
-        <select 
+        <select
           value={formData.medicationId}
           onChange={(e) => setFormData({ ...formData, medicationId: e.target.value })}
           required
@@ -605,33 +629,53 @@ const LogForm = ({ medications, onSubmit, onCancel }) => {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
         <div className="form-group">
           <label>Status *</label>
-          <select 
+          <select
             value={formData.status}
             onChange={(e) => setFormData({ ...formData, status: e.target.value })}
           >
-            <option value="administered">Administered</option>
-            <option value="refused">Refused</option>
-            <option value="missed">Missed</option>
-            <option value="held">Held</option>
+            <option value="given">Given</option>
+            <option value="refused">Refused by client</option>
+            <option value="missed">Missed dose</option>
+            <option value="held">Held (per RN / parameters)</option>
+            <option value="self_administered">Self-administered (witnessed)</option>
           </select>
         </div>
         <div className="form-group">
           <label>Dosage Given</label>
-          <input 
+          <input
             type="text"
             value={formData.dosageGiven}
             onChange={(e) => setFormData({ ...formData, dosageGiven: e.target.value })}
-            placeholder="e.g., 500mg"
+            placeholder={selectedMed?.dosage || 'e.g., 500mg'}
           />
         </div>
       </div>
 
+      {/* Witnessed-by field surfaces for likely-controlled substances; manual
+          entry available always for agencies who require it for everything. */}
+      <div className="form-group">
+        <label>
+          Witnessed by {looksControlled && <span style={{ color: '#DC2626', fontWeight: 700 }}>★ controlled — recommended</span>}
+        </label>
+        <input
+          type="text"
+          value={formData.witnessedBy}
+          onChange={(e) => setFormData({ ...formData, witnessedBy: e.target.value })}
+          placeholder="Name of person who witnessed administration"
+        />
+      </div>
+
       <div className="form-group">
         <label>Notes</label>
-        <textarea 
+        <textarea
           value={formData.notes}
           onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-          placeholder="Any observations..."
+          placeholder={
+            formData.status === 'refused'   ? 'Why did client refuse?'
+            : formData.status === 'held'    ? 'Reason for holding (e.g., BP < 110/70 per parameters)'
+            : formData.status === 'missed'  ? 'Why was dose missed?'
+            : 'Any observations…'
+          }
         />
       </div>
 
