@@ -38,9 +38,13 @@ const ymd = (d) => toDateOnly(d).toISOString().slice(0, 10);
 
 // Returns true if a recurring schedule should produce an occurrence on `target`
 function isRecurringActiveOn(schedule, target) {
-  if (schedule.effective_date) {
-    if (toDateOnly(target) < toDateOnly(schedule.effective_date)) return false;
-  }
+  // Hard lower bound: never expand a recurring shift to a date BEFORE it was
+  // entered. effective_date is the source of truth; created_at is the fallback
+  // for any legacy row that slipped through without one. No effective_date
+  // AND no created_at → refuse to expand at all.
+  const lowerBound = schedule.effective_date || schedule.created_at;
+  if (!lowerBound) return false;
+  if (toDateOnly(target) < toDateOnly(lowerBound)) return false;
   if (schedule.end_date) {
     if (toDateOnly(target) > toDateOnly(schedule.end_date)) return false;
   }
@@ -964,7 +968,7 @@ router.post('/invoices/:id/send-email', auth, async (req, res) => {
     }
 
     if (!emailConfigured) {
-      return res.status(503).json({ error: 'Email service not configured. Set SENDGRID_API_KEY in environment.' });
+      return res.status(503).json({ error: 'Email service not configured. Set AWS SES credentials in environment.' });
     }
 
     const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0) - parseFloat(invoice.amount_adjusted || 0);

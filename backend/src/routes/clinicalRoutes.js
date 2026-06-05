@@ -276,8 +276,18 @@ router.delete('/performance-reviews/:id', verifyToken, requireAdmin, async (req,
 
 router.post('/schedules-enhanced', verifyToken, async (req, res) => {
   try {
-    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, splitShift } = req.body;
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate: rawEffectiveDate, anchorDate, splitShift } = req.body;
     if (!caregiverId || !clientId || !startTime || !endTime) return res.status(400).json({ error: 'Missing required fields' });
+
+    // Recurring patterns MUST have an effective_date >= today. Anything else
+    // back-fills past visits and triggers phantom auto-bills/payroll. Default
+    // to today, clamp past dates forward. (DB trigger in v36 also enforces.)
+    const isRecurring = dayOfWeek !== null && dayOfWeek !== undefined;
+    let effectiveDate = rawEffectiveDate || null;
+    if (isRecurring) {
+      const today = new Date().toISOString().slice(0, 10);
+      effectiveDate = (effectiveDate && effectiveDate >= today) ? effectiveDate : today;
+    }
 
     // Authorization enforcement
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');

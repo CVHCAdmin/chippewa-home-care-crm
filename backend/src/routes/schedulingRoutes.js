@@ -44,10 +44,17 @@ function hasRequiredCerts(caregiverCerts, required) {
 }
 
 function isScheduleActiveForDate(schedule, targetDate) {
-  if (schedule.effective_date) {
-    const effDate = new Date(schedule.effective_date); effDate.setHours(0,0,0,0);
-    const target = new Date(targetDate); target.setHours(0,0,0,0);
-    if (target < effDate) return false;
+  // Hard lower bound: a recurring shift can never appear before the date it
+  // was entered. effective_date wins; created_at is the fallback for legacy
+  // rows. No lower bound at all → refuse (prevents back-fill to forever-ago).
+  const lowerBound = schedule.effective_date || schedule.created_at;
+  if (!lowerBound) return false;
+  const lb = new Date(lowerBound); lb.setHours(0,0,0,0);
+  const target = new Date(targetDate); target.setHours(0,0,0,0);
+  if (target < lb) return false;
+  if (schedule.end_date) {
+    const ed = new Date(schedule.end_date); ed.setHours(0,0,0,0);
+    if (target > ed) return false;
   }
   if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
     const anchor = new Date(schedule.anchor_date);

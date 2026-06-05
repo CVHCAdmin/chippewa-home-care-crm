@@ -93,7 +93,7 @@ router.get('/:caregiverId', verifyToken, async (req, res) => {
 // POST /api/schedules - Create new schedule
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes } = req.body;
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, effectiveDate } = req.body;
 
     // Authorization enforcement
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
@@ -103,12 +103,22 @@ router.post('/', verifyToken, async (req, res) => {
       return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
     }
 
+    // Recurring schedules MUST have an effective_date — otherwise expansion
+    // walks backwards and back-bills/back-pays. Default to today, clamp any
+    // past date forward to today. (DB trigger in v36 also enforces this.)
+    const isRecurring = dayOfWeek !== null && dayOfWeek !== undefined && dayOfWeek !== '';
+    let effDate = null;
+    if (isRecurring) {
+      const today = new Date().toISOString().slice(0, 10);
+      effDate = (effectiveDate && effectiveDate >= today) ? effectiveDate : today;
+    }
+
     const scheduleId = uuidv4();
     const result = await db.query(
-      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, effective_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [scheduleId, caregiverId, clientId, scheduleType, dayOfWeek || null, date || null, startTime, endTime, notes || null]
+      [scheduleId, caregiverId, clientId, scheduleType, isRecurring ? dayOfWeek : null, date || null, startTime, endTime, notes || null, effDate]
     );
 
     await auditLog(req.user.id, 'CREATE', 'schedules', scheduleId, null, result.rows[0]);

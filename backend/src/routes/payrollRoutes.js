@@ -34,7 +34,11 @@ const SCHEDULE_EXPANSION_CTE = `
             AND MOD(((d.dt::date - COALESCE(s.anchor_date, s.effective_date, s.created_at::date))::int / 7), 2) = 0)
         OR (s.schedule_type = 'multi-day' AND s.date IS NOT NULL AND s.date = d.dt::date)
       )
-      AND (s.effective_date IS NULL OR d.dt::date >= s.effective_date)
+      -- Hard lower bound: never expand a recurring shift backwards past the
+      -- date it was actually entered. effective_date is authoritative; we
+      -- fall back to created_at for any legacy row that escaped the v36
+      -- backfill. Anything without either is refused.
+      AND d.dt::date >= COALESCE(s.effective_date, s.created_at::date)
       AND (s.end_date IS NULL OR d.dt::date <= s.end_date)
       AND (se.id IS NULL OR se.exception_type != 'cancelled')
   )
