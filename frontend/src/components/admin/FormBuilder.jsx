@@ -385,7 +385,7 @@ export default function FormBuilder({ token }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
             <thead>
               <tr style={{ background: '#F9FAFB', borderBottom: '2px solid #E5E7EB' }}>
-                {['Form','Category','Attached To','Submitted By','Date','Status'].map(h => (
+                {['Form','Category','Attached To','Submitted By','Date','Status','PDF'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '0.65rem 0.85rem', fontWeight: 700, color: '#374151', fontSize: '0.82rem' }}>{h}</th>
                 ))}
               </tr>
@@ -400,6 +400,22 @@ export default function FormBuilder({ token }) {
                   <td style={{ padding: '0.65rem 0.85rem', color: '#6B7280' }}>{new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
                   <td style={{ padding: '0.65rem 0.85rem' }}>
                     <span style={{ background: s.status === 'signed' ? '#D1FAE5' : '#EFF6FF', color: s.status === 'signed' ? '#065F46' : '#1D4ED8', padding: '0.15rem 0.5rem', borderRadius: '10px', fontSize: '0.75rem', fontWeight: 700 }}>{s.status}</span>
+                  </td>
+                  <td style={{ padding: '0.65rem 0.85rem' }}>
+                    <button title="Download printable PDF"
+                      onClick={async () => {
+                        try {
+                          const r = await fetch(`${API_BASE_URL}/api/form-builder/submissions/${s.id}/pdf`, { headers: { Authorization: `Bearer ${token}` } });
+                          if (!r.ok) throw new Error('PDF failed');
+                          const blob = await r.blob();
+                          const u = window.URL.createObjectURL(blob);
+                          const a = document.createElement('a'); a.href = u; a.download = `${(s.template_name || 'form').replace(/[^a-zA-Z0-9_-]/g,'_')}-${s.id.slice(0,8)}.pdf`; a.click();
+                          window.URL.revokeObjectURL(u);
+                        } catch (e) { alert('PDF download failed: ' + e.message); }
+                      }}
+                      style={{ background: 'none', border: '1px solid #D1D5DB', borderRadius: 6, padding: '0.3rem 0.55rem', fontSize: '0.78rem', cursor: 'pointer', color: '#374151' }}>
+                      📄 PDF
+                    </button>
                   </td>
                 </tr>
               ))}

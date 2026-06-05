@@ -104,6 +104,44 @@ router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// PUT /api/clients/:id/insurance-card  — { side: 'front'|'back', imageBase64 }
+router.put('/:id/insurance-card', verifyToken, requireAdmin, async (req, res) => {
+  const { side, imageBase64 } = req.body;
+  if (!['front', 'back'].includes(side)) return res.status(400).json({ error: 'side must be front or back' });
+  if (imageBase64 != null && !String(imageBase64).startsWith('data:image')) {
+    return res.status(400).json({ error: 'imageBase64 must be a data URI (or null to clear)' });
+  }
+  if (imageBase64 && imageBase64.length > 7_000_000) {
+    return res.status(400).json({ error: 'Image too large (max ~5MB raw)' });
+  }
+  const col = side === 'front' ? 'insurance_card_front' : 'insurance_card_back';
+  try {
+    const r = await db.query(
+      `UPDATE clients SET ${col} = $1, insurance_card_uploaded_at = NOW(), updated_at = NOW()
+        WHERE id = $2 RETURNING id, insurance_card_uploaded_at`,
+      [imageBase64 || null, req.params.id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
+    res.json({ success: true, side, cleared: !imageBase64, uploaded_at: r.rows[0].insurance_card_uploaded_at });
+  } catch (error) {
+    if (error.message.includes('insurance_')) return res.status(400).json({ error: 'Image exceeds size limit' });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/clients/:id/insurance-card?side=front — returns the image
+router.get('/:id/insurance-card', verifyToken, requireAdmin, async (req, res) => {
+  const side = req.query.side === 'back' ? 'back' : 'front';
+  const col = side === 'front' ? 'insurance_card_front' : 'insurance_card_back';
+  try {
+    const r = await db.query(`SELECT ${col} AS img, insurance_card_uploaded_at FROM clients WHERE id = $1`, [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
+    res.json({ side, image: r.rows[0].img, uploaded_at: r.rows[0].insurance_card_uploaded_at });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/clients/bulk-assign-medicaid-ids
 // Takes array of {medicaidId, name} from CSV, matches by name, updates medicaid_id
 router.post('/bulk-assign-medicaid-ids', verifyToken, requireAdmin, async (req, res) => {

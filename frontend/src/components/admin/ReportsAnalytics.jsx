@@ -81,23 +81,32 @@ const ReportsAnalytics = ({ token }) => {
 
   const exportReport = async (format) => {
     try {
-      const endpoint = format === 'pdf'
-        ? `${API_BASE_URL}/api/reports/${reportType}/export-pdf`
-        : `${API_BASE_URL}/api/reports/${reportType}/export`;
-      const response = await fetch(endpoint, {
-        method: 'POST',
+      // GET-style drill-downs support ?format=csv directly; everything else
+      // goes through the legacy POST /export endpoint.
+      let url, method = 'GET', body = undefined;
+      if (GET_REPORTS.has(reportType) && format === 'csv') {
+        url = `${API_BASE_URL}/api/reports/${reportType}?startDate=${encodeURIComponent(dateRange.startDate)}&endDate=${encodeURIComponent(dateRange.endDate)}&format=csv`;
+      } else {
+        url = format === 'pdf'
+          ? `${API_BASE_URL}/api/reports/${reportType}/export-pdf`
+          : `${API_BASE_URL}/api/reports/${reportType}/export`;
+        method = 'POST';
+        body = JSON.stringify({ startDate: dateRange.startDate, endDate: dateRange.endDate,
+          caregiverId: caregiverFilter || null, clientId: clientFilter || null, format });
+      }
+      const response = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ startDate: dateRange.startDate, endDate: dateRange.endDate,
-          caregiverId: caregiverFilter || null, clientId: clientFilter || null, format })
+        body,
       });
       if (!response.ok) throw new Error('Export failed');
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const blobUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
+      a.href = blobUrl;
       a.download = `cvhc-${reportType}-report-${dateRange.startDate}-to-${dateRange.endDate}.${format}`;
       a.click();
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(blobUrl);
       toast(`${format.toUpperCase()} export downloaded!`, 'success');
     } catch (error) {
       toast('Failed to export: ' + error.message, 'error');

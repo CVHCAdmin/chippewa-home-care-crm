@@ -596,6 +596,14 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                 </div>
               </div>
 
+              {/* Insurance card images — uploaded directly via dedicated endpoint
+                  (not piggybacked on the main PUT to avoid sending 5MB on every
+                  client edit). Available only after the client has been saved
+                  at least once so we have an id. */}
+              {client?.id && (
+                <InsuranceCardUploader clientId={client.id} token={localStorage.getItem('token')} />
+              )}
+
               <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Weekly Authorized Units</h4>
               <div className="form-group">
                 <label>Authorized Units Per Week</label>
@@ -957,6 +965,112 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
         </form>
       </div>
     </div>
+  );
+};
+
+// ── Insurance card uploader (front + back) ─────────────────────────────────
+// Lazy-loads existing images on mount. Compresses uploads to JPEG ≤1600px to
+// keep them under the 5MB server cap. Photos sent via dedicated PUT so we
+// don't bloat the main client edit payload.
+const InsuranceCardUploader = ({ clientId, token }) => {
+  const [front, setFront] = useState(null);
+  const [back,  setBack]  = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(null);
+
+  useEffect(() => {
+    if (!clientId) return;
+    const hdr = { Authorization: `Bearer ${token}` };
+    Promise.all([
+      fetch(`${API_BASE_URL}/api/clients/${clientId}/insurance-card?side=front`, { headers: hdr }).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE_URL}/api/clients/${clientId}/insurance-card?side=back`,  { headers: hdr }).then(r => r.ok ? r.json() : null),
+    ]).then(([f, b]) => { setFront(f?.image || null); setBack(b?.image || null); })
+      .finally(() => setLoading(false));
+  }, [clientId, token]);
+
+  const compress = (file) => new Promise(async (resolve, reject) => {
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
+      });
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+      const MAX = 1600;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale); const h = Math.round(img.height * scale);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    } catch (e) { reject(e); }
+  });
+
+  const upload = async (side, file) => {
+    if (!file?.type?.startsWith('image/')) return alert('Pick an image');
+    setBusy(side);
+    try {
+      const dataUri = await compress(file);
+      const r = await fetch(`${API_BASE_URL}/api/clients/${clientId}/insurance-card`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ side, imageBase64: dataUri }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || 'upload failed');
+      if (side === 'front') setFront(dataUri); else setBack(dataUri);
+    } catch (e) { alert('Upload failed: ' + e.message); }
+    finally { setBusy(null); }
+  };
+
+  const clear = async (side) => {
+    if (!window.confirm(`Remove ${side} of insurance card?`)) return;
+    setBusy(side);
+    try {
+      await fetch(`${API_BASE_URL}/api/clients/${clientId}/insurance-card`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ side, imageBase64: null }),
+      });
+      if (side === 'front') setFront(null); else setBack(null);
+    } finally { setBusy(null); }
+  };
+
+  const sideBlock = (label, img, sideKey) => (
+    <div style={{ flex: 1, minWidth: 220 }}>
+      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>{label}</div>
+      <div style={{ background: '#F3F4F6', border: '1px solid #E5E7EB', borderRadius: 8, height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+        {img ? (
+          <img src={img} alt={label} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+        ) : (
+          <span style={{ color: '#9CA3AF', fontSize: '0.85rem' }}>No image</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <label className="btn btn-sm btn-secondary" style={{ cursor: busy === sideKey ? 'wait' : 'pointer', opacity: busy === sideKey ? 0.6 : 1 }}>
+          {busy === sideKey ? 'Uploading…' : img ? 'Replace' : '+ Upload'}
+          <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) upload(sideKey, f); }} />
+        </label>
+        {img && (
+          <button type="button" className="btn btn-sm" style={{ background: '#FEE2E2', color: '#991B1B', border: 'none' }}
+            disabled={busy === sideKey} onClick={() => clear(sideKey)}>Remove</button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '0.75rem' }}>
+        Insurance Card Images
+      </h4>
+      {loading ? (
+        <div style={{ color: '#9CA3AF', fontSize: '0.85rem' }}>Loading…</div>
+      ) : (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {sideBlock('Front', front, 'front')}
+          {sideBlock('Back',  back,  'back')}
+        </div>
+      )}
+    </>
   );
 };
 

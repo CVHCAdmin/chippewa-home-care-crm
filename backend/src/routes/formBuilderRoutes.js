@@ -107,6 +107,108 @@ router.get('/submissions/:id', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/form-builder/submissions/:id/pdf — render any form submission as a
+// printable PDF using the template fields as the structure. Works for POC,
+// HIPAA release, intake — anything seeded in v42 or built by users.
+router.get('/submissions/:id/pdf', auth, async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT fs.*, ft.name AS template_name, ft.fields AS template_fields,
+             ft.description, ft.category, ft.requires_signature
+        FROM form_submissions fs
+        LEFT JOIN form_templates ft ON fs.template_id = ft.id
+       WHERE fs.id = $1
+    `, [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Submission not found' });
+    const s = r.rows[0];
+    const fields = (typeof s.template_fields === 'string') ? JSON.parse(s.template_fields) : (s.template_fields || []);
+    const data   = (typeof s.data === 'string') ? JSON.parse(s.data) : (s.data || {});
+
+    // Optional client context for the header
+    let clientLine = null;
+    if (s.entity_type === 'client' && s.entity_id) {
+      const c = await db.query(`SELECT first_name, last_name, date_of_birth FROM clients WHERE id = $1`, [s.entity_id]);
+      if (c.rows[0]) {
+        clientLine = `${c.rows[0].first_name} ${c.rows[0].last_name}` +
+          (c.rows[0].date_of_birth ? ` · DOB ${new Date(c.rows[0].date_of_birth).toLocaleDateString()}` : '');
+      }
+    }
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'LETTER', margin: 54 });
+    const fname = `${(s.template_name || 'form').replace(/[^a-zA-Z0-9._-]/g, '_')}-${s.id.slice(0,8)}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+    doc.pipe(res);
+
+    // Header
+    doc.fillColor('#1D4ED8').font('Helvetica-Bold').fontSize(18).text(s.template_name || 'Form');
+    if (s.description) doc.fillColor('#6B7280').font('Helvetica').fontSize(9).text(s.description);
+    doc.fillColor('#6B7280').font('Helvetica').fontSize(8).text('Chippewa Valley Home Care');
+    doc.moveDown(0.4);
+    if (clientLine) {
+      doc.fillColor('#111827').font('Helvetica-Bold').fontSize(11).text(clientLine);
+      doc.moveDown(0.3);
+    }
+
+    // Submission meta
+    doc.fillColor('#6B7280').font('Helvetica').fontSize(8);
+    doc.text(`Submission: ${s.id}`);
+    doc.text(`Submitted by ${s.submitted_by_name || s.submitted_by || 'unknown'} on ${new Date(s.created_at || s.submitted_at).toLocaleString()}`);
+    doc.text(`Status: ${s.status || 'submitted'}`);
+    doc.moveDown(0.6);
+
+    // Each field — label + value, indented
+    const renderVal = (v) => {
+      if (v == null || v === '') return '—';
+      if (Array.isArray(v)) return v.join(', ');
+      if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+      return String(v);
+    };
+    for (const f of fields) {
+      doc.fillColor('#374151').font('Helvetica-Bold').fontSize(9).text(f.label || f.id, { continued: false });
+      doc.fillColor('#111827').font('Helvetica').fontSize(10).text(renderVal(data[f.id]), { indent: 16, paragraphGap: 2 });
+      doc.moveDown(0.25);
+    }
+
+    // Signature block
+    if (s.requires_signature) {
+      doc.moveDown(1.5);
+      const y = doc.y;
+      doc.fillColor('#6B7280').fontSize(9);
+      doc.text('_________________________________', 54, y);
+      doc.text('_________________________________', 320, y);
+      doc.moveDown(0.3);
+      doc.text('Client / Authorized Rep', 54, doc.y);
+      doc.text('Date', 320, doc.y - 12);
+
+      doc.moveDown(2);
+      const y2 = doc.y;
+      doc.text('_________________________________', 54, y2);
+      doc.text('_________________________________', 320, y2);
+      doc.moveDown(0.3);
+      doc.text('Agency Representative', 54, doc.y);
+      doc.text('Date', 320, doc.y - 12);
+
+      if (s.signature) {
+        doc.moveDown(1);
+        doc.fillColor('#6B7280').fontSize(8).text(`Electronic signature on file (captured ${s.signed_at ? new Date(s.signed_at).toLocaleString() : 'at submission'}).`);
+      }
+    }
+
+    // Footer
+    doc.fontSize(7).fillColor('#9CA3AF').text(
+      `Generated ${new Date().toLocaleString()} by ${req.user.email || req.user.id}. ` +
+      `Contains Protected Health Information — handle per HIPAA.`,
+      54, 720, { width: 504, align: 'center' }
+    );
+    doc.end();
+  } catch (error) {
+    console.error('[form submissions PDF]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/submissions', auth, async (req, res) => {
   const { templateId, entityType, entityId, data = {}, status = 'submitted', signature } = req.body;
   if (!templateId) return res.status(400).json({ error: 'templateId required' });

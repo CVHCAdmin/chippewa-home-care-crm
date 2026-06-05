@@ -80,6 +80,9 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkMessage, setBulkMessage] = useState('');
   const [showBulkMsg, setShowBulkMsg] = useState(false);
+  const [showBulkRate, setShowBulkRate] = useState(false);
+  const [bulkRateForm, setBulkRateForm] = useState({ mode: 'add', amount: '', preview: [] });
+  const [bulkRateBusy, setBulkRateBusy] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // all, active, inactive
   
@@ -359,11 +362,111 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
               style={{ padding: "0.35rem 0.75rem", background: "#2ABBA7", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "0.82rem", fontWeight: "600" }}>
               📱 Send SMS
             </button>
+            <button onClick={() => {
+              setBulkRateForm({ mode: 'add', amount: '', preview: [] });
+              setShowBulkRate(true);
+            }}
+              style={{ padding: "0.35rem 0.75rem", background: "#6366F1", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "0.82rem", fontWeight: "600" }}>
+              💰 Adjust Pay Rate
+            </button>
             <button onClick={() => setSelectedIds([])} style={{ padding: "0.35rem 0.75rem", background: "none", border: "1px solid #D1D5DB", borderRadius: "6px", cursor: "pointer", fontSize: "0.82rem", color: "#6B7280" }}>
               Clear
             </button>
           </div>
         )}
+
+        {/* Bulk Pay Rate Adjustment Modal */}
+        {showBulkRate && (() => {
+          const selected = caregivers.filter(c => selectedIds.includes(c.id));
+          const amt = parseFloat(bulkRateForm.amount) || 0;
+          const calc = (oldRate) => {
+            const old = parseFloat(oldRate) || 0;
+            let next;
+            if (bulkRateForm.mode === 'add')     next = old + amt;
+            else if (bulkRateForm.mode === 'sub') next = Math.max(0, old - amt);
+            else if (bulkRateForm.mode === 'pct') next = old * (1 + amt / 100);
+            else                                  next = amt; // set
+            return Math.round(next * 100) / 100;
+          };
+          return (
+            <div className="modal active" onClick={() => setShowBulkRate(false)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640 }}>
+                <h3 style={{ margin: 0 }}>💰 Bulk Pay Rate Adjustment</h3>
+                <p className="text-muted" style={{ marginTop: 4 }}>
+                  Applying to <strong>{selected.length}</strong> caregiver{selected.length !== 1 ? 's' : ''}.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '0.6rem' }}>
+                  <div className="form-group">
+                    <label>Adjustment</label>
+                    <select value={bulkRateForm.mode}
+                      onChange={(e) => setBulkRateForm({ ...bulkRateForm, mode: e.target.value })}>
+                      <option value="add">+ Add $ (raise)</option>
+                      <option value="sub">− Subtract $</option>
+                      <option value="pct">% Percentage change</option>
+                      <option value="set">= Set to specific $</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Amount {bulkRateForm.mode === 'pct' ? '(%)' : '($)'}</label>
+                    <input type="number" step="0.01" min="0" value={bulkRateForm.amount}
+                      onChange={(e) => setBulkRateForm({ ...bulkRateForm, amount: e.target.value })}
+                      placeholder={bulkRateForm.mode === 'pct' ? 'e.g. 3 for +3%' : 'e.g. 1.00'} />
+                  </div>
+                </div>
+                <div style={{ maxHeight: 280, overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 6, marginBottom: '0.75rem' }}>
+                  <table className="table" style={{ marginBottom: 0, fontSize: '0.85rem' }}>
+                    <thead><tr><th>Caregiver</th><th style={{ textAlign: 'right' }}>Current</th><th style={{ textAlign: 'right' }}>New</th></tr></thead>
+                    <tbody>
+                      {selected.map(c => {
+                        const cur = parseFloat(c.default_pay_rate) || 0;
+                        const next = calc(c.default_pay_rate);
+                        const diff = next - cur;
+                        return (
+                          <tr key={c.id}>
+                            <td>{c.first_name} {c.last_name}</td>
+                            <td style={{ textAlign: 'right' }}>${cur.toFixed(2)}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 700, color: diff > 0 ? '#059669' : diff < 0 ? '#DC2626' : '#374151' }}>
+                              ${next.toFixed(2)}
+                              {diff !== 0 && <span style={{ fontSize: '0.7rem', marginLeft: 4 }}>({diff > 0 ? '+' : ''}{diff.toFixed(2)})</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="modal-actions">
+                  <button className="btn btn-secondary" onClick={() => setShowBulkRate(false)} disabled={bulkRateBusy}>Cancel</button>
+                  <button className="btn btn-primary" disabled={bulkRateBusy || !amt}
+                    onClick={async () => {
+                      if (!amt) return;
+                      const _ok = await confirm(`Update pay rate on ${selected.length} caregiver${selected.length !== 1 ? 's' : ''}?`, { danger: false });
+                      if (!_ok) return;
+                      setBulkRateBusy(true);
+                      let succ = 0, fail = 0;
+                      for (const c of selected) {
+                        try {
+                          const r = await fetch(`${API_BASE_URL}/api/caregivers/${c.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                            body: JSON.stringify({ payRate: calc(c.default_pay_rate) }),
+                          });
+                          if (r.ok) succ++; else fail++;
+                        } catch { fail++; }
+                      }
+                      setBulkRateBusy(false);
+                      setShowBulkRate(false);
+                      setSelectedIds([]);
+                      toast(`Updated ${succ}${fail ? ` (${fail} failed)` : ''}`, fail ? 'warning' : 'success');
+                      loadData();
+                    }}>
+                    {bulkRateBusy ? 'Updating…' : `Apply to ${selected.length}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Bulk SMS Modal */}
         {showBulkMsg && (

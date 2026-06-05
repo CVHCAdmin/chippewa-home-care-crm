@@ -1442,6 +1442,23 @@ function renderClientReportPdf(doc, data) {
   }
 }
 
+// CSV serializer: handles commas, quotes, newlines per RFC 4180
+const csvCell = (v) => {
+  if (v == null) return '';
+  const s = (v instanceof Date) ? v.toISOString().slice(0,10) : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const toCSV = (rows, columns) => {
+  const header = columns.map(c => csvCell(c.label || c.key)).join(',');
+  const body = rows.map(r => columns.map(c => csvCell(r[c.key])).join(',')).join('\n');
+  return header + '\n' + body + '\n';
+};
+const sendCSV = (res, filename, rows, columns) => {
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(toCSV(rows, columns));
+};
+
 // ─── HOURS BY PAYER ─────────────────────────────────────────────────────────
 // Aggregates clocked hours per referral_source / payer over a date range.
 // Useful for: contract performance, identifying under-served payers, MCO QA.
@@ -1470,6 +1487,15 @@ router.get('/hours-by-payer', auth, async (req, res) => {
       GROUP BY payer_key, payer_name, payer_type
       ORDER BY billable_hours DESC NULLS LAST
     `, [startDate, endDate]);
+    if (req.query.format === 'csv') {
+      return sendCSV(res, `hours-by-payer-${startDate}-to-${endDate}.csv`, result.rows, [
+        { key: 'payer_name', label: 'Payer' }, { key: 'payer_type', label: 'Type' },
+        { key: 'active_clients', label: 'Clients' }, { key: 'visits', label: 'Visits' },
+        { key: 'total_hours', label: 'Total Hours' }, { key: 'billable_hours', label: 'Billable Hours' },
+        { key: 'avg_visit_hours', label: 'Avg Visit Hours' },
+        { key: 'first_visit', label: 'First Visit' }, { key: 'last_visit', label: 'Last Visit' },
+      ]);
+    }
     res.json({ rows: result.rows, period: { startDate, endDate } });
   } catch (error) {
     console.error('[reports/hours-by-payer]', error);
@@ -1515,6 +1541,16 @@ router.get('/caregiver-utilization', auth, async (req, res) => {
       WHERE u.role = 'caregiver' AND u.is_active = true
       ORDER BY utilization_pct DESC NULLS LAST, u.last_name
     `, [startDate, endDate]);
+    if (req.query.format === 'csv') {
+      return sendCSV(res, `caregiver-utilization-${startDate}-to-${endDate}.csv`, result.rows, [
+        { key: 'first_name', label: 'First' }, { key: 'last_name', label: 'Last' },
+        { key: 'max_hours_per_week', label: 'Max Hrs/Week' },
+        { key: 'capacity_hours', label: 'Period Capacity (hrs)' },
+        { key: 'actual_hours', label: 'Actual (hrs)' },
+        { key: 'visits', label: 'Visits' },
+        { key: 'utilization_pct', label: 'Utilization %' },
+      ]);
+    }
     res.json({ rows: result.rows, period: { startDate, endDate } });
   } catch (error) {
     console.error('[reports/caregiver-utilization]', error);
@@ -1552,6 +1588,15 @@ router.get('/client-visits-summary', auth, async (req, res) => {
       HAVING COUNT(te.id) > 0
       ORDER BY total_hours DESC NULLS LAST
     `, [startDate, endDate]);
+    if (req.query.format === 'csv') {
+      return sendCSV(res, `client-visits-summary-${startDate}-to-${endDate}.csv`, result.rows, [
+        { key: 'first_name', label: 'First' }, { key: 'last_name', label: 'Last' },
+        { key: 'payer_name', label: 'Payer' }, { key: 'care_type_name', label: 'Care Type' },
+        { key: 'visits', label: 'Visits' }, { key: 'distinct_caregivers', label: 'Distinct Caregivers' },
+        { key: 'total_hours', label: 'Total Hours' }, { key: 'billable_hours', label: 'Billable Hours' },
+        { key: 'first_visit', label: 'First Visit' }, { key: 'last_visit', label: 'Last Visit' },
+      ]);
+    }
     res.json({ rows: result.rows, period: { startDate, endDate } });
   } catch (error) {
     console.error('[reports/client-visits-summary]', error);
