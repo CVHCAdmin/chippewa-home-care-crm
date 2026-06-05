@@ -12,6 +12,7 @@ import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, isNative, platform } from '../hooks/useNative';
 import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
+import SignaturePad from './SignaturePad';
 
 const subscribeToPush = async (token) => {
   try {
@@ -48,6 +49,31 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // Visit photos staged for upload on clock-out
   const [pendingPhotos, setPendingPhotos] = useState([]); // [{ dataUri, caption, category, sizeBytes }]
   const [photoUploading, setPhotoUploading] = useState(false);
+  // Unsigned documents queue
+  const [unsignedDocs, setUnsignedDocs] = useState([]);
+  const [signTarget, setSignTarget] = useState(null);
+
+  const loadUnsignedDocs = async () => {
+    if (!user?.id) return;
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/documents/unsigned/${user.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setUnsignedDocs(await r.json());
+    } catch { /* ignore */ }
+  };
+  useEffect(() => { loadUnsignedDocs(); }, [user?.id]);
+
+  const submitDocSignature = async (dataUri, typedName) => {
+    if (!signTarget) return;
+    const r = await fetch(`${API_BASE_URL}/api/documents/${signTarget.id}/sign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ signatureImageBase64: dataUri, typedName }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || 'Sign failed');
+    toast('Signed ✓');
+    setSignTarget(null);
+    loadUnsignedDocs();
+  };
   const [recentVisits, setRecentVisits] = useState([]);
   const [viewingClientId, setViewingClientId] = useState(null);
   const timerRef = useRef(null);
@@ -1060,6 +1086,37 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </div>
       )}
 
+      {/* Unsigned documents queue */}
+      {unsignedDocs.length > 0 && (
+        <div className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid #DC2626' }}>
+          <div className="card-title" style={{ color: '#DC2626' }}>
+            ✍️ {unsignedDocs.length} document{unsignedDocs.length === 1 ? '' : 's'} need your signature
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+            {unsignedDocs.map(d => (
+              <div key={d.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.75rem', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: '#1F2937', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {d.name || d.document_name || d.file_name || 'Document'}
+                  </div>
+                  {d.description && <div style={{ fontSize: '0.8rem', color: '#6B7280' }}>{d.description}</div>}
+                  {d.expiration_date && (
+                    <div style={{ fontSize: '0.78rem', color: '#DC2626', marginTop: 2 }}>
+                      Expires {new Date(d.expiration_date).toLocaleDateString()}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setSignTarget(d)}
+                  style={{ background: '#2ABBA7', color: '#fff', border: 'none', borderRadius: 6, padding: '0.5rem 0.9rem', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', marginLeft: 8 }}>
+                  ✍️ Sign
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="card" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: '#fff', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
@@ -1993,6 +2050,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       )}
 
       <CaregiverClientModal clientId={viewingClientId} isOpen={!!viewingClientId} onClose={() => setViewingClientId(null)} token={token} />
+
+      <SignaturePad
+        open={!!signTarget}
+        onClose={() => setSignTarget(null)}
+        documentName={signTarget?.name || signTarget?.document_name || signTarget?.file_name}
+        onSign={submitDocSignature}
+      />
 
       {/* Messages Modal */}
       {showMessages && <CaregiverMessages token={token} onClose={() => { setShowMessages(false); setUnreadMessages(0); }} />}

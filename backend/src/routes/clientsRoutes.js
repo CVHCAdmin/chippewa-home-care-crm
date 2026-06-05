@@ -142,6 +142,97 @@ router.get('/:id/insurance-card', verifyToken, requireAdmin, async (req, res) =>
   }
 });
 
+// POST /api/clients/bulk-import — CSV-driven onboarding for a batch of clients.
+// Body: { rows: [{ firstName, lastName, dateOfBirth, phone, email, address,
+//                  city, state, zip, medicaidId, mcoMemberId,
+//                  careType, payerName, privatePayRate }] }
+// Dedupe rules: skip if a client with same firstName+lastName+dateOfBirth
+// already exists. Returns per-row outcome so the UI can surface failures.
+router.post('/bulk-import', verifyToken, requireAdmin, async (req, res) => {
+  const { rows, dryRun } = req.body;
+  if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'rows array required' });
+  if (rows.length > 500) return res.status(400).json({ error: 'Max 500 rows per import' });
+
+  try {
+    // Pre-resolve payer and care-type lookups (case-insensitive match)
+    const careTypes = (await db.query(`SELECT id, name FROM care_types`)).rows;
+    const payers    = (await db.query(`SELECT id, name FROM referral_sources WHERE is_active = true`)).rows;
+    const ctMap = new Map(careTypes.map(c => [c.name.toLowerCase().trim(), c.id]));
+    const pyMap = new Map(payers.map(p => [p.name.toLowerCase().trim(), p.id]));
+
+    const results = [];
+    let created = 0, skipped = 0, failed = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      try {
+        if (!r.firstName || !r.lastName) {
+          results.push({ row: i + 1, status: 'failed', reason: 'firstName and lastName required' });
+          failed++; continue;
+        }
+        // Dedupe check
+        const dupQ = await db.query(
+          `SELECT id FROM clients
+            WHERE LOWER(first_name) = LOWER($1)
+              AND LOWER(last_name)  = LOWER($2)
+              AND ($3::date IS NULL OR date_of_birth = $3::date)`,
+          [r.firstName.trim(), r.lastName.trim(), r.dateOfBirth || null]
+        );
+        if (dupQ.rows.length > 0) {
+          results.push({ row: i + 1, status: 'skipped', reason: 'Already exists', id: dupQ.rows[0].id });
+          skipped++; continue;
+        }
+        const careTypeId = r.careType ? (ctMap.get(String(r.careType).toLowerCase().trim()) || null) : null;
+        const payerId    = r.payerName ? (pyMap.get(String(r.payerName).toLowerCase().trim()) || null) : null;
+        const isPrivate  = !payerId && !!r.privatePayRate;
+
+        if (dryRun) {
+          results.push({
+            row: i + 1, status: 'would_create',
+            careTypeMatched: !!careTypeId, payerMatched: !!payerId, isPrivate,
+            careType: r.careType || null, payerName: r.payerName || null,
+          });
+          continue;
+        }
+
+        const ins = await db.query(
+          `INSERT INTO clients
+           (first_name, last_name, date_of_birth, phone, email,
+            address, city, state, zip,
+            care_type_id, referral_source_id, is_private_pay, private_pay_rate,
+            medicaid_id, mco_member_id, is_active)
+           VALUES ($1,$2,$3,$4,$5, $6,$7,$8,$9, $10,$11,$12,$13, $14,$15, true)
+           RETURNING id`,
+          [
+            r.firstName.trim(), r.lastName.trim(), r.dateOfBirth || null,
+            r.phone || null, r.email || null,
+            r.address || null, r.city || null, r.state || null, r.zip || null,
+            careTypeId, payerId, isPrivate, r.privatePayRate || null,
+            r.medicaidId || null, r.mcoMemberId || null,
+          ]
+        );
+        await auditLog(req.user.id, 'CREATE', 'clients', ins.rows[0].id, null, { bulk_import: true, row: i + 1 });
+        results.push({
+          row: i + 1, status: 'created', id: ins.rows[0].id,
+          warnings: [
+            r.careType && !careTypeId ? `Care type "${r.careType}" not recognized` : null,
+            r.payerName && !payerId   ? `Payer "${r.payerName}" not recognized` : null,
+          ].filter(Boolean),
+        });
+        created++;
+      } catch (e) {
+        results.push({ row: i + 1, status: 'failed', reason: e.message });
+        failed++;
+      }
+    }
+
+    res.json({ created, skipped, failed, total: rows.length, dryRun: !!dryRun, results });
+  } catch (error) {
+    console.error('[clients bulk-import]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/clients/bulk-assign-medicaid-ids
 // Takes array of {medicaidId, name} from CSV, matches by name, updates medicaid_id
 router.post('/bulk-assign-medicaid-ids', verifyToken, requireAdmin, async (req, res) => {

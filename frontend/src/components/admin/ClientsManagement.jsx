@@ -106,6 +106,84 @@ const ClientsManagement = ({ token }) => {
   const [bulkAction, setBulkAction] = useState(null); // 'activate' | 'deactivate' | 'assign-payer'
   const [bulkPayerId, setBulkPayerId] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkImportRows, setBulkImportRows] = useState([]);
+  const [bulkImportResults, setBulkImportResults] = useState(null);
+  const [bulkImportBusy, setBulkImportBusy] = useState(false);
+
+  // Simple RFC-4180 CSV parser — handles quoted commas + escaped quotes
+  const parseCSV = (text) => {
+    const rows = []; let row = []; let field = ''; let inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; } else { inQ = false; }
+        } else { field += ch; }
+      } else {
+        if (ch === '"') inQ = true;
+        else if (ch === ',') { row.push(field); field = ''; }
+        else if (ch === '\r') { /* skip */ }
+        else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+        else field += ch;
+      }
+    }
+    if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+    return rows.filter(r => r.length > 0 && r.some(c => c !== ''));
+  };
+
+  const onCsvPicked = async (file) => {
+    if (!file) return;
+    const text = await file.text();
+    const rows = parseCSV(text);
+    if (rows.length < 2) { alert('CSV needs a header row and at least one data row'); return; }
+    const header = rows[0].map(h => h.trim().toLowerCase());
+    // Map common header variations → API field names
+    const colMap = {
+      'first name': 'firstName', firstname: 'firstName', 'given name': 'firstName',
+      'last name':  'lastName',  lastname:  'lastName',  surname:    'lastName',
+      'date of birth': 'dateOfBirth', dob: 'dateOfBirth', birthdate: 'dateOfBirth',
+      phone: 'phone', 'phone number': 'phone',
+      email: 'email',
+      address: 'address', street: 'address',
+      city: 'city', state: 'state', zip: 'zip', zipcode: 'zip',
+      'medicaid id': 'medicaidId', medicaidid: 'medicaidId',
+      'mco member id': 'mcoMemberId', mcomemberid: 'mcoMemberId',
+      'care type': 'careType', caretype: 'careType',
+      payer: 'payerName', 'payer name': 'payerName',
+      'private pay rate': 'privatePayRate', rate: 'privatePayRate',
+    };
+    const parsed = rows.slice(1).map(r => {
+      const o = {};
+      header.forEach((h, i) => { const k = colMap[h] || h; if (r[i] !== undefined && r[i] !== '') o[k] = r[i].trim(); });
+      return o;
+    });
+    setBulkImportRows(parsed);
+    // Dry-run preview first so the admin sees what'll happen
+    setBulkImportBusy(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/clients/bulk-import`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ rows: parsed, dryRun: true }),
+      });
+      setBulkImportResults(await r.json());
+    } catch (e) { alert('Preview failed: ' + e.message); }
+    finally { setBulkImportBusy(false); }
+  };
+
+  const confirmBulkImport = async () => {
+    setBulkImportBusy(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/clients/bulk-import`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ rows: bulkImportRows, dryRun: false }),
+      });
+      const data = await r.json();
+      setBulkImportResults(data);
+      loadData();
+    } catch (e) { alert('Import failed: ' + e.message); }
+    finally { setBulkImportBusy(false); }
+  };
   const [reportClient, setReportClient] = useState(null);
   const [careTasksClient, setCareTasksClient] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -315,6 +393,13 @@ const ClientsManagement = ({ token }) => {
       <div className="page-header">
         <h2>👥 Clients</h2>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowBulkImport(true)}
+            title="Onboard multiple clients from a CSV file"
+          >
+            📥 Bulk Import CSV
+          </button>
           <button
             className="btn btn-secondary"
             onClick={() => { setShowMedicaidImport(!showMedicaidImport); setMedicaidImportResults(null); }}
@@ -655,6 +740,51 @@ const ClientsManagement = ({ token }) => {
       {!loading && clients.length > 0 && (
         <div style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#666' }}>
           Showing {filteredClients.length} of {clients.length} clients
+        </div>
+      )}
+
+      {/* Bulk CSV import modal */}
+      {showBulkImport && (
+        <div className="modal active" onClick={() => !bulkImportBusy && setShowBulkImport(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 820, maxHeight: '85vh', overflow: 'auto' }}>
+            <h3 style={{ margin: 0 }}>📥 Bulk Import Clients (CSV)</h3>
+            <p className="text-muted" style={{ fontSize: '0.85rem' }}>
+              Upload a CSV. Accepted columns (header case-insensitive): <strong>First Name, Last Name, DOB, Phone, Email, Address, City, State, Zip, Medicaid ID, MCO Member ID, Care Type, Payer, Private Pay Rate</strong>.
+              First name + last name required. Duplicates (same name + DOB) are skipped.
+            </p>
+            <div style={{ marginBottom: '0.75rem' }}>
+              <input type="file" accept=".csv,text/csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value=''; if (f) onCsvPicked(f); }} disabled={bulkImportBusy} />
+            </div>
+            {bulkImportBusy && <p style={{ color: '#6B7280' }}>Working…</p>}
+            {bulkImportResults && (
+              <div style={{ background: '#F9FAFB', padding: '0.75rem', borderRadius: 6, marginBottom: '0.75rem' }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                  {bulkImportResults.dryRun ? '👀 Preview' : '✓ Imported'} — total {bulkImportResults.total}: created {bulkImportResults.created || bulkImportResults.results?.filter(r => r.status === 'would_create').length || 0}, skipped {bulkImportResults.skipped}, failed {bulkImportResults.failed}
+                </div>
+                <div style={{ maxHeight: 280, overflow: 'auto', fontSize: '0.82rem' }}>
+                  {bulkImportResults.results.map(r => (
+                    <div key={r.row} style={{
+                      padding: '4px 8px',
+                      background: r.status === 'failed' ? '#FEE2E2' : r.status === 'skipped' ? '#FEF3C7' : '#D1FAE5',
+                      color: r.status === 'failed' ? '#7F1D1D' : r.status === 'skipped' ? '#92400E' : '#065F46',
+                      borderRadius: 4, marginBottom: 2,
+                    }}>
+                      Row {r.row}: <strong>{r.status}</strong>{r.reason ? ` — ${r.reason}` : ''}
+                      {r.warnings?.length > 0 && <div style={{ fontSize: '0.75rem', marginTop: 2 }}>⚠ {r.warnings.join('; ')}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setShowBulkImport(false)} disabled={bulkImportBusy}>Close</button>
+              {bulkImportResults?.dryRun && bulkImportRows.length > 0 && (
+                <button className="btn btn-primary" onClick={confirmBulkImport} disabled={bulkImportBusy}>
+                  {bulkImportBusy ? 'Importing…' : `Confirm Import (${bulkImportRows.length} rows)`}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

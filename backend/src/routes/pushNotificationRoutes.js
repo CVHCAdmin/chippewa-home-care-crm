@@ -16,12 +16,23 @@ const requireAdmin = require('../middleware/authorizeAdmin');
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'PLACEHOLDER_REPLACE_WITH_REAL_KEY';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'PLACEHOLDER_REPLACE_WITH_REAL_KEY';
 
+// Wrap in try/catch — a malformed VAPID key (wrong length, bad base64) makes
+// web-push throw at boot time. Without this, one bad env var takes the WHOLE
+// app down on Render startup. Better to disable push and keep serving.
+let _vapidConfigured = false;
 if (webpush && VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
-  webpush.setVapidDetails(
-    'mailto:admin@chippewavalleyhomecare.com',
-    VAPID_PUBLIC_KEY,
-    VAPID_PRIVATE_KEY
-  );
+  try {
+    webpush.setVapidDetails(
+      'mailto:admin@chippewavalleyhomecare.com',
+      VAPID_PUBLIC_KEY,
+      VAPID_PRIVATE_KEY
+    );
+    _vapidConfigured = true;
+  } catch (e) {
+    console.error('[PUSH] VAPID key rejected at boot — push notifications disabled. Reason:', e.message);
+    // Drop the webpush handle so sendPushToUser short-circuits cleanly
+    webpush = null;
+  }
 }
 
 // Helper: send push to a user
