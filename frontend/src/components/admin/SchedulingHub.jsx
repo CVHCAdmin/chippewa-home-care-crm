@@ -98,6 +98,21 @@ const SchedulingHub = ({ token }) => {
   const [suggestions, setSuggestions] = useState([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
 
+  // ── Conflict heatmap state ──
+  const [heatmap, setHeatmap] = useState(null);
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
+  const [heatmapWeekOf, setHeatmapWeekOf] = useState(getWeekStart(new Date()).toISOString().split('T')[0]);
+  const loadHeatmap = async () => {
+    setHeatmapLoading(true);
+    try { setHeatmap(await api(`/api/scheduling/conflict-heatmap?weekOf=${heatmapWeekOf}`)); }
+    catch (e) { console.error(e); }
+    finally { setHeatmapLoading(false); }
+  };
+  useEffect(() => {
+    if (mainTab === 'tools' && toolsTab === 'heatmap') loadHeatmap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainTab, toolsTab, heatmapWeekOf]);
+
   // ── Open Shifts state ──
   const [openShifts, setOpenShifts]                 = useState([]);
   const [openShiftsLoading, setOpenShiftsLoading]   = useState(false);
@@ -956,8 +971,9 @@ const SchedulingHub = ({ token }) => {
 
   const renderToolsTab = () => (
     <div>
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <button style={subTabStyle(toolsTab === 'coverage')}  onClick={() => setToolsTab('coverage')}>📈 Coverage</button>
+        <button style={subTabStyle(toolsTab === 'heatmap')}   onClick={() => setToolsTab('heatmap')}>🔥 Conflict Heatmap</button>
         <button style={subTabStyle(toolsTab === 'optimizer')} onClick={() => setToolsTab('optimizer')}>🧠 Optimizer</button>
         <button style={subTabStyle(toolsTab === 'roster')}    onClick={() => setToolsTab('roster')}>📊 Roster Optimizer</button>
       </div>
@@ -1028,6 +1044,79 @@ const SchedulingHub = ({ token }) => {
               </div>
             </>
           ) : <div className='card' style={{ textAlign: 'center', padding: '2rem' }}>Failed to load. <button className='btn btn-sm btn-primary' onClick={loadCoverage}>Retry</button></div>}
+        </div>
+      )}
+
+      {toolsTab === 'heatmap' && (
+        <div>
+          <div className='card' style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem', padding: '1rem' }}>
+            <h3 style={{ margin: 0 }}>🔥 Conflict Heatmap</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: 'auto' }}>
+              <button className='btn btn-sm btn-secondary' onClick={() => { const d = new Date(heatmapWeekOf + 'T12:00:00'); d.setDate(d.getDate() - 7); setHeatmapWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>◀ Prev</button>
+              <input type='date' value={heatmapWeekOf} onChange={(e) => setHeatmapWeekOf(getWeekStart(new Date(e.target.value + 'T12:00:00')).toISOString().split('T')[0])} style={{ padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: 6, fontSize: '0.85rem' }} />
+              <button className='btn btn-sm btn-secondary' onClick={() => { const d = new Date(heatmapWeekOf + 'T12:00:00'); d.setDate(d.getDate() + 7); setHeatmapWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>Next ▶</button>
+              <button className='btn btn-sm btn-primary' disabled={heatmapWeekOf === getWeekStart(new Date()).toISOString().split('T')[0]} onClick={() => setHeatmapWeekOf(getWeekStart(new Date()).toISOString().split('T')[0])}>📍 Today</button>
+            </div>
+          </div>
+
+          {heatmapLoading ? <p style={{ padding: '1rem' }}>Loading…</p> : !heatmap ? null : (
+            <div className='card' style={{ padding: '1rem', overflowX: 'auto' }}>
+              <div style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '0.5rem' }}>
+                Week of <strong>{heatmap.weekStart}</strong>. Cell color = scheduled hours that day. Right column = week total vs cap.
+                <span style={{ marginLeft: 10, display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.75rem' }}>
+                  <span style={{ width: 14, height: 14, background: '#F3F4F6', display: 'inline-block', borderRadius: 2 }}></span> 0
+                  <span style={{ width: 14, height: 14, background: '#D1FAE5', display: 'inline-block', borderRadius: 2 }}></span> 1-4
+                  <span style={{ width: 14, height: 14, background: '#A7F3D0', display: 'inline-block', borderRadius: 2 }}></span> 4-8
+                  <span style={{ width: 14, height: 14, background: '#FCD34D', display: 'inline-block', borderRadius: 2 }}></span> 8-12
+                  <span style={{ width: 14, height: 14, background: '#F87171', display: 'inline-block', borderRadius: 2 }}></span> 12+
+                </span>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ background: '#F9FAFB' }}>
+                    <th style={{ padding: '6px 8px', textAlign: 'left' }}>Caregiver</th>
+                    {(heatmap.caregivers[0]?.days || []).map(d => (
+                      <th key={d.date} style={{ padding: '6px 8px', textAlign: 'center' }}>
+                        {new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })}
+                        <div style={{ fontSize: '0.7rem', color: '#6B7280', fontWeight: 400 }}>{d.date.slice(5)}</div>
+                      </th>
+                    ))}
+                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Week / Cap</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {heatmap.caregivers.map(cg => {
+                    const pct = cg.max_hours_per_week > 0 ? (cg.total / cg.max_hours_per_week) : 0;
+                    const overCap = cg.total > cg.max_hours_per_week;
+                    return (
+                      <tr key={cg.id} style={{ borderTop: '1px solid #F3F4F6' }}>
+                        <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{cg.first_name} {cg.last_name}</td>
+                        {cg.days.map(d => {
+                          let bg = '#F3F4F6';
+                          if (d.hours > 12) bg = '#F87171';
+                          else if (d.hours > 8) bg = '#FCD34D';
+                          else if (d.hours > 4) bg = '#A7F3D0';
+                          else if (d.hours > 0) bg = '#D1FAE5';
+                          return (
+                            <td key={d.date} style={{ padding: 2, textAlign: 'center' }}>
+                              <div title={`${d.shifts} shift(s) · ${d.hours}h`}
+                                style={{ background: bg, padding: '6px 2px', borderRadius: 4, fontWeight: d.hours > 8 ? 700 : 500, fontSize: '0.82rem' }}>
+                                {d.hours > 0 ? `${d.hours}h` : ''}
+                              </div>
+                            </td>
+                          );
+                        })}
+                        <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700, color: overCap ? '#DC2626' : pct >= 0.9 ? '#D97706' : '#374151' }}>
+                          {cg.total.toFixed(1)}h / {cg.max_hours_per_week}h
+                          {overCap && <div style={{ fontSize: '0.7rem' }}>⚠ over cap</div>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

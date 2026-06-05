@@ -67,6 +67,92 @@ function isScheduleActiveForDate(schedule, targetDate) {
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 
+// GET /api/scheduling/conflict-heatmap?weekOf=YYYY-MM-DD
+// Returns each active caregiver × 7 days of the requested week with
+// scheduled-hours per day vs their per-week capacity. Useful for spotting
+// over-allocation (>cap), double-booking, and gaps. One SQL aggregation,
+// frontend renders the grid.
+router.get('/conflict-heatmap', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const weekOf = req.query.weekOf || new Date().toISOString().slice(0, 10);
+    // Normalize to week start (Sunday) like getWeekStart in the existing code
+    const start = new Date(weekOf + 'T12:00:00Z');
+    start.setUTCDate(start.getUTCDate() - start.getUTCDay());
+    const startStr = start.toISOString().slice(0, 10);
+    const end = new Date(start); end.setUTCDate(end.getUTCDate() + 6);
+    const endStr = end.toISOString().slice(0, 10);
+
+    // For each caregiver, sum scheduled hours per day of the requested week.
+    // Recurring schedules are matched via day_of_week with effective/end_date
+    // bounds; one-time schedules via exact date match.
+    const result = await db.query(`
+      WITH days AS (
+        SELECT generate_series($1::date, $2::date, '1 day'::interval)::date AS d
+      ),
+      cgs AS (
+        SELECT u.id, u.first_name, u.last_name,
+          COALESCE(ca.max_hours_per_week, 40) AS max_hours_per_week
+        FROM users u
+        LEFT JOIN caregiver_availability ca ON ca.caregiver_id = u.id
+        WHERE u.role = 'caregiver' AND u.is_active = true
+      ),
+      sched_hours AS (
+        SELECT
+          s.caregiver_id, d.d,
+          ROUND(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0)::numeric, 2) AS hours,
+          COUNT(*) AS shift_count
+        FROM days d
+        JOIN schedules s
+          ON s.is_active = true
+         AND (
+           (s.schedule_type = 'one-time' AND s.date = d.d)
+           OR (s.schedule_type = 'recurring' AND s.day_of_week = EXTRACT(DOW FROM d.d)::int
+               AND (s.effective_date IS NULL OR d.d >= s.effective_date)
+               AND (s.end_date IS NULL OR d.d <= s.end_date))
+           OR (s.schedule_type = 'bi-weekly' AND s.day_of_week = EXTRACT(DOW FROM d.d)::int
+               AND MOD(((d.d - COALESCE(s.anchor_date, s.effective_date, s.created_at::date))::int / 7), 2) = 0)
+         )
+        LEFT JOIN schedule_exceptions se
+          ON se.schedule_id = s.id AND se.exception_date = d.d AND se.exception_type = 'cancelled'
+        WHERE se.id IS NULL
+        GROUP BY s.caregiver_id, d.d
+      )
+      SELECT cgs.id, cgs.first_name, cgs.last_name, cgs.max_hours_per_week,
+        d.d AS day,
+        COALESCE(sh.hours, 0) AS hours,
+        COALESCE(sh.shift_count, 0) AS shift_count
+      FROM cgs
+      CROSS JOIN days d
+      LEFT JOIN sched_hours sh ON sh.caregiver_id = cgs.id AND sh.d = d.d
+      ORDER BY cgs.last_name, cgs.first_name, d.d
+    `, [startStr, endStr]);
+
+    // Pivot into caregiver-row format the frontend can render directly
+    const byCg = new Map();
+    for (const r of result.rows) {
+      if (!byCg.has(r.id)) {
+        byCg.set(r.id, {
+          id: r.id, first_name: r.first_name, last_name: r.last_name,
+          max_hours_per_week: parseFloat(r.max_hours_per_week),
+          days: [], total: 0,
+        });
+      }
+      const cg = byCg.get(r.id);
+      cg.days.push({
+        date: typeof r.day === 'string' ? r.day : r.day.toISOString().slice(0, 10),
+        hours: parseFloat(r.hours),
+        shifts: parseInt(r.shift_count),
+      });
+      cg.total += parseFloat(r.hours);
+    }
+    const caregivers = Array.from(byCg.values()).sort((a, b) => b.total - a.total);
+    res.json({ weekStart: startStr, weekEnd: endStr, caregivers });
+  } catch (error) {
+    console.error('[conflict-heatmap]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET /api/scheduling/suggest-caregivers
 router.get('/suggest-caregivers', verifyToken, async (req, res) => {
   try {

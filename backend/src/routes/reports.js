@@ -1558,6 +1558,50 @@ router.get('/caregiver-utilization', auth, async (req, res) => {
   }
 });
 
+// ─── CLIENT INCIDENT HISTORY ────────────────────────────────────────────────
+// Rolls up incident_reports per client over a date range. Useful for
+// QA reviews, performance discussions, and pre-audit risk identification.
+router.get('/client-incidents', auth, async (req, res) => {
+  const { startDate, endDate, clientId } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate + endDate required' });
+  const params = [startDate, endDate];
+  let where = `ir.incident_date BETWEEN $1::date AND $2::date`;
+  if (clientId) { params.push(clientId); where += ` AND ir.client_id = $${params.length}`; }
+  try {
+    const summary = await db.query(`
+      SELECT c.id AS client_id, c.first_name, c.last_name,
+        COUNT(*) AS incident_count,
+        COUNT(*) FILTER (WHERE ir.severity = 'critical') AS critical_count,
+        COUNT(*) FILTER (WHERE ir.severity = 'severe')   AS severe_count,
+        COUNT(*) FILTER (WHERE ir.severity = 'moderate') AS moderate_count,
+        COUNT(*) FILTER (WHERE ir.severity = 'minor')    AS minor_count,
+        COUNT(*) FILTER (WHERE ir.follow_up_required = true) AS followup_count,
+        MIN(ir.incident_date) AS earliest,
+        MAX(ir.incident_date) AS latest
+      FROM incident_reports ir
+      JOIN clients c ON ir.client_id = c.id
+      WHERE ${where}
+      GROUP BY c.id, c.first_name, c.last_name
+      ORDER BY incident_count DESC
+    `, params);
+
+    if (req.query.format === 'csv') {
+      return sendCSV(res, `client-incidents-${startDate}-to-${endDate}.csv`, summary.rows, [
+        { key: 'first_name', label: 'First' }, { key: 'last_name', label: 'Last' },
+        { key: 'incident_count', label: 'Incidents' },
+        { key: 'critical_count', label: 'Critical' }, { key: 'severe_count', label: 'Severe' },
+        { key: 'moderate_count', label: 'Moderate' }, { key: 'minor_count', label: 'Minor' },
+        { key: 'followup_count', label: 'Needs Follow-up' },
+        { key: 'earliest', label: 'Earliest' }, { key: 'latest', label: 'Latest' },
+      ]);
+    }
+    res.json({ rows: summary.rows, period: { startDate, endDate } });
+  } catch (error) {
+    console.error('[reports/client-incidents]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── CLIENT REVENUE BY MONTH ────────────────────────────────────────────────
 // Per-client invoice totals + collected vs outstanding aging buckets,
 // grouped by billing month over the date range. Useful for spotting clients

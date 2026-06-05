@@ -52,6 +52,61 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // Unsigned documents queue
   const [unsignedDocs, setUnsignedDocs] = useState([]);
   const [signTarget, setSignTarget] = useState(null);
+  // Shift swap requests (incoming to me + outgoing from me)
+  const [swapRequests, setSwapRequests] = useState([]);
+  const [swapModal, setSwapModal] = useState(null); // shift being offered for swap
+  const [swapForm, setSwapForm] = useState({ targetCaregiverId: '', reason: '' });
+  const [otherCaregivers, setOtherCaregivers] = useState([]);
+
+  const loadSwapRequests = async () => {
+    if (!user?.id) return;
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/shift-swaps?userId=${user.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setSwapRequests(await r.json());
+    } catch {}
+  };
+
+  const loadOtherCaregivers = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/caregivers`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) {
+        const all = await r.json();
+        setOtherCaregivers((all || []).filter(c => c.id !== user?.id));
+      }
+    } catch {}
+  };
+  useEffect(() => { loadSwapRequests(); loadOtherCaregivers(); }, [user?.id]);
+
+  const submitSwapRequest = async () => {
+    if (!swapModal || !swapForm.targetCaregiverId) { toast('Pick a coworker to swap with', 'error'); return; }
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/shift-swaps`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          scheduleId: swapModal.id,
+          requestingCaregiverId: user.id,
+          targetCaregiverId: swapForm.targetCaregiverId,
+          reason: swapForm.reason || null,
+        }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || 'Failed');
+      toast('Swap request sent');
+      setSwapModal(null); setSwapForm({ targetCaregiverId: '', reason: '' });
+      loadSwapRequests();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  const respondToSwap = async (req, accepted) => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/shift-swaps/${req.id}/respond`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ accepted }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || 'Failed');
+      toast(accepted ? 'Swap accepted — admin approval pending' : 'Swap declined');
+      loadSwapRequests();
+    } catch (e) { toast(e.message, 'error'); }
+  };
 
   const loadUnsignedDocs = async () => {
     if (!user?.id) return;
@@ -1086,6 +1141,36 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </div>
       )}
 
+      {/* Incoming swap requests — coworker wants to swap a shift WITH me */}
+      {(() => {
+        const incoming = swapRequests.filter(s => s.target_caregiver_id === user?.id && s.status === 'pending');
+        if (!incoming.length) return null;
+        return (
+          <div className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid #6366F1' }}>
+            <div className="card-title" style={{ color: '#4338CA' }}>
+              🔄 {incoming.length} shift swap request{incoming.length === 1 ? '' : 's'} for you
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+              {incoming.map(req => (
+                <div key={req.id} style={{ padding: '0.6rem 0.75rem', background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8 }}>
+                  <div style={{ fontWeight: 600 }}>
+                    {req.requesting_caregiver_first} {req.requesting_caregiver_last} wants you to take their shift
+                  </div>
+                  <div style={{ fontSize: '0.82rem', color: '#4338CA' }}>
+                    {req.shift_date && new Date(req.shift_date).toLocaleDateString()}
+                  </div>
+                  {req.reason && <div style={{ fontSize: '0.82rem', color: '#374151', fontStyle: 'italic', marginTop: 4 }}>"{req.reason}"</div>}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <button onClick={() => respondToSwap(req, true)} style={{ background: '#10B981', color: '#fff', border: 'none', padding: '0.4rem 0.8rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700 }}>✓ Take it</button>
+                    <button onClick={() => respondToSwap(req, false)} style={{ background: '#fff', color: '#DC2626', border: '1px solid #FCA5A5', padding: '0.4rem 0.8rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem' }}>✕ Decline</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Unsigned documents queue */}
       {unsignedDocs.length > 0 && (
         <div className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid #DC2626' }}>
@@ -1655,9 +1740,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               <div className="card" style={{ marginBottom: '0.75rem', borderLeft: '4px solid #2563eb' }}>
                 <div style={{ fontWeight: '600', color: '#2563eb', marginBottom: '0.5rem' }}>Today — {formatDateLabel(todayStr)}</div>
                 {todayShifts.map((s, i) => (
-                  <div key={s.id + '-' + i} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
-                    <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
-                    <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
+                  <div key={s.id + '-' + i} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
+                      <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
+                    </div>
+                    <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
+                      style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                      title="Ask a coworker to take this shift">🔄 Swap</button>
                   </div>
                 ))}
               </div>
@@ -1667,9 +1757,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               <div key={dateStr} className="card" style={{ marginBottom: '0.75rem' }}>
                 <div style={{ fontWeight: '600', color: '#059669' }}>{formatDateLabel(dateStr)}</div>
                 {byDate[dateStr].map((s, i) => (
-                  <div key={s.id + '-' + i} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee' }}>
-                    <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
-                    <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
+                  <div key={s.id + '-' + i} style={{ padding: '0.5rem 0', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
+                      <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
+                    </div>
+                    <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
+                      style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                      title="Ask a coworker to take this shift">🔄 Swap</button>
                   </div>
                 ))}
               </div>
@@ -2057,6 +2152,32 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         documentName={signTarget?.name || signTarget?.document_name || signTarget?.file_name}
         onSign={submitDocSignature}
       />
+
+      {swapModal && (
+        <div className="modal active" onClick={() => setSwapModal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header"><h2>🔄 Request Shift Swap</h2><button className="close-btn" onClick={() => setSwapModal(null)}>×</button></div>
+            <p className="text-muted">
+              {getClientName(swapModal.client_id)} on {swapModal.resolvedDate || (swapModal.date && swapModal.date.split('T')[0])} ({formatTime(swapModal.start_time)}–{formatTime(swapModal.end_time)})
+            </p>
+            <div className="form-group">
+              <label>Ask coworker</label>
+              <select value={swapForm.targetCaregiverId} onChange={(e) => setSwapForm({ ...swapForm, targetCaregiverId: e.target.value })}>
+                <option value="">Pick a coworker…</option>
+                {otherCaregivers.map(cg => <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Reason (optional, but helps)</label>
+              <textarea value={swapForm.reason} onChange={(e) => setSwapForm({ ...swapForm, reason: e.target.value })} placeholder="Doctor appointment, family emergency, etc." rows={3} />
+            </div>
+            <div className="form-actions">
+              <button className="btn btn-secondary" onClick={() => setSwapModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitSwapRequest}>Send Request</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Messages Modal */}
       {showMessages && <CaregiverMessages token={token} onClose={() => { setShowMessages(false); setUnreadMessages(0); }} />}

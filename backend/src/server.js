@@ -467,6 +467,10 @@ if (require.main === module) {
       // Daily authorization low-units / expiring-soon alerts
       const { startCron: startAuthAlerts } = require('./jobs/authorizationAlerts');
       startAuthAlerts();
+
+      // Shift reminder pushes (every 5 min, finds shifts starting in ~1 hour)
+      const { startCron: startShiftReminders } = require('./jobs/shiftReminders');
+      startShiftReminders();
     }
   });
 }
