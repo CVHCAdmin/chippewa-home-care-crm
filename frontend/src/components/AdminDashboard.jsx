@@ -56,6 +56,17 @@ const MessageBoard = React.lazy(() => import('./admin/MessageBoard'));
 const IntegrationsHub = React.lazy(() => import('./admin/IntegrationsHub'));
 const TimeOffManagement = React.lazy(() => import('./admin/TimeOffManagement'));
 
+// Pinned high-frequency items. Rendered above the categorized sections
+// so they're one click away even when the rest of the sidebar is collapsed.
+// Order is intentional: daily-driver pages first.
+const QUICK_ACCESS = [
+  { id: 'dashboard',       label: 'Dashboard',       icon: '📊' },
+  { id: 'scheduling',      label: 'Schedule Hub',    icon: '📅' },
+  { id: 'shift-approvals', label: 'Shift Approvals', icon: '⚠️' },
+  { id: 'billing',         label: 'Invoices',        icon: '🧾' },
+  { id: 'payroll',         label: 'Payroll',         icon: '💵' },
+];
+
 const NAV_SECTIONS = [
   {
     id: 'ops', label: 'Operations', icon: '🏢',
@@ -102,10 +113,10 @@ const NAV_SECTIONS = [
   {
     id: 'financial', label: 'Financial', icon: '💰',
     items: [
-      { id: 'billing', label: 'Billing', icon: '🧾' },
-      { id: 'billing-import', label: 'Billing Import', icon: '📥' },
+      { id: 'billing', label: 'Invoices', icon: '🧾' },
+      { id: 'billing-import', label: 'Invoice Import', icon: '📥' },
       { id: 'claims', label: 'Claims', icon: '📑' },
-      { id: 'billing-engine', label: 'Billing Engine', icon: '⚡' },
+      { id: 'billing-engine', label: 'Claims & EVV Engine', icon: '⚡' },
       { id: 'payroll', label: 'Payroll', icon: '💵' },
       { id: 'shift-approvals', label: 'Shift Approvals', icon: '⚠️' },
       { id: 'expenses', label: 'Expenses', icon: '💳' },
@@ -325,6 +336,37 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
         </div>
 
         <ul className="sidebar-nav" style={{ paddingBottom: '1rem' }}>
+          {/* QUICK ACCESS — pinned high-frequency items, always visible */}
+          <li style={{ marginBottom: '0.4rem' }}>
+            <div style={{
+              padding: '0.4rem 0.75rem',
+              color: 'rgba(255,255,255,0.55)',
+              fontSize: '0.66rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em',
+            }}>
+              ⭐ Quick Access
+            </div>
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+              {QUICK_ACCESS.map(item => (
+                <li key={`qa-${item.id}`}>
+                  <a
+                    href={`#${item.id}`}
+                    className={currentPage === item.id ? 'active' : ''}
+                    onClick={(e) => { e.preventDefault(); handlePageClick(item.id); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '0.5rem',
+                      padding: '0.5rem 0.75rem 0.5rem 1rem',
+                      fontSize: '0.92rem', fontWeight: 600,
+                    }}
+                  >
+                    <span style={{ fontSize: '1.05rem', width: '20px', textAlign: 'center' }}>{item.icon}</span>
+                    {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '0.6rem 0.75rem 0.4rem' }} />
+          </li>
+
           {NAV_SECTIONS.map(section => {
             const isCollapsed = collapsedSections[section.id];
             const hasActive = section.items.some(i => i.id === currentPage);

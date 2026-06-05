@@ -938,6 +938,9 @@ const SchedulingHub = ({ token }) => {
               <button className='btn btn-sm btn-secondary' onClick={() => { const d = new Date(coverageWeekOf + 'T12:00:00'); d.setDate(d.getDate() - 7); setCoverageWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>◀ Prev</button>
               <input type='date' value={coverageWeekOf} onChange={(e) => setCoverageWeekOf(getWeekStart(new Date(e.target.value + 'T12:00:00')).toISOString().split('T')[0])} style={{ padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.85rem' }} />
               <button className='btn btn-sm btn-secondary' onClick={() => { const d = new Date(coverageWeekOf + 'T12:00:00'); d.setDate(d.getDate() + 7); setCoverageWeekOf(getWeekStart(d).toISOString().split('T')[0]); }}>Next ▶</button>
+              <button className='btn btn-sm btn-primary'
+                disabled={coverageWeekOf === getWeekStart(new Date()).toISOString().split('T')[0]}
+                onClick={() => setCoverageWeekOf(getWeekStart(new Date()).toISOString().split('T')[0])}>📍 Today</button>
               <button className='btn btn-sm btn-primary' onClick={() => setCoverageWeekOf(getWeekStart(new Date()).toISOString().split('T')[0])}>Today</button>
             </div>
           </div>

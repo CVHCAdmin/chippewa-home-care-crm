@@ -1162,9 +1162,14 @@ router.post('/invoice-adjustments', auth, async (req, res) => {
 router.get('/referral-source-rates', auth, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT rsr.*, 
+      SELECT rsr.*,
         rs.name as referral_source_name,
-        ct.name as care_type_name
+        ct.name as care_type_name,
+        (SELECT COUNT(*) FROM clients c
+           WHERE c.is_active = true
+             AND c.referral_source_id = rsr.referral_source_id
+             AND (rsr.care_type_id IS NULL OR c.care_type_id = rsr.care_type_id)
+        ) AS client_count
       FROM referral_source_rates rsr
       LEFT JOIN referral_sources rs ON rsr.referral_source_id = rs.id
       LEFT JOIN care_types ct ON rsr.care_type_id = ct.id

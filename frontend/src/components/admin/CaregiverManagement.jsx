@@ -419,6 +419,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                 <th>Phone</th>
                 <th>Address</th>
                 <th>Default Rate</th>
+                <th>Last Active</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -430,7 +431,16 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                     <input type="checkbox" checked={selectedIds.includes(caregiver.id)}
                       onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, caregiver.id] : prev.filter(id => id !== caregiver.id))} />
                   </td>
-                  <td><strong>{caregiver.first_name} {caregiver.last_name}</strong></td>
+                  <td>
+                    <strong>{caregiver.first_name} {caregiver.last_name}</strong>
+                    {!caregiver.evv_worker_id && (
+                      <span title="No Sandata EVV Worker ID on file — Medicaid visits for this caregiver cannot be submitted electronically"
+                        style={{ display:'inline-block', marginLeft:6, fontSize:'0.65rem', fontWeight:700,
+                                 padding:'1px 5px', borderRadius:3, background:'#DC2626', color:'#fff', verticalAlign:'middle' }}>
+                        ⚠ NO EVV ID
+                      </span>
+                    )}
+                  </td>
                   <td>{caregiver.email}</td>
                   <td><a href={`tel:${caregiver.phone}`}>{caregiver.phone || 'N/A'}</a></td>
                   <td style={{ fontSize: '0.85rem' }}>
@@ -441,6 +451,14 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                     )}
                   </td>
                   <td><strong>{formatCurrency(caregiver.default_pay_rate)}</strong>/hr</td>
+                  <td style={{ fontSize: '0.82rem' }}>
+                    {caregiver.last_shift_date ? (() => {
+                      const days = Math.floor((Date.now() - new Date(caregiver.last_shift_date).getTime()) / 86400000);
+                      const color = days <= 7 ? '#059669' : days <= 30 ? '#6B7280' : '#DC2626';
+                      const label = days === 0 ? 'today' : days === 1 ? '1d ago' : days < 30 ? `${days}d ago` : days < 60 ? `${Math.floor(days/7)}w ago` : `${Math.floor(days/30)}mo ago`;
+                      return <span style={{ color }}>{label}</span>;
+                    })() : <span style={{ color: '#9CA3AF' }}>never</span>}
+                  </td>
                   <td>
                     {caregiver.is_active === false ? (
                       <span className="badge" style={{ background: '#DC2626', color: '#fff' }}>INACTIVE</span>

@@ -8,14 +8,25 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
   const [loading, setLoading] = useState(true);
   const [noShowStats, setNoShowStats] = useState(null);
   const [gpsFailures, setGpsFailures] = useState({ count: 0, failures: [] });
+  const [actionItems, setActionItems] = useState({ items: [], totalCount: 0 });
 
   useEffect(() => {
     loadAnalytics();
     loadNoShowStats();
     loadGpsFailures();
+    loadActionItems();
     const t = setInterval(loadGpsFailures, 30000); // poll every 30s
     return () => clearInterval(t);
   }, []);
+
+  const loadActionItems = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/dashboard/action-items`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.ok) setActionItems(await r.json());
+    } catch { /* ignore */ }
+  };
 
   const loadGpsFailures = async () => {
     try {
@@ -130,13 +141,51 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
             {summary?.pendingInvoices?.count || 0} invoices
           </p>
         </div>
-        <div className="stat-card">
-          <h3>This Month Revenue</h3>
+        <div className="stat-card" title="Sum of payments received this calendar month. Outstanding A/R and future-dated invoices are not counted.">
+          <h3>This Month Revenue <span style={{ fontSize: '0.7rem', color: '#9CA3AF', fontWeight: 400 }}>(collected)</span></h3>
           <div className="value value-success">
             ${formatCurrency(summary?.thisMonthRevenue)}
           </div>
+          <p style={{ fontSize: '0.72rem', color: '#9CA3AF', margin: '0.25rem 0 0', fontWeight: 400 }}>
+            Payments received this month — A/R not counted
+          </p>
         </div>
       </div>
+
+      {/* Action Items — daily workflow drivers */}
+      {actionItems.items.length > 0 && (
+        <div className="card" style={{ borderLeft: '4px solid #DC2626' }}>
+          <div className="card-title">
+            🎯 Action Items
+            <span style={{ marginLeft: 8, background: '#DC2626', color: '#fff', borderRadius: 10, padding: '2px 10px', fontSize: '0.75rem', fontWeight: 700 }}>
+              {actionItems.totalCount} total
+            </span>
+          </div>
+          <div style={{ display: 'grid', gap: '0.5rem' }}>
+            {actionItems.items.map(item => (
+              <button
+                key={item.key}
+                onClick={() => onNavigate && onNavigate(item.page)}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '0.75rem 1rem', borderRadius: 8, border: 'none',
+                  background: item.severity === 'high' ? '#FEF2F2' : '#FFFBEB',
+                  borderLeft: `3px solid ${item.severity === 'high' ? '#DC2626' : '#D97706'}`,
+                  cursor: onNavigate ? 'pointer' : 'default', textAlign: 'left',
+                  fontSize: '0.9rem',
+                }}
+              >
+                <span style={{ color: '#374151' }}>{item.label}</span>
+                <span style={{
+                  background: item.severity === 'high' ? '#DC2626' : '#D97706',
+                  color: '#fff', borderRadius: 12, padding: '2px 10px',
+                  fontWeight: 700, fontSize: '0.85rem', minWidth: 28, textAlign: 'center',
+                }}>{item.count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Referral Sources Performance */}
       <div className="card">

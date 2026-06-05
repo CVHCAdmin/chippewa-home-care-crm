@@ -86,8 +86,10 @@ export default function ShiftApprovals({ token }) {
 
   const approveAsIs = (row) => submit(row.id, { notes: 'Approved as clocked' });
   const reject = (row) => {
-    if (!window.confirm('Reject this shift? Billable hours will be set to 0.')) return;
-    submit(row.id, { reject: true, notes: editNotes || 'Rejected by admin' });
+    const reason = window.prompt('Why are you rejecting this shift? (This becomes part of the audit trail.)', '');
+    if (reason === null) return; // cancelled
+    const note = reason.trim() || 'Rejected by admin';
+    submit(row.id, { reject: true, notes: note });
   };
   const saveEdit = (row) => {
     const mins = parseInt(editBillable, 10);
@@ -129,6 +131,7 @@ export default function ShiftApprovals({ token }) {
                 <th style={thStyle}>End</th>
                 <th style={thStyle}>Actual</th>
                 <th style={thStyle}>Scheduled</th>
+                <th style={thStyle} title="Which figure the system will actually pay">Pay Using</th>
                 <th style={thStyle}>Billable</th>
                 <th style={thStyle}>Est. Pay</th>
                 <th style={thStyle}>Reason</th>
@@ -151,6 +154,15 @@ export default function ShiftApprovals({ token }) {
                     <td style={tdStyle}>{fmtDateTime(r.end_time)}</td>
                     <td style={tdStyle}>{fmtHrs(r.hours)}</td>
                     <td style={tdStyle}>{fmtHrs(r.allotted_hours)}</td>
+                    <td style={tdStyle}>
+                      {r.is_private_pay ? (
+                        <span style={badge('#3730A3', '#E0E7FF')} title="Private pay: bill the actual clocked time">Actual</span>
+                      ) : r.allotted_hours == null ? (
+                        <span style={badge('#92400E', '#FEF3C7')} title="No schedule linked — needs admin override before pay">Manual</span>
+                      ) : (
+                        <span style={badge('#065F46', '#D1FAE5')} title="Insurance/MCO: pay the scheduled amount regardless of clock variance">Scheduled</span>
+                      )}
+                    </td>
                     <td style={tdStyle}>
                       {isEditing ? (
                         <input

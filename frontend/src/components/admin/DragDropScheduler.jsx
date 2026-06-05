@@ -892,15 +892,30 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
           {caregivers.map(cg => {
             const hrs    = Number(parseFloat(weeklyHours(cg.id) || 0)).toFixed(2);
+            const maxHrs = parseFloat(cg.max_hours_per_week ?? 40);
+            const pct    = maxHrs > 0 ? (parseFloat(hrs) / maxHrs) : 0;
             const isOver = parseFloat(hrs) > 40;
+            const isFull = pct >= 1 && !isOver;
+            const hoursColor = isOver ? '#EF4444' : isFull ? '#D97706' : pct < 0.5 ? '#0891B2' : '#059669';
             return (
               <div key={cg.id} style={{ display:'grid', gridTemplateColumns:'160px repeat(7, 1fr)', borderBottom:'1px solid #F3F4F6', background:'#fff', minHeight:72 }}>
                 <div style={{ padding:'10px 14px', borderRight:'1px solid #F3F4F6', background:'#FAFAFA' }}>
                   <div style={{ fontWeight:700, fontSize:13, color:'#111827', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                     {cg.first_name} {cg.last_name}
                   </div>
-                  <div style={{ fontSize:11, color: isOver ? '#EF4444' : '#6B7280', fontWeight: isOver ? 700 : 400, marginTop:2 }}>
-                    {hrs}h{isOver ? ' \u26A0\uFE0F OT' : ''}
+                  <div style={{ fontSize:11, color: hoursColor, fontWeight: (isOver||isFull) ? 700 : 500, marginTop:2 }}
+                       title={`${hrs}h scheduled of ${maxHrs}h max \u2014 ${Math.round(pct*100)}% capacity`}>
+                    {hrs}h / {maxHrs}h
+                    {isOver ? ' \u26A0\uFE0F OT' : isFull ? ' full' : ''}
+                  </div>
+                  {/* Capacity bar */}
+                  <div style={{ marginTop:4, height:3, background:'#E5E7EB', borderRadius:2, overflow:'hidden' }}>
+                    <div style={{
+                      width: `${Math.min(pct, 1.5) * 100 / 1.5}%`,
+                      height: '100%',
+                      background: hoursColor,
+                      transition: 'width 0.2s',
+                    }} />
                   </div>
                 </div>
                 {weekDates.map((_, dayIndex) => {

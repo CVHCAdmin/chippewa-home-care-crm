@@ -38,6 +38,36 @@ router.get('/summary', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// GET /api/dashboard/action-items
+// Operational to-do list for admin. Each entry has count + link target.
+router.get('/action-items', verifyToken, requireAdmin, async (req, res) => {
+  const safe = async (q, params = []) => {
+    try { return (await db.query(q, params)).rows[0] || {}; }
+    catch (e) { console.error('[action-items]', e.message); return {}; }
+  };
+  try {
+    const [pendingApprovals, openShiftsCount, lowAuths, expiringAuths, expiringCerts, stuckPunches, pendingPayrollReviews] = await Promise.all([
+      safe(`SELECT COUNT(*)::int AS n FROM time_entries WHERE needs_approval = true AND is_complete = true`),
+      safe(`SELECT COUNT(*)::int AS n FROM open_shifts WHERE status = 'open' AND shift_date >= CURRENT_DATE AND shift_date <= CURRENT_DATE + INTERVAL '7 days'`),
+      safe(`SELECT COUNT(*)::int AS n FROM authorizations WHERE status = 'active' AND (authorized_units - used_units) <= low_units_alert_threshold`),
+      safe(`SELECT COUNT(*)::int AS n FROM authorizations WHERE status = 'active' AND end_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '14 days'`),
+      safe(`SELECT COUNT(*)::int AS n FROM caregiver_certifications WHERE expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`),
+      safe(`SELECT COUNT(*)::int AS n FROM time_entries WHERE is_complete = false AND start_time < NOW() - INTERVAL '24 hours'`),
+      safe(`SELECT COUNT(*)::int AS n FROM payroll_shift_reviews WHERE status IN ('pending','flagged','missing_punch') AND created_at > NOW() - INTERVAL '30 days'`),
+    ]);
+    const items = [
+      { key: 'shift_approvals',  label: 'Time entries awaiting approval', count: pendingApprovals.n || 0, page: 'shift-approvals',  severity: 'high' },
+      { key: 'stuck_punches',    label: 'Open clock-ins more than 24h old', count: stuckPunches.n || 0,  page: 'live-board',       severity: 'high' },
+      { key: 'open_shifts',      label: 'Open shifts in next 7 days',     count: openShiftsCount.n || 0, page: 'scheduling',       severity: 'med' },
+      { key: 'low_auths',        label: 'Authorizations running low',     count: lowAuths.n || 0,        page: 'billing-engine',   severity: 'high' },
+      { key: 'expiring_auths',   label: 'Authorizations expiring within 14 days', count: expiringAuths.n || 0, page: 'billing-engine', severity: 'high' },
+      { key: 'expiring_certs',   label: 'Caregiver certifications expiring within 30 days', count: expiringCerts.n || 0, page: 'compliance',  severity: 'med' },
+      { key: 'payroll_reviews',  label: 'Payroll shift reviews still pending', count: pendingPayrollReviews.n || 0, page: 'payroll',     severity: 'med' },
+    ].filter(item => item.count > 0);
+    res.json({ items, totalCount: items.reduce((s, i) => s + i.count, 0) });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // GET /api/dashboard/referrals
 router.get('/referrals', verifyToken, requireAdmin, async (req, res) => {
   try {

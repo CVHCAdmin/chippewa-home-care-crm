@@ -398,9 +398,18 @@ const PayrollProcessing = ({ token }) => {
             {loading ? 'Calculating...' : '2. Calculate Payroll'}
           </button>
         </div>
-        <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: '#6B7280' }}>
-          Step 1: Reconcile shifts matches schedules to clock-ins. Step 2: Calculate payroll uses only approved shifts.
+        <div style={{ marginTop: '0.75rem', padding: '0.75rem 1rem', background: '#EFF6FF', borderLeft: '4px solid #2563EB', borderRadius: 6, fontSize: '0.85rem', color: '#1E3A8A' }}>
+          <strong>How this works:</strong> <strong>Step 1 — Reconcile Shifts</strong> matches your schedule against caregiver clock-ins for the pay period selected above. Each match becomes a reviewable row. <strong>Step 2 — Calculate Payroll</strong> rolls up only the <em>approved</em> rows into pay totals. Use the Shift Approvals page to handle anything flagged BEFORE running Step 2 — pending/missing-punch rows are silently excluded from pay, not paid out.
         </div>
+        {((shiftData.stats.pending || 0) + (shiftData.stats.missing_punch || 0) + (shiftData.stats.flagged || 0)) > 0 && (
+          <div style={{ marginTop: '0.75rem', padding: '0.75rem 1rem', background: '#FEF3C7', borderLeft: '4px solid #D97706', borderRadius: 6, fontSize: '0.85rem', color: '#92400E' }}>
+            ⚠️ <strong>{(shiftData.stats.pending || 0) + (shiftData.stats.missing_punch || 0) + (shiftData.stats.flagged || 0)} shifts still need review</strong>
+            {shiftData.stats.pending > 0 && ` — ${shiftData.stats.pending} pending`}
+            {shiftData.stats.missing_punch > 0 && `, ${shiftData.stats.missing_punch} missing punch`}
+            {shiftData.stats.flagged > 0 && `, ${shiftData.stats.flagged} flagged`}.
+            Resolve them in the Shift Review tab below (or in Shift Approvals) before clicking Calculate Payroll, or they won't be paid.
+          </div>
+        )}
       </div>
 
       {/* Tab selector */}

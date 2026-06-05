@@ -189,7 +189,15 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
           { label: 'Earnings This Month', val: fmt$(earnings?.earnings_this_month), accent: '#6366F1' },
           { label: 'Hours This Week', val: fmtHrs(earnings?.hours_this_week), accent: '#0891B2' },
           { label: 'Total Hours (All Time)', val: fmtHrs(earnings?.total_hours), accent: '#F59E0B' },
-          { label: 'Avg Shift', val: fmtHrs(earnings?.avg_shift_hours), accent: '#8B5CF6' },
+          (() => {
+            const completed = parseInt(earnings?.completed_shifts || 0);
+            const total = parseFloat(earnings?.total_hours || 0);
+            return {
+              label: completed > 0 ? `Avg Shift (${completed} shifts)` : 'Avg Shift',
+              val: completed > 0 ? fmtHrs(total / completed) : 'N/A',
+              accent: '#8B5CF6',
+            };
+          })(),
         ].map(s2 => (
           <div key={s2.label} style={s.statBox(s2.accent)}>
             <div style={{ fontSize: '1.3rem', fontWeight: 800, color: s2.accent }}>{s2.val}</div>

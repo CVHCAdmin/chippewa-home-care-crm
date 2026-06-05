@@ -9,10 +9,21 @@ const { verifyToken, requireAdmin, requireAdminOrSelf, auditLog } = require('../
 router.get('/', verifyToken, async (req, res) => {
   try {
     const includeInactive = req.query.includeInactive === 'true';
+    // Enriched with evv_worker_id (compliance badge) and last_shift_date
+    // (operational at-a-glance "when did they last work?").
     const result = await db.query(
-      `SELECT id, email, first_name, last_name, phone, hire_date, is_active, certifications, role, default_pay_rate,
-              address, city, state, zip, latitude, longitude, ivr_pin
-       FROM users WHERE role = 'caregiver' ${includeInactive ? '' : 'AND is_active = true'} ORDER BY is_active DESC, first_name`
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.hire_date, u.is_active,
+              u.certifications, u.role, u.default_pay_rate,
+              u.address, u.city, u.state, u.zip, u.latitude, u.longitude, u.ivr_pin,
+              cp.evv_worker_id,
+              cp.npi_number,
+              COALESCE(ca.max_hours_per_week, 40) AS max_hours_per_week,
+              (SELECT MAX(start_time) FROM time_entries WHERE caregiver_id = u.id) AS last_shift_date
+       FROM users u
+       LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
+       LEFT JOIN caregiver_availability ca ON ca.caregiver_id = u.id
+       WHERE u.role = 'caregiver' ${includeInactive ? '' : 'AND u.is_active = true'}
+       ORDER BY u.is_active DESC, u.first_name`
     );
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }

@@ -1251,18 +1251,26 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <p className="text-muted text-center">No rates configured.</p>
           ) : (
             <table className="table">
-              <thead><tr><th>Payer</th><th>Care Type</th><th>Rate</th><th>Type</th><th>Effective</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Payer</th><th>Care Type</th><th>Rate</th><th>Type</th><th>Effective</th><th title="Active clients with this payer + care type combo">Clients</th><th>Actions</th></tr></thead>
               <tbody>
-                {rates.map(rate => (
-                  <tr key={rate.id}>
-                    <td><strong>{rate.referral_source_name}</strong></td>
-                    <td>{rate.care_type_name}</td>
-                    <td><strong>{formatCurrency(rate.rate_amount)}</strong></td>
-                    <td><span className="badge badge-info">{rate.rate_type === 'hourly' ? 'Per Hour' : 'Per 15 Min'}</span></td>
-                    <td>{formatDate(rate.effective_date)}</td>
-                    <td><button className="btn btn-sm btn-danger" onClick={() => handleDeleteRate(rate.id)}>Delete</button></td>
-                  </tr>
-                ))}
+                {rates.map(rate => {
+                  const count = parseInt(rate.client_count || 0);
+                  return (
+                    <tr key={rate.id}>
+                      <td><strong>{rate.referral_source_name}</strong></td>
+                      <td>{rate.care_type_name || <em style={{color:'#9CA3AF'}}>any</em>}</td>
+                      <td><strong>{formatCurrency(rate.rate_amount)}</strong></td>
+                      <td><span className="badge badge-info">{rate.rate_type === 'hourly' ? 'Per Hour' : 'Per 15 Min'}</span></td>
+                      <td>{formatDate(rate.effective_date)}</td>
+                      <td>
+                        {count > 0
+                          ? <span style={{color:'#059669', fontWeight:600}}>{count} {count === 1 ? 'client' : 'clients'}</span>
+                          : <span style={{color:'#D97706'}} title="No active clients use this rate — orphaned config?">⚠️ none</span>}
+                      </td>
+                      <td><button className="btn btn-sm btn-danger" onClick={() => handleDeleteRate(rate.id)}>Delete</button></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
