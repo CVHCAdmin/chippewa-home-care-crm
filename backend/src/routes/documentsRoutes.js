@@ -103,6 +103,11 @@ router.get('/reports/expiring', auth, async (req, res) => {
 
 // Get unsigned documents for a user (MUST be before /:entityType/:entityId)
 router.get('/unsigned/:userId', auth, async (req, res) => {
+  // IDOR fix: only the caregiver themselves or an admin may view their unsigned
+  // compliance documents (HR/I-9/etc).
+  if (req.user?.role !== 'admin' && req.user?.id !== req.params.userId) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
   try {
     const result = await db.query(`
       SELECT d.* FROM documents d
@@ -124,6 +129,18 @@ router.get('/unsigned/:userId', auth, async (req, res) => {
 router.get('/:entityType/:entityId', auth, async (req, res) => {
   const { entityType, entityId } = req.params;
   const { documentType } = req.query;
+
+  // IDOR fix: admin can read anyone's, otherwise only the entity owner.
+  // For 'caregiver' entity: must be the caregiver themselves.
+  // For 'client' entity: not exposed to non-admin (client portal has its own route).
+  // For 'company': allowed for any authenticated user (shared company docs).
+  if (req.user?.role !== 'admin') {
+    if (entityType === 'caregiver') {
+      if (req.user?.id !== entityId) return res.status(403).json({ error: 'Not allowed' });
+    } else if (entityType !== 'company') {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
+  }
 
   try {
     let query = `

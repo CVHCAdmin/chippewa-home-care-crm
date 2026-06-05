@@ -51,7 +51,7 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // GET /api/clients/:id
-router.get('/:id', verifyToken, async (req, res) => {
+router.get('/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const [clientResult, emergencyResult, onboardingResult] = await Promise.all([
       db.query('SELECT * FROM clients WHERE id = $1', [req.params.id]),
@@ -63,7 +63,7 @@ router.get('/:id', verifyToken, async (req, res) => {
 });
 
 // PUT /api/clients/:id
-router.put('/:id', verifyToken, async (req, res) => {
+router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { firstName, lastName, dateOfBirth, phone, email, address, city, state, zip,
       serviceType, medicalConditions, allergies, medications, notes,

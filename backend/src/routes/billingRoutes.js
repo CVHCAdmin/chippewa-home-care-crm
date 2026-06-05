@@ -612,7 +612,7 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
 
 // Create manual invoice with custom line items
 router.post('/invoices/manual', auth, async (req, res) => {
-  const { clientId, billingPeriodStart, billingPeriodEnd, notes, lineItems, detailedMode } = req.body;
+  const { clientId, billingPeriodStart, billingPeriodEnd, notes, lineItems, detailedMode, acknowledgeRateWarning } = req.body;
 
   if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
     return res.status(400).json({ error: 'Client and billing period are required' });
@@ -625,7 +625,8 @@ router.post('/invoices/manual', auth, async (req, res) => {
   try {
     // Get client info
     const clientResult = await db.query(`
-      SELECT id, first_name, last_name, referral_source_id, care_type_id, is_private_pay
+      SELECT id, first_name, last_name, referral_source_id, care_type_id, is_private_pay,
+             private_pay_rate
       FROM clients WHERE id = $1
     `, [clientId]);
 
@@ -634,6 +635,47 @@ router.post('/invoices/manual', auth, async (req, res) => {
     }
 
     const client = clientResult.rows[0];
+
+    // Rate sanity warning: catch obvious typos like $0.05 instead of $33,
+    // or $300 instead of $30. Compare each line's rate to the client's
+    // configured rate and refuse if any is <50% or >200% off, unless the
+    // caller has explicitly acknowledged the warning. Skips lines with rate=0
+    // (write-offs / adjustments) and lines with no expected rate to compare.
+    if (!acknowledgeRateWarning) {
+      let expectedRate = null;
+      if (client.referral_source_id) {
+        const r = await db.query(
+          `SELECT rate_amount FROM referral_source_rates
+             WHERE referral_source_id = $1
+               AND (care_type_id = $2 OR care_type_id IS NULL)
+               AND (is_active = true OR is_active IS NULL)
+               AND (effective_date IS NULL OR effective_date <= $3)
+               AND (end_date IS NULL OR end_date >= $4)
+             ORDER BY CASE WHEN care_type_id = $2 THEN 0 ELSE 1 END,
+                      effective_date DESC NULLS LAST
+             LIMIT 1`,
+          [client.referral_source_id, client.care_type_id, billingPeriodEnd, billingPeriodStart]
+        );
+        if (r.rows[0]) expectedRate = parseFloat(r.rows[0].rate_amount);
+      }
+      if (expectedRate == null && client.private_pay_rate) {
+        expectedRate = parseFloat(client.private_pay_rate);
+      }
+      if (expectedRate && expectedRate > 0) {
+        const offendingLines = lineItems
+          .map((item, idx) => ({ idx, rate: parseFloat(item.rate || 0), hours: parseFloat(item.hours || 0) }))
+          .filter(l => l.rate > 0 && l.hours > 0 && (l.rate < expectedRate * 0.5 || l.rate > expectedRate * 2));
+        if (offendingLines.length > 0) {
+          return res.status(409).json({
+            error: 'Rate looks wrong',
+            message: `One or more line items have a rate that's well outside the client's configured rate of $${expectedRate.toFixed(2)}/hr. Double-check before saving.`,
+            expectedRate,
+            offendingLines: offendingLines.map(l => ({ lineIndex: l.idx, rate: l.rate })),
+            hint: 'Resubmit with acknowledgeRateWarning: true if the rate is correct.',
+          });
+        }
+      }
+    }
 
     // Check for existing invoice
     const existingResult = await db.query(`

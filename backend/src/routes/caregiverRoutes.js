@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
-const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+const { verifyToken, requireAdmin, requireAdminOrSelf, auditLog } = require('../middleware/shared');
 
 // GET /api/caregivers - All caregivers (optionally include inactive via ?includeInactive=true)
 router.get('/', verifyToken, async (req, res) => {
@@ -106,7 +106,9 @@ router.get('/:id/summary', verifyToken, requireAdmin, async (req, res) => {
         WHERE te.caregiver_id = $1 AND te.is_complete = true
         GROUP BY c.id, c.first_name, c.last_name, c.address, c.city ORDER BY last_visit DESC`, [caregiverId]),
       safeQuery(`SELECT te.id, te.start_time, te.end_time, te.is_complete,
-        CASE WHEN te.end_time IS NOT NULL THEN ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0::numeric, 2) ELSE NULL END as hours,
+        te.billable_minutes, te.allotted_minutes, te.duration_minutes, te.needs_approval,
+        CASE WHEN te.end_time IS NOT NULL THEN ROUND((EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0)::numeric, 2) ELSE NULL END as hours,
+        CASE WHEN te.billable_minutes IS NOT NULL THEN ROUND((te.billable_minutes / 60.0)::numeric, 2) ELSE NULL END as billable_hours,
         c.first_name as client_first, c.last_name as client_last, c.address as client_address
         FROM time_entries te JOIN clients c ON te.client_id = c.id
         WHERE te.caregiver_id = $1 ORDER BY te.start_time DESC LIMIT 10`, [caregiverId]),
@@ -137,7 +139,7 @@ router.get('/:id/summary', verifyToken, requireAdmin, async (req, res) => {
 });
 
 // GET /api/caregivers/:caregiverId/availability
-router.get('/:caregiverId/availability', verifyToken, async (req, res) => {
+router.get('/:caregiverId/availability', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     let result = await db.query(`SELECT * FROM caregiver_availability WHERE caregiver_id = $1`, [req.params.caregiverId]);
     if (result.rows.length === 0) {
@@ -154,7 +156,7 @@ router.get('/:caregiverId/availability', verifyToken, async (req, res) => {
 });
 
 // PUT /api/caregivers/:caregiverId/availability
-router.put('/:caregiverId/availability', verifyToken, async (req, res) => {
+router.put('/:caregiverId/availability', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const { status, maxHoursPerWeek, mondayAvailable, mondayStartTime, mondayEndTime, tuesdayAvailable, tuesdayStartTime, tuesdayEndTime,
       wednesdayAvailable, wednesdayStartTime, wednesdayEndTime, thursdayAvailable, thursdayStartTime, thursdayEndTime,
@@ -201,7 +203,7 @@ router.put('/:caregiverId/availability', verifyToken, async (req, res) => {
 });
 
 // GET /api/caregivers/:caregiverId/blackout-dates
-router.get('/:caregiverId/blackout-dates', verifyToken, async (req, res) => {
+router.get('/:caregiverId/blackout-dates', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const result = await db.query(`SELECT * FROM caregiver_blackout_dates WHERE caregiver_id = $1 ORDER BY start_date DESC`, [req.params.caregiverId]);
     res.json(result.rows);
@@ -209,7 +211,7 @@ router.get('/:caregiverId/blackout-dates', verifyToken, async (req, res) => {
 });
 
 // POST /api/caregivers/:caregiverId/blackout-dates
-router.post('/:caregiverId/blackout-dates', verifyToken, async (req, res) => {
+router.post('/:caregiverId/blackout-dates', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const { startDate, endDate, reason } = req.body;
     if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -224,7 +226,7 @@ router.post('/:caregiverId/blackout-dates', verifyToken, async (req, res) => {
 });
 
 // GET /api/caregivers/:caregiverId/certifications
-router.get('/:caregiverId/certifications', verifyToken, async (req, res) => {
+router.get('/:caregiverId/certifications', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const result = await db.query(`SELECT * FROM caregiver_certifications WHERE caregiver_id = $1 ORDER BY expiration_date DESC`, [req.params.caregiverId]);
     res.json(result.rows);
@@ -232,7 +234,7 @@ router.get('/:caregiverId/certifications', verifyToken, async (req, res) => {
 });
 
 // POST /api/caregivers/:caregiverId/certifications
-router.post('/:caregiverId/certifications', verifyToken, async (req, res) => {
+router.post('/:caregiverId/certifications', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const { certificationName, certificationNumber, issuer, issuedDate, expirationDate } = req.body;
     const certId = uuidv4();
@@ -257,7 +259,7 @@ router.delete('/certifications/:certId', verifyToken, async (req, res) => {
 });
 
 // GET /api/caregivers/:caregiverId/background-check
-router.get('/:caregiverId/background-check', verifyToken, async (req, res) => {
+router.get('/:caregiverId/background-check', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const result = await db.query(`SELECT * FROM background_checks WHERE caregiver_id = $1 ORDER BY initiated_date DESC NULLS LAST LIMIT 1`, [req.params.caregiverId]);
     res.json(result.rows.length > 0 ? result.rows[0] : null);
@@ -281,7 +283,7 @@ router.post('/:caregiverId/background-check', verifyToken, requireAdmin, async (
 });
 
 // GET /api/caregivers/:caregiverId/training-records
-router.get('/:caregiverId/training-records', verifyToken, async (req, res) => {
+router.get('/:caregiverId/training-records', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const result = await db.query(`SELECT * FROM training_records WHERE caregiver_id = $1 ORDER BY completion_date DESC`, [req.params.caregiverId]);
     res.json(result.rows);
@@ -305,7 +307,7 @@ router.post('/:caregiverId/training-records', verifyToken, requireAdmin, async (
 });
 
 // GET /api/caregivers/:caregiverId/compliance-documents
-router.get('/:caregiverId/compliance-documents', verifyToken, async (req, res) => {
+router.get('/:caregiverId/compliance-documents', verifyToken, requireAdminOrSelf('caregiverId'), async (req, res) => {
   try {
     const result = await db.query(`SELECT * FROM compliance_documents WHERE caregiver_id = $1 ORDER BY upload_date DESC`, [req.params.caregiverId]);
     res.json(result.rows);

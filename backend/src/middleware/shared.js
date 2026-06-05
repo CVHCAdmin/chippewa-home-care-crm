@@ -24,6 +24,16 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+// Factory: returns middleware that allows access if the caller is an admin OR
+// if req.params[paramName] matches their own user id. Use on routes like
+// /api/caregivers/:caregiverId/* where the user themselves should be able to
+// read/write their own data, but no one else (other than admin) should.
+const requireAdminOrSelf = (paramName) => (req, res, next) => {
+  if (req.user?.role === 'admin') return next();
+  if (req.user?.id && req.params[paramName] && req.user.id === req.params[paramName]) return next();
+  return res.status(403).json({ error: 'Not allowed: you can only access your own data' });
+};
+
 const auditLog = async (userId, action, tableName, recordId, oldData, newData, reasonCode) => {
   try {
     if (recordId && typeof recordId === 'string' && !recordId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) return;
@@ -37,4 +47,4 @@ const auditLog = async (userId, action, tableName, recordId, oldData, newData, r
   }
 };
 
-module.exports = { verifyToken, requireAdmin, auditLog };
+module.exports = { verifyToken, requireAdmin, requireAdminOrSelf, auditLog };

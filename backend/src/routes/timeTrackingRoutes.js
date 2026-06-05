@@ -328,7 +328,8 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
     if (timeEntry.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
     const entry = timeEntry.rows[0];
 
-    const durationMinutes = Math.round((new Date() - new Date(entry.start_time)) / 60000);
+    const durationSeconds = (new Date() - new Date(entry.start_time)) / 1000;
+    const durationMinutes = Math.round(durationSeconds / 60);
     const allottedMinutes = entry.allotted_minutes;
     const isPrivatePay = entry.is_private_pay === true || entry.referral_payer_type === 'private_pay';
 
@@ -336,7 +337,15 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
     let needsApproval = false;
     let approvalReason = null;
 
-    if (isPrivatePay) {
+    // Zero-duration guard: clock-in then immediately clock-out (< 60s) is
+    // almost always an accidental double-tap or wrong-client tap. Mark for
+    // admin review and pay 0 until reviewed — never silently complete a
+    // 0-hour shift as if it counted.
+    if (durationSeconds < 60) {
+      billableMinutes = 0;
+      needsApproval = true;
+      approvalReason = 'zero_duration';
+    } else if (isPrivatePay) {
       // Private pay: caregiver is paid for actual time, no schedule constraint
       billableMinutes = durationMinutes;
     } else if (allottedMinutes == null) {

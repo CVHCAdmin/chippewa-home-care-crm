@@ -975,10 +975,10 @@ const PayrollProcessing = ({ token }) => {
             <div className="form-section">
               <h3>Tax Rates</h3>
               <div className="form-grid-2">
-                <div className="form-group"><label>Federal Tax Rate (%)</label><input type="number" step="0.01" value={settings.federalTaxRate * 100} onChange={(e) => setSettings({ ...settings, federalTaxRate: parseFloat(e.target.value) / 100 })} /></div>
-                <div className="form-group"><label>State Tax Rate (%)</label><input type="number" step="0.01" value={settings.stateTaxRate * 100} onChange={(e) => setSettings({ ...settings, stateTaxRate: parseFloat(e.target.value) / 100 })} /></div>
-                <div className="form-group"><label>Social Security (%)</label><input type="number" step="0.01" value={settings.socialSecurityRate * 100} onChange={(e) => setSettings({ ...settings, socialSecurityRate: parseFloat(e.target.value) / 100 })} /></div>
-                <div className="form-group"><label>Medicare (%)</label><input type="number" step="0.01" value={settings.medicareRate * 100} onChange={(e) => setSettings({ ...settings, medicareRate: parseFloat(e.target.value) / 100 })} /></div>
+                <div className="form-group"><label>Federal Tax Rate (%)</label><input type="number" step="0.01" value={(settings.federalTaxRate * 100).toFixed(2)} onChange={(e) => setSettings({ ...settings, federalTaxRate: parseFloat(e.target.value) / 100 })} /></div>
+                <div className="form-group"><label>State Tax Rate (%)</label><input type="number" step="0.01" value={(settings.stateTaxRate * 100).toFixed(2)} onChange={(e) => setSettings({ ...settings, stateTaxRate: parseFloat(e.target.value) / 100 })} /></div>
+                <div className="form-group"><label>Social Security (%)</label><input type="number" step="0.01" value={(settings.socialSecurityRate * 100).toFixed(2)} onChange={(e) => setSettings({ ...settings, socialSecurityRate: parseFloat(e.target.value) / 100 })} /></div>
+                <div className="form-group"><label>Medicare (%)</label><input type="number" step="0.01" value={(settings.medicareRate * 100).toFixed(2)} onChange={(e) => setSettings({ ...settings, medicareRate: parseFloat(e.target.value) / 100 })} /></div>
               </div>
             </div>
             <div className="modal-actions">

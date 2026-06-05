@@ -9,10 +9,19 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { sendFamilyPortalWelcome, sendFamilyPasswordReset } = require('../services/emailService');
 
+// Admin-only guard for routes under /admin/* — `auth` only verifies a token;
+// without this, any logged-in caregiver or family user could enumerate every
+// client's family members, edit access permissions, or reset other families'
+// passwords by hitting /api/family-portal/admin/*.
+const requireAdmin = (req, res, next) => {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  next();
+};
+
 // ==================== ADMIN ENDPOINTS ====================
 
 // Get all family members (admin view)
-router.get('/admin/members', auth, async (req, res) => {
+router.get('/admin/members', auth, requireAdmin, async (req, res) => {
   const { status, clientId } = req.query;
   try {
     let query = `
@@ -47,7 +56,7 @@ router.get('/admin/members', auth, async (req, res) => {
 });
 
 // Add family member (admin)
-router.post('/admin/members', auth, async (req, res) => {
+router.post('/admin/members', auth, requireAdmin, async (req, res) => {
   const { 
     clientId, firstName, lastName, email, phone, relationship, password,
     canViewSchedule, canViewCarePlan, canViewMedications, canMessage 
@@ -104,7 +113,7 @@ router.post('/admin/members', auth, async (req, res) => {
 });
 
 // Update family member status (admin)
-router.put('/admin/members/:id/status', auth, async (req, res) => {
+router.put('/admin/members/:id/status', auth, requireAdmin, async (req, res) => {
   const { isActive } = req.body;
   try {
     await db.query(`
@@ -126,7 +135,7 @@ router.put('/admin/members/:id/status', auth, async (req, res) => {
 });
 
 // Reset family member password (admin)
-router.put('/admin/members/:id/reset-password', auth, async (req, res) => {
+router.put('/admin/members/:id/reset-password', auth, requireAdmin, async (req, res) => {
   const { password } = req.body;
   try {
     const fm = await db.query('SELECT user_id, first_name, email FROM family_members WHERE id = $1', [req.params.id]);
@@ -153,7 +162,7 @@ router.put('/admin/members/:id/reset-password', auth, async (req, res) => {
 });
 
 // Get all family messages (admin)
-router.get('/admin/messages', auth, async (req, res) => {
+router.get('/admin/messages', auth, requireAdmin, async (req, res) => {
   try {
     const result = await db.query(`
       SELECT fm.*, 
@@ -172,7 +181,7 @@ router.get('/admin/messages', auth, async (req, res) => {
 });
 
 // Reply to family message (admin)
-router.post('/admin/messages/:id/reply', auth, async (req, res) => {
+router.post('/admin/messages/:id/reply', auth, requireAdmin, async (req, res) => {
   const { reply } = req.body;
   try {
     // Mark original as read and add reply
@@ -198,7 +207,7 @@ router.post('/admin/messages/:id/reply', auth, async (req, res) => {
 });
 
 // Update family member (admin)
-router.put('/admin/members/:id', auth, async (req, res) => {
+router.put('/admin/members/:id', auth, requireAdmin, async (req, res) => {
   const { firstName, lastName, email, phone, relationship, canViewSchedule, canViewCarePlan, canViewMedications, canMessage } = req.body;
   
   try {

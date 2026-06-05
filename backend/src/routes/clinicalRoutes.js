@@ -178,7 +178,7 @@ router.get('/incidents/summary', verifyToken, requireAdmin, async (req, res) => 
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-router.get('/incidents/:id', verifyToken, async (req, res) => {
+router.get('/incidents/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await db.query(`SELECT ir.*, c.first_name||' '||c.last_name as client_name, u.first_name||' '||u.last_name as caregiver_name FROM incident_reports ir LEFT JOIN clients c ON ir.client_id=c.id LEFT JOIN users u ON ir.caregiver_id=u.id WHERE ir.id=$1`, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Incident not found' });
@@ -186,13 +186,13 @@ router.get('/incidents/:id', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-router.get('/incidents', verifyToken, async (req, res) => {
+router.get('/incidents', verifyToken, requireAdmin, async (req, res) => {
   try {
     res.json((await db.query(`SELECT ir.*, c.first_name||' '||c.last_name as client_name, u.first_name||' '||u.last_name as caregiver_name FROM incident_reports ir LEFT JOIN clients c ON ir.client_id=c.id LEFT JOIN users u ON ir.caregiver_id=u.id ORDER BY ir.incident_date DESC, ir.incident_time DESC`)).rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-router.post('/incidents', verifyToken, async (req, res) => {
+router.post('/incidents', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { clientId, caregiverId, incidentType, severity, incidentDate, incidentTime, description, witnesses, injuriesOrDamage, actionsTaken, followUpRequired, followUpNotes, reportedBy, reportedDate } = req.body;
     if (!clientId || !incidentType || !description) return res.status(400).json({ error: 'Client, incident type, and description are required' });
@@ -207,7 +207,7 @@ router.post('/incidents', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-router.patch('/incidents/:id', verifyToken, async (req, res) => {
+router.patch('/incidents/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { severity, injuriesOrDamage, actionsTaken, followUpRequired, followUpNotes } = req.body;
     const result = await db.query(
@@ -231,19 +231,19 @@ router.delete('/incidents/:id', verifyToken, requireAdmin, async (req, res) => {
 
 // ─── PERFORMANCE REVIEWS ──────────────────────────────────────────────────────
 
-router.get('/performance-reviews/summary/:caregiverId', verifyToken, async (req, res) => {
+router.get('/performance-reviews/summary/:caregiverId', verifyToken, requireAdmin, async (req, res) => {
   try {
     res.json((await db.query(`SELECT COUNT(*) as total_reviews, AVG(CASE WHEN overall_assessment='excellent' THEN 3 WHEN overall_assessment='satisfactory' THEN 2 WHEN overall_assessment='needs_improvement' THEN 1 ELSE 0 END) as avg_score, COUNT(CASE WHEN overall_assessment='excellent' THEN 1 END) as excellent_count, COUNT(CASE WHEN overall_assessment='satisfactory' THEN 1 END) as satisfactory_count, COUNT(CASE WHEN overall_assessment='needs_improvement' THEN 1 END) as needs_improvement_count, MAX(review_date) as last_review_date FROM performance_reviews WHERE caregiver_id=$1`, [req.params.caregiverId])).rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-router.get('/performance-reviews/:caregiverId', verifyToken, async (req, res) => {
+router.get('/performance-reviews/:caregiverId', verifyToken, requireAdmin, async (req, res) => {
   try {
     res.json((await db.query(`SELECT pr.*, cl.first_name||' '||cl.last_name as client_name FROM performance_reviews pr LEFT JOIN clients cl ON pr.client_id=cl.id WHERE pr.caregiver_id=$1 ORDER BY pr.review_date DESC`, [req.params.caregiverId])).rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-router.get('/performance-reviews', verifyToken, async (req, res) => {
+router.get('/performance-reviews', verifyToken, requireAdmin, async (req, res) => {
   try {
     res.json((await db.query(`SELECT pr.*, c.first_name||' '||c.last_name as caregiver_name, cl.first_name||' '||cl.last_name as client_name FROM performance_reviews pr LEFT JOIN users c ON pr.caregiver_id=c.id LEFT JOIN clients cl ON pr.client_id=cl.id ORDER BY pr.review_date DESC`)).rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
