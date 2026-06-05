@@ -49,10 +49,39 @@ const SCHEDULE_EXPANSION_CTE = `
 // Expands schedules for the pay period, matches to time entries, creates shift review records
 
 router.post('/generate-shifts', auth, async (req, res) => {
-  const { startDate, endDate } = req.body;
+  const { startDate, endDate, force } = req.body;
   if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required' });
 
   try {
+    // ── Overlap guard ──────────────────────────────────────────────────────
+    // Without this, running /generate-shifts on a date range that overlaps an
+    // existing pay-period produces a NEW review row per overlapping period
+    // (the unique index keys on pay_period_start/end), and the same shift gets
+    // paid multiple times. Pass ?force=true OR { force: true } in the body to
+    // override (e.g., regenerating after corrections — caller is responsible
+    // for cleaning up old reviews first).
+    if (!force && req.query.force !== 'true') {
+      const overlap = await db.query(
+        `SELECT DISTINCT pay_period_start, pay_period_end
+         FROM payroll_shift_reviews
+         WHERE pay_period_start <= $2::date
+           AND pay_period_end   >= $1::date
+         ORDER BY pay_period_start
+         LIMIT 10`,
+        [startDate, endDate]
+      );
+      if (overlap.rows.length > 0) {
+        const periods = overlap.rows.map(r =>
+          `${r.pay_period_start.toISOString().slice(0,10)}..${r.pay_period_end.toISOString().slice(0,10)}`
+        );
+        return res.status(409).json({
+          error: 'This date range overlaps existing payroll review(s). Regenerating would create duplicate paid rows for the same shifts.',
+          overlapping_periods: periods,
+          hint: 'Either pick a non-overlapping range, or pass force=true after deleting the old review rows for this range.',
+        });
+      }
+    }
+
     // Step 1: Expand all schedule occurrences and match to time entries
     // Tight pass: each punch picks closest shift within 2 hours, each shift picks best remaining punch.
     // Loose pass: any leftover shift + leftover punch on same caregiver/client/date get paired,

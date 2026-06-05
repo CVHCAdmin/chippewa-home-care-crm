@@ -2,6 +2,12 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { verifyToken, requireAdmin } = require('../middleware/shared');
+
+// HIPAA: every route here returns PHI access history. Admins only, period.
+// Previously these had ZERO auth because the verifyToken applied at the mount
+// point in server.js doesn't propagate into router-level handlers.
+router.use(verifyToken, requireAdmin);
 
 /**
  * GET /api/audit-logs/stats/summary
