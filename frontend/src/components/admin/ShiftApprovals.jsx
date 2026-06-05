@@ -9,6 +9,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
+import CareTaskChecklist from '../CareTaskChecklist';
 
 const fmtHrs = (h) => (h == null || h === '' ? '—' : `${parseFloat(h).toFixed(2)}h`);
 const fmt$ = (n) => (n == null || n === '' ? '—' : `$${parseFloat(n).toFixed(2)}`);
@@ -31,6 +32,7 @@ export default function ShiftApprovals({ token }) {
   const [editBillable, setEditBillable] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const [taskViewerFor, setTaskViewerFor] = useState(null); // time entry id to inspect tasks
 
   const hdr = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
@@ -199,6 +201,7 @@ export default function ShiftApprovals({ token }) {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           <button disabled={busy} style={btn('#2ABBA7')} onClick={() => approveAsIs(r)}>Approve</button>
                           <button disabled={busy} style={btn('#6366F1')} onClick={() => startEdit(r)}>Edit</button>
+                          <button disabled={busy} style={btn('#0891B2')} onClick={() => setTaskViewerFor(r.id)} title="See which assigned tasks the caregiver marked complete/skipped/refused">📋 Tasks</button>
                           <button disabled={busy} style={btn('#EF4444')} onClick={() => reject(r)}>Reject</button>
                         </div>
                       )}
@@ -208,6 +211,21 @@ export default function ShiftApprovals({ token }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {taskViewerFor && (
+        <div onClick={() => setTaskViewerFor(null)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20,
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 10, maxWidth: 640, width: '95%', maxHeight: '85vh', overflow: 'auto', padding: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h3 style={{ margin: 0, fontSize: '1rem' }}>📋 Task Completions</h3>
+              <button onClick={() => setTaskViewerFor(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6B7280' }}>×</button>
+            </div>
+            <CareTaskChecklist token={token} timeEntryId={taskViewerFor} />
+          </div>
         </div>
       )}
     </div>

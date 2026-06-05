@@ -46,16 +46,23 @@ const ReportsAnalytics = ({ token }) => {
     }
   };
 
+  // New GET-style drill-down reports added later — different endpoint shape
+  const GET_REPORTS = new Set(['hours-by-payer', 'caregiver-utilization', 'client-visits-summary']);
+
   const generateReport = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/reports/${reportType}`, {
-        method: 'POST',
+      const isGet = GET_REPORTS.has(reportType);
+      const url = isGet
+        ? `${API_BASE_URL}/api/reports/${reportType}?startDate=${encodeURIComponent(dateRange.startDate)}&endDate=${encodeURIComponent(dateRange.endDate)}`
+        : `${API_BASE_URL}/api/reports/${reportType}`;
+      const response = await fetch(url, {
+        method: isGet ? 'GET' : 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
+        body: isGet ? undefined : JSON.stringify({
           startDate: dateRange.startDate,
           endDate: dateRange.endDate,
           caregiverId: caregiverFilter || null,
@@ -562,6 +569,72 @@ const ReportsAnalytics = ({ token }) => {
     );
   };
 
+  const fmtNum = (n) => n == null ? '—' : (typeof n === 'number' ? n.toLocaleString() : n);
+  const fmtPct = (n) => n == null ? '—' : `${parseFloat(n).toFixed(1)}%`;
+
+  // Generic table renderer for the new GET-style drill-down reports.
+  // Pass column defs; reads from reportData.rows.
+  const renderTable = (columns) => {
+    const rows = reportData?.rows || [];
+    if (rows.length === 0) return <p className="text-muted text-center">No data for this period.</p>;
+    return (
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table">
+          <thead><tr>{columns.map(c => <th key={c.key} style={{ textAlign: c.right ? 'right' : 'left' }}>{c.label}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                {columns.map(c => {
+                  let v = r[c.key];
+                  if (c.format === 'num') v = fmtNum(v);
+                  else if (c.format === 'pct') v = fmtPct(v);
+                  else if (c.format === 'hr') v = v != null ? `${parseFloat(v).toFixed(2)}h` : '—';
+                  else if (c.format === 'date' && v) v = new Date(v).toLocaleDateString();
+                  return <td key={c.key} style={{ textAlign: c.right ? 'right' : 'left', fontWeight: c.bold ? 700 : 400 }}>{v ?? '—'}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderHoursByPayer = () => renderTable([
+    { key: 'payer_name', label: 'Payer', bold: true },
+    { key: 'payer_type', label: 'Type' },
+    { key: 'active_clients', label: 'Clients', right: true, format: 'num' },
+    { key: 'visits', label: 'Visits', right: true, format: 'num' },
+    { key: 'total_hours', label: 'Total Hrs', right: true, format: 'hr' },
+    { key: 'billable_hours', label: 'Billable Hrs', right: true, format: 'hr' },
+    { key: 'avg_visit_hours', label: 'Avg Visit', right: true, format: 'hr' },
+    { key: 'first_visit', label: 'First', format: 'date' },
+    { key: 'last_visit', label: 'Last', format: 'date' },
+  ]);
+
+  const renderCaregiverUtilization = () => renderTable([
+    { key: 'first_name', label: 'First', bold: true },
+    { key: 'last_name',  label: 'Last',  bold: true },
+    { key: 'max_hours_per_week', label: 'Max/wk', right: true, format: 'num' },
+    { key: 'capacity_hours',     label: 'Capacity (hrs)', right: true, format: 'num' },
+    { key: 'actual_hours',       label: 'Actual (hrs)', right: true, format: 'hr' },
+    { key: 'visits',             label: 'Visits', right: true, format: 'num' },
+    { key: 'utilization_pct',    label: 'Util %', right: true, format: 'pct' },
+  ]);
+
+  const renderClientVisitsSummary = () => renderTable([
+    { key: 'first_name', label: 'First', bold: true },
+    { key: 'last_name',  label: 'Last',  bold: true },
+    { key: 'payer_name', label: 'Payer' },
+    { key: 'care_type_name', label: 'Care Type' },
+    { key: 'visits',           label: 'Visits',     right: true, format: 'num' },
+    { key: 'distinct_caregivers', label: 'Caregivers', right: true, format: 'num' },
+    { key: 'total_hours',      label: 'Total Hrs',  right: true, format: 'hr' },
+    { key: 'billable_hours',   label: 'Billable',   right: true, format: 'hr' },
+    { key: 'first_visit',      label: 'First',      format: 'date' },
+    { key: 'last_visit',       label: 'Last',       format: 'date' },
+  ]);
+
   const renderReport = () => {
     switch (reportType) {
       case 'overview':
@@ -574,6 +647,12 @@ const ReportsAnalytics = ({ token }) => {
         return renderSatisfactionReport();
       case 'revenue':
         return renderRevenueReport();
+      case 'hours-by-payer':
+        return renderHoursByPayer();
+      case 'caregiver-utilization':
+        return renderCaregiverUtilization();
+      case 'client-visits-summary':
+        return renderClientVisitsSummary();
       default:
         return null;
     }
@@ -593,7 +672,10 @@ const ReportsAnalytics = ({ token }) => {
             { value: 'hours', label: 'Hours Worked' },
             { value: 'performance', label: 'Performance' },
             { value: 'satisfaction', label: 'Satisfaction' },
-            { value: 'revenue', label: 'Revenue' }
+            { value: 'revenue', label: 'Revenue' },
+            { value: 'hours-by-payer', label: 'Hours by Payer' },
+            { value: 'caregiver-utilization', label: 'Caregiver Utilization' },
+            { value: 'client-visits-summary', label: 'Client Visits Summary' }
           ].map(type => (
             <button
               key={type.value}

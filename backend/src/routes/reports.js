@@ -1,6 +1,6 @@
 // routes/reportsRoutes.js
 // Reports & Analytics API
-// 
+//
 // IMPORTANT BUSINESS LOGIC:
 // - Client hours = from SCHEDULES table (planned/authorized service hours)
 // - Caregiver payroll hours = from TIME_ENTRIES table (actual clock in/out for payroll)
@@ -765,6 +765,796 @@ router.get('/caregiver-productivity', auth, async (req, res) => {
     res.json(result.rows);
   } catch (error) {
     console.error('Caregiver productivity error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== CLIENT COMPREHENSIVE REPORT ====================
+// Aggregates every record tied to a client within a date range.
+// Designed as a single source of truth for audits, surveyor visits,
+// family requests, incident investigations, and legal/compliance.
+
+const ALL_CLIENT_REPORT_SECTIONS = [
+  'demographics', 'care_plan', 'medications', 'adls',
+  'visits', 'incidents', 'communications', 'documents',
+  'authorizations', 'billing', 'audit'
+];
+
+async function fetchClientReportData(clientId, from, to, sections) {
+  const wants = new Set(sections);
+  const data = {
+    clientId,
+    period: { from, to },
+    sections: Array.from(wants),
+    generatedAt: new Date().toISOString()
+  };
+
+  // Demographics, emergency contacts, onboarding, current assignments — always include.
+  const clientQ = await db.query(`
+    SELECT c.*,
+      rs.name AS referral_source_name,
+      ct.name AS care_type_name
+    FROM clients c
+    LEFT JOIN referral_sources rs ON rs.id = c.referral_source_id
+    LEFT JOIN care_types ct ON ct.id = c.care_type_id
+    WHERE c.id = $1
+  `, [clientId]);
+  if (clientQ.rows.length === 0) return null;
+  data.client = clientQ.rows[0];
+
+  const [ecQ, onboardQ, assignQ] = await Promise.all([
+    db.query(`SELECT name, relationship, phone, email, is_primary FROM client_emergency_contacts WHERE client_id = $1 ORDER BY is_primary DESC, name`, [clientId]),
+    db.query(`SELECT * FROM client_onboarding WHERE client_id = $1`, [clientId]),
+    db.query(`SELECT ca.*, u.first_name||' '||u.last_name AS caregiver_name
+              FROM client_assignments ca
+              LEFT JOIN users u ON u.id = ca.caregiver_id
+              WHERE ca.client_id = $1
+              ORDER BY ca.status = 'active' DESC, ca.assignment_date DESC`, [clientId])
+  ]);
+  data.emergencyContacts = ecQ.rows;
+  data.onboarding = onboardQ.rows[0] || null;
+  data.assignments = assignQ.rows;
+
+  if (wants.has('care_plan')) {
+    const [plansQ, adlReqQ] = await Promise.all([
+      db.query(`SELECT * FROM care_plans WHERE client_id = $1 ORDER BY start_date DESC NULLS LAST, created_at DESC`, [clientId]),
+      db.query(`SELECT * FROM client_adl_requirements WHERE client_id = $1 ORDER BY adl_category`, [clientId])
+    ]);
+    data.carePlans = plansQ.rows;
+    data.adlRequirements = adlReqQ.rows;
+  }
+
+  if (wants.has('medications')) {
+    const [medsQ, medLogQ] = await Promise.all([
+      db.query(`SELECT * FROM client_medications WHERE client_id = $1 ORDER BY is_active DESC, medication_name`, [clientId]),
+      db.query(`SELECT ml.*, cm.medication_name, u.first_name||' '||u.last_name AS caregiver_name
+                FROM medication_logs ml
+                LEFT JOIN client_medications cm ON cm.id = ml.medication_id
+                LEFT JOIN users u ON u.id = ml.caregiver_id
+                WHERE ml.client_id = $1
+                  AND ml.administered_time >= $2::timestamptz
+                  AND ml.administered_time < ($3::date + INTERVAL '1 day')::timestamptz
+                ORDER BY ml.administered_time DESC`, [clientId, from, to])
+    ]);
+    data.medications = medsQ.rows;
+    data.medicationLogs = medLogQ.rows;
+  }
+
+  if (wants.has('adls')) {
+    const adlQ = await db.query(`
+      SELECT al.*, u.first_name||' '||u.last_name AS caregiver_name
+      FROM adl_logs al
+      LEFT JOIN users u ON u.id = al.caregiver_id
+      WHERE al.client_id = $1
+        AND al.performed_at >= $2::timestamptz
+        AND al.performed_at < ($3::date + INTERVAL '1 day')::timestamptz
+      ORDER BY al.performed_at DESC
+    `, [clientId, from, to]);
+    data.adlLogs = adlQ.rows;
+  }
+
+  if (wants.has('visits')) {
+    const visitsQ = await db.query(`
+      SELECT te.id, te.start_time, te.end_time, te.duration_minutes,
+             te.clock_in_location, te.clock_out_location,
+             te.notes, te.is_complete,
+             u.first_name||' '||u.last_name AS caregiver_name,
+             ev.service_code, ev.modifier, ev.units_of_service,
+             ev.sandata_status, ev.sandata_visit_id,
+             ev.gps_in_lat, ev.gps_in_lng, ev.gps_out_lat, ev.gps_out_lng,
+             ev.is_verified AS evv_verified,
+             ev.sandata_exception_code, ev.sandata_exception_desc
+      FROM time_entries te
+      LEFT JOIN users u ON u.id = te.caregiver_id
+      LEFT JOIN evv_visits ev ON ev.time_entry_id = te.id
+      WHERE te.client_id = $1
+        AND te.start_time >= $2::timestamptz
+        AND te.start_time < ($3::date + INTERVAL '1 day')::timestamptz
+      ORDER BY te.start_time DESC
+    `, [clientId, from, to]);
+    data.visits = visitsQ.rows;
+
+    const notesQ = await db.query(`
+      SELECT cvn.*, u.first_name||' '||u.last_name AS caregiver_name
+      FROM client_visit_notes cvn
+      LEFT JOIN users u ON u.id = cvn.caregiver_id
+      WHERE cvn.client_id = $1
+        AND cvn.created_at >= $2::timestamptz
+        AND cvn.created_at < ($3::date + INTERVAL '1 day')::timestamptz
+      ORDER BY cvn.created_at DESC
+    `, [clientId, from, to]);
+    data.visitNotes = notesQ.rows;
+  }
+
+  if (wants.has('incidents')) {
+    const incQ = await db.query(`
+      SELECT ir.*, u.first_name||' '||u.last_name AS caregiver_name
+      FROM incident_reports ir
+      LEFT JOIN users u ON u.id = ir.caregiver_id
+      WHERE ir.client_id = $1
+        AND COALESCE(ir.incident_date, ir.created_at::date) BETWEEN $2::date AND $3::date
+      ORDER BY ir.incident_date DESC NULLS LAST, ir.incident_time DESC NULLS LAST
+    `, [clientId, from, to]);
+    data.incidents = incQ.rows;
+  }
+
+  if (wants.has('communications')) {
+    const commQ = await db.query(`
+      SELECT cl.*
+      FROM communication_log cl
+      WHERE cl.entity_type = 'client' AND cl.entity_id = $1
+        AND cl.created_at >= $2::timestamptz
+        AND cl.created_at < ($3::date + INTERVAL '1 day')::timestamptz
+      ORDER BY cl.is_pinned DESC, cl.created_at DESC
+    `, [clientId, from, to]);
+    data.communications = commQ.rows;
+  }
+
+  if (wants.has('documents')) {
+    const docsQ = await db.query(`
+      SELECT id, document_type, name, description, file_type, requires_signature,
+             expiration_date, is_confidential, signed_at, created_at
+      FROM documents
+      WHERE entity_type = 'client' AND entity_id = $1
+      ORDER BY created_at DESC
+    `, [clientId]);
+    data.documents = docsQ.rows;
+  }
+
+  if (wants.has('authorizations')) {
+    // Schema drift: newer migration added authorization_number/total_units aliases.
+    // Use COALESCE so this works whichever columns are present.
+    const authQ = await db.query(`
+      SELECT a.id,
+             COALESCE(a.auth_number, a.authorization_number) AS auth_number,
+             a.midas_auth_id,
+             a.procedure_code, a.modifier,
+             COALESCE(a.authorized_units, a.total_units) AS authorized_units,
+             a.used_units,
+             (COALESCE(a.authorized_units, a.total_units) - COALESCE(a.used_units, 0)) AS remaining_units,
+             a.unit_type, a.start_date, a.end_date, a.status,
+             COALESCE(rs.name, a.payer_name) AS payer_name
+      FROM authorizations a
+      LEFT JOIN referral_sources rs ON rs.id = a.payer_id
+      WHERE a.client_id = $1
+      ORDER BY a.end_date DESC NULLS LAST
+    `, [clientId]);
+    data.authorizations = authQ.rows;
+  }
+
+  if (wants.has('billing')) {
+    const invQ = await db.query(`
+      SELECT id, invoice_number, billing_period_start, billing_period_end,
+             subtotal, tax, total, payment_status, payment_due_date,
+             payment_date, payment_method
+      FROM invoices
+      WHERE client_id = $1
+        AND billing_period_end >= $2::date
+        AND billing_period_start <= $3::date
+      ORDER BY billing_period_start DESC
+    `, [clientId, from, to]);
+    data.invoices = invQ.rows;
+  }
+
+  if (wants.has('audit')) {
+    // audit_logs records changes to the client row itself (record_id = clientId).
+    const auditQ = await db.query(`
+      SELECT al.action, al.table_name, al.timestamp, al.ip_address,
+             u.first_name||' '||u.last_name AS user_name, u.email AS user_email
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id = al.user_id
+      WHERE al.record_id = $1
+        AND al.timestamp >= $2::timestamptz
+        AND al.timestamp < ($3::date + INTERVAL '1 day')::timestamptz
+      ORDER BY al.timestamp DESC
+      LIMIT 500
+    `, [clientId, from, to]);
+    data.auditLog = auditQ.rows;
+  }
+
+  return data;
+}
+
+function parseClientReportParams(req) {
+  const today = new Date().toISOString().slice(0, 10);
+  const defaultFrom = new Date(Date.now() - 90 * 86400 * 1000).toISOString().slice(0, 10);
+  const from = req.query.from || defaultFrom;
+  const to = req.query.to || today;
+  const sectionsParam = (req.query.sections || '').trim();
+  const sections = sectionsParam
+    ? sectionsParam.split(',').map(s => s.trim()).filter(s => ALL_CLIENT_REPORT_SECTIONS.includes(s))
+    : ALL_CLIENT_REPORT_SECTIONS;
+  return { from, to, sections };
+}
+
+async function logReportGeneration(userId, clientId, from, to, sections, format) {
+  try {
+    await db.query(
+      `INSERT INTO audit_logs (user_id, action, table_name, record_id, new_data)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [userId, `REPORT_GENERATED_${format.toUpperCase()}`, 'clients', clientId,
+       JSON.stringify({ from, to, sections })]
+    );
+  } catch (e) {
+    // Don't block the report on audit-log write failure.
+    console.error('Failed to log report generation:', e.message);
+  }
+}
+
+// GET /api/reports/client/:id  — JSON preview for the UI
+router.get('/client/:id', auth, async (req, res) => {
+  try {
+    const { from, to, sections } = parseClientReportParams(req);
+    const data = await fetchClientReportData(req.params.id, from, to, sections);
+    if (!data) return res.status(404).json({ error: 'Client not found' });
+    await logReportGeneration(req.user.id, req.params.id, from, to, sections, 'json');
+    res.json(data);
+  } catch (err) {
+    console.error('Client report error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/reports/client/:id/pdf  — downloadable PDF
+router.get('/client/:id/pdf', auth, async (req, res) => {
+  try {
+    const { from, to, sections } = parseClientReportParams(req);
+    const data = await fetchClientReportData(req.params.id, from, to, sections);
+    if (!data) return res.status(404).json({ error: 'Client not found' });
+    await logReportGeneration(req.user.id, req.params.id, from, to, sections, 'pdf');
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ margin: 50, size: 'LETTER', bufferPages: true });
+    const name = `${data.client.first_name}-${data.client.last_name}`.replace(/[^A-Za-z0-9-]/g, '');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="client-report-${name}-${from}-to-${to}.pdf"`);
+    doc.pipe(res);
+    renderClientReportPdf(doc, data);
+    doc.end();
+  } catch (err) {
+    console.error('Client PDF report error:', err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== PDF RENDERING HELPERS ====================
+function renderClientReportPdf(doc, data) {
+  const TEAL = '#2ABBA7';
+  const INK = '#111827';
+  const MUTED = '#6B7280';
+  const RULE = '#E5E7EB';
+
+  const fmtDate = (v) => {
+    if (!v) return '—';
+    const d = typeof v === 'string' ? new Date(v) : v;
+    if (isNaN(d)) return String(v);
+    return d.toLocaleDateString('en-US');
+  };
+  const fmtDateTime = (v) => {
+    if (!v) return '—';
+    const d = typeof v === 'string' ? new Date(v) : v;
+    if (isNaN(d)) return String(v);
+    return d.toLocaleString('en-US');
+  };
+  const fmtMoney = (v) => {
+    const n = parseFloat(v);
+    return isNaN(n) ? '—' : `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+  const safe = (v) => (v === null || v === undefined || v === '') ? '—' : String(v);
+  const minutesToHours = (m) => (m == null) ? '—' : (Number(m) / 60).toFixed(2) + ' h';
+
+  const ensureSpace = (needed) => {
+    if (doc.y + needed > doc.page.height - 60) doc.addPage();
+  };
+
+  const sectionHeader = (title) => {
+    ensureSpace(40);
+    doc.moveDown(0.75);
+    doc.fillColor(TEAL).fontSize(13).font('Helvetica-Bold').text(title, { paragraphGap: 2 });
+    const y = doc.y;
+    doc.moveTo(50, y).lineTo(562, y).strokeColor(TEAL).lineWidth(1.2).stroke();
+    doc.moveDown(0.4);
+    doc.fillColor(INK).fontSize(10).font('Helvetica');
+  };
+
+  const kv = (label, value) => {
+    ensureSpace(14);
+    doc.fontSize(9).fillColor(MUTED).font('Helvetica').text(label, 50, doc.y, { width: 140, continued: true });
+    doc.fillColor(INK).font('Helvetica').text(safe(value), { width: 370 });
+  };
+
+  const paragraph = (text) => {
+    ensureSpace(20);
+    doc.fontSize(10).fillColor(INK).font('Helvetica').text(safe(text), { width: 512 });
+    doc.moveDown(0.3);
+  };
+
+  const emptyNote = (msg) => {
+    doc.fontSize(10).fillColor(MUTED).font('Helvetica-Oblique').text(msg);
+    doc.fillColor(INK).font('Helvetica');
+  };
+
+  // Simple table row renderer with wrap + zebra striping.
+  const renderTable = (columns, rows) => {
+    if (!rows || rows.length === 0) { emptyNote('No records in this period.'); return; }
+    const totalWidth = 512;
+    const colWidths = columns.map(c => Math.floor(totalWidth * c.w));
+    const startX = 50;
+
+    // Header row
+    ensureSpace(24);
+    let y = doc.y;
+    doc.rect(startX, y, totalWidth, 18).fill(TEAL);
+    doc.fillColor('#fff').fontSize(9).font('Helvetica-Bold');
+    let x = startX;
+    columns.forEach((c, i) => {
+      doc.text(c.label, x + 4, y + 5, { width: colWidths[i] - 8, ellipsis: true });
+      x += colWidths[i];
+    });
+    doc.fillColor(INK).font('Helvetica');
+    y += 18;
+    doc.y = y;
+
+    rows.forEach((row, idx) => {
+      const cellTexts = columns.map(c => {
+        const raw = typeof c.get === 'function' ? c.get(row) : row[c.key];
+        return safe(raw);
+      });
+      // Measure tallest cell to size the row
+      doc.fontSize(8.5).font('Helvetica');
+      let maxH = 12;
+      cellTexts.forEach((t, i) => {
+        const h = doc.heightOfString(t, { width: colWidths[i] - 8 });
+        if (h > maxH) maxH = h;
+      });
+      const rowH = maxH + 6;
+      ensureSpace(rowH + 2);
+      y = doc.y;
+      if (idx % 2 === 0) {
+        doc.rect(startX, y, totalWidth, rowH).fill('#F9FAFB');
+      }
+      doc.fillColor(INK);
+      x = startX;
+      cellTexts.forEach((t, i) => {
+        doc.text(t, x + 4, y + 3, { width: colWidths[i] - 8, height: rowH });
+        x += colWidths[i];
+      });
+      // Bottom rule
+      doc.moveTo(startX, y + rowH).lineTo(startX + totalWidth, y + rowH).strokeColor(RULE).lineWidth(0.5).stroke();
+      doc.y = y + rowH;
+    });
+    doc.moveDown(0.3);
+  };
+
+  // ─── HEADER ──────────────────────────────────────────────────────────────────
+  doc.rect(0, 0, doc.page.width, 72).fill(TEAL);
+  doc.fillColor('#fff').fontSize(18).font('Helvetica-Bold').text('Chippewa Valley Home Care', 50, 18);
+  doc.fontSize(12).font('Helvetica').text('Client Comprehensive Report', 50, 42);
+  doc.fillColor(INK);
+
+  doc.y = 90;
+  const c = data.client;
+  doc.fontSize(20).font('Helvetica-Bold').text(`${c.first_name} ${c.last_name}`, 50, doc.y);
+  doc.moveDown(0.2);
+  doc.fontSize(10).fillColor(MUTED).font('Helvetica')
+     .text(`Report Period: ${fmtDate(data.period.from)} – ${fmtDate(data.period.to)}    •    Generated ${fmtDateTime(data.generatedAt)}`);
+  doc.fillColor(INK);
+  doc.moveDown(0.8);
+
+  // ─── DEMOGRAPHICS (always) ───────────────────────────────────────────────────
+  sectionHeader('Client Information');
+  kv('Date of Birth', c.date_of_birth ? fmtDate(c.date_of_birth) : null);
+  kv('Gender', c.gender);
+  kv('Phone', c.phone);
+  kv('Email', c.email);
+  const addr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
+  kv('Address', addr);
+  kv('Service Start', c.start_date ? fmtDate(c.start_date) : null);
+  kv('Service Type', c.service_type);
+  kv('Care Type', c.care_type_name);
+  kv('Referral Source', c.referral_source_name);
+  kv('Status', c.is_active ? 'Active' : 'Inactive');
+
+  sectionHeader('Insurance & Identifiers');
+  kv('Primary Insurance', c.insurance_provider);
+  kv('Insurance ID', c.insurance_id);
+  kv('Medicaid ID', c.medicaid_id);
+  kv('MCO Member ID', c.mco_member_id);
+  kv('Primary Diagnosis', c.primary_diagnosis_code);
+  kv('Secondary Diagnosis', c.secondary_diagnosis_code);
+  if (c.is_private_pay) {
+    kv('Private Pay Rate', c.private_pay_rate ? `$${c.private_pay_rate} / ${c.private_pay_rate_type || 'hourly'}` : null);
+  }
+
+  if (c.medical_conditions?.length || c.allergies?.length || c.medications?.length) {
+    sectionHeader('Medical Overview');
+    if (c.medical_conditions?.length) { kv('Conditions', c.medical_conditions.join(', ')); }
+    if (c.allergies?.length) { kv('Allergies', c.allergies.join(', ')); }
+    if (c.medications?.length) { kv('Medications (summary)', c.medications.join(', ')); }
+  }
+
+  sectionHeader('Emergency Contacts');
+  if (data.emergencyContacts.length === 0) { emptyNote('No emergency contacts on file.'); }
+  else {
+    renderTable([
+      { label: 'Name', w: 0.28, key: 'name' },
+      { label: 'Relationship', w: 0.20, key: 'relationship' },
+      { label: 'Phone', w: 0.22, key: 'phone' },
+      { label: 'Email', w: 0.22, key: 'email' },
+      { label: 'Primary', w: 0.08, get: r => r.is_primary ? 'Yes' : '' }
+    ], data.emergencyContacts);
+  }
+
+  sectionHeader('Caregiver Assignments');
+  if (data.assignments.length === 0) { emptyNote('No caregiver assignments on record.'); }
+  else {
+    renderTable([
+      { label: 'Caregiver', w: 0.32, key: 'caregiver_name' },
+      { label: 'Assigned', w: 0.18, get: r => fmtDate(r.assignment_date) },
+      { label: 'Hrs/Wk', w: 0.12, key: 'hours_per_week' },
+      { label: 'Status', w: 0.18, key: 'status' },
+      { label: 'Notes', w: 0.20, key: 'notes' }
+    ], data.assignments);
+  }
+
+  // ─── CARE PLAN ───────────────────────────────────────────────────────────────
+  if (data.carePlans) {
+    sectionHeader('Care Plan');
+    if (data.carePlans.length === 0) { emptyNote('No care plan on file.'); }
+    data.carePlans.forEach(cp => {
+      ensureSpace(60);
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
+         .text(`${safe(cp.service_type)} — ${fmtDate(cp.start_date)} to ${fmtDate(cp.end_date)}`);
+      doc.font('Helvetica').fontSize(9);
+      if (cp.service_description) paragraph(`Service: ${cp.service_description}`);
+      if (cp.frequency) paragraph(`Frequency: ${cp.frequency}`);
+      if (cp.care_goals) paragraph(`Goals: ${cp.care_goals}`);
+      if (cp.special_instructions) paragraph(`Special Instructions: ${cp.special_instructions}`);
+      if (cp.precautions) paragraph(`Precautions: ${cp.precautions}`);
+      if (cp.medication_notes) paragraph(`Medication Notes: ${cp.medication_notes}`);
+      if (cp.mobility_notes) paragraph(`Mobility: ${cp.mobility_notes}`);
+      if (cp.dietary_notes) paragraph(`Diet: ${cp.dietary_notes}`);
+      if (cp.communication_notes) paragraph(`Communication: ${cp.communication_notes}`);
+      doc.moveDown(0.3);
+    });
+
+    if (data.adlRequirements?.length) {
+      doc.moveDown(0.2);
+      doc.fontSize(11).font('Helvetica-Bold').fillColor(INK).text('ADL Requirements');
+      doc.moveDown(0.2);
+      renderTable([
+        { label: 'Category', w: 0.22, key: 'adl_category' },
+        { label: 'Assistance', w: 0.18, key: 'assistance_level' },
+        { label: 'Frequency', w: 0.18, key: 'frequency' },
+        { label: 'Instructions', w: 0.42, key: 'special_instructions' }
+      ], data.adlRequirements);
+    }
+  }
+
+  // ─── MEDICATIONS ─────────────────────────────────────────────────────────────
+  if (data.medications) {
+    sectionHeader('Medications');
+    if (data.medications.length === 0) { emptyNote('No medications on file.'); }
+    else {
+      renderTable([
+        { label: 'Medication', w: 0.26, key: 'medication_name' },
+        { label: 'Dosage', w: 0.12, key: 'dosage' },
+        { label: 'Frequency', w: 0.15, key: 'frequency' },
+        { label: 'Route', w: 0.10, key: 'route' },
+        { label: 'Prescriber', w: 0.20, key: 'prescriber' },
+        { label: 'Active', w: 0.09, get: r => r.is_active ? 'Yes' : 'No' },
+        { label: 'PRN', w: 0.08, get: r => r.is_prn ? 'Yes' : '' }
+      ], data.medications);
+    }
+
+    if (data.medicationLogs) {
+      doc.moveDown(0.3);
+      doc.fontSize(11).font('Helvetica-Bold').fillColor(INK).text('Medication Administration (period)');
+      doc.moveDown(0.2);
+      renderTable([
+        { label: 'Administered', w: 0.22, get: r => fmtDateTime(r.administered_time) },
+        { label: 'Medication', w: 0.22, key: 'medication_name' },
+        { label: 'Dose Given', w: 0.12, key: 'dosage_given' },
+        { label: 'Status', w: 0.10, key: 'status' },
+        { label: 'Caregiver', w: 0.18, key: 'caregiver_name' },
+        { label: 'Notes', w: 0.16, key: 'notes' }
+      ], data.medicationLogs);
+    }
+  }
+
+  // ─── ADL LOGS ────────────────────────────────────────────────────────────────
+  if (data.adlLogs) {
+    sectionHeader('ADL Activity Log');
+    renderTable([
+      { label: 'When', w: 0.20, get: r => fmtDateTime(r.performed_at) },
+      { label: 'Category', w: 0.20, key: 'adl_category' },
+      { label: 'Status', w: 0.12, key: 'status' },
+      { label: 'Assistance', w: 0.15, key: 'assistance_level' },
+      { label: 'Caregiver', w: 0.18, key: 'caregiver_name' },
+      { label: 'Notes', w: 0.15, key: 'notes' }
+    ], data.adlLogs);
+  }
+
+  // ─── VISITS ──────────────────────────────────────────────────────────────────
+  if (data.visits) {
+    const visits = data.visits;
+    const totalMinutes = visits.reduce((s, v) => s + (v.duration_minutes || 0), 0);
+    sectionHeader(`Visit / EVV History  (${visits.length} visits • ${(totalMinutes / 60).toFixed(2)} hours)`);
+    renderTable([
+      { label: 'Start', w: 0.16, get: r => fmtDateTime(r.start_time) },
+      { label: 'End', w: 0.16, get: r => fmtDateTime(r.end_time) },
+      { label: 'Dur.', w: 0.08, get: r => minutesToHours(r.duration_minutes) },
+      { label: 'Caregiver', w: 0.18, key: 'caregiver_name' },
+      { label: 'EVV / Sandata', w: 0.20, get: r => r.sandata_status ? `${r.sandata_status}${r.sandata_visit_id ? ' #' + r.sandata_visit_id : ''}` : (r.is_complete ? 'complete' : 'open') },
+      { label: 'Service', w: 0.10, get: r => [r.service_code, r.modifier].filter(Boolean).join(' ') },
+      { label: 'GPS', w: 0.12, get: r => (r.gps_in_lat ? `${Number(r.gps_in_lat).toFixed(4)},${Number(r.gps_in_lng).toFixed(4)}` : (r.clock_in_location && r.clock_in_location.lat ? `${Number(r.clock_in_location.lat).toFixed(4)},${Number(r.clock_in_location.lng).toFixed(4)}` : '—')) }
+    ], visits);
+
+    if (data.visitNotes?.length) {
+      doc.moveDown(0.3);
+      doc.fontSize(11).font('Helvetica-Bold').fillColor(INK).text('Visit Notes');
+      doc.moveDown(0.2);
+      data.visitNotes.forEach(n => {
+        ensureSpace(30);
+        doc.fontSize(9).fillColor(MUTED).font('Helvetica')
+           .text(`${fmtDateTime(n.created_at)} — ${safe(n.caregiver_name)}`);
+        doc.fontSize(10).fillColor(INK).font('Helvetica').text(safe(n.note), { width: 512 });
+        doc.moveDown(0.3);
+      });
+    }
+  }
+
+  // ─── INCIDENTS ───────────────────────────────────────────────────────────────
+  if (data.incidents) {
+    sectionHeader(`Incident Reports (${data.incidents.length})`);
+    if (data.incidents.length === 0) { emptyNote('No incidents reported in this period.'); }
+    data.incidents.forEach(ir => {
+      ensureSpace(80);
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
+         .text(`${safe(ir.incident_type).toUpperCase()} — ${fmtDate(ir.incident_date)} ${safe(ir.incident_time)}`);
+      doc.fontSize(9).fillColor(MUTED).font('Helvetica')
+         .text(`Severity: ${safe(ir.severity)}    Caregiver: ${safe(ir.caregiver_name)}    Reported by: ${safe(ir.reported_by)}`);
+      doc.fillColor(INK).fontSize(10);
+      if (ir.description) paragraph(`Description: ${ir.description}`);
+      if (ir.witnesses) paragraph(`Witnesses: ${ir.witnesses}`);
+      if (ir.injuries_or_damage) paragraph(`Injuries/Damage: ${ir.injuries_or_damage}`);
+      if (ir.actions_taken) paragraph(`Actions Taken: ${ir.actions_taken}`);
+      if (ir.follow_up_required) paragraph(`Follow-up: ${safe(ir.follow_up_notes)}`);
+      doc.moveDown(0.2);
+    });
+  }
+
+  // ─── COMMUNICATIONS ──────────────────────────────────────────────────────────
+  if (data.communications) {
+    sectionHeader(`Communication Log (${data.communications.length})`);
+    if (data.communications.length === 0) { emptyNote('No communications logged in this period.'); }
+    data.communications.forEach(cm => {
+      ensureSpace(36);
+      const tag = [cm.log_type, cm.direction, cm.is_pinned ? 'pinned' : null].filter(Boolean).join(' • ');
+      doc.fontSize(9).fillColor(MUTED).font('Helvetica')
+         .text(`${fmtDateTime(cm.created_at)} — ${tag} — by ${safe(cm.logged_by_name)}`);
+      if (cm.subject) {
+        doc.fontSize(10).fillColor(INK).font('Helvetica-Bold').text(safe(cm.subject), { width: 512 });
+      }
+      doc.fontSize(10).fillColor(INK).font('Helvetica').text(safe(cm.body), { width: 512 });
+      if (cm.follow_up_date) {
+        doc.fontSize(9).fillColor(MUTED).text(`Follow-up by ${fmtDate(cm.follow_up_date)} — ${cm.follow_up_done ? 'done' : 'open'}`);
+      }
+      doc.fillColor(INK);
+      doc.moveDown(0.3);
+    });
+  }
+
+  // ─── DOCUMENTS ───────────────────────────────────────────────────────────────
+  if (data.documents) {
+    sectionHeader(`Documents on File (${data.documents.length})`);
+    if (data.documents.length === 0) { emptyNote('No documents uploaded.'); }
+    else {
+      renderTable([
+        { label: 'Name', w: 0.30, key: 'name' },
+        { label: 'Type', w: 0.15, key: 'document_type' },
+        { label: 'Uploaded', w: 0.15, get: r => fmtDate(r.created_at) },
+        { label: 'Expires', w: 0.12, get: r => fmtDate(r.expiration_date) },
+        { label: 'Signed', w: 0.14, get: r => r.signed_at ? fmtDate(r.signed_at) : (r.requires_signature ? 'REQUIRED' : '—') },
+        { label: 'Confid.', w: 0.14, get: r => r.is_confidential ? 'Yes' : 'No' }
+      ], data.documents);
+    }
+  }
+
+  // ─── AUTHORIZATIONS ──────────────────────────────────────────────────────────
+  if (data.authorizations) {
+    sectionHeader(`Authorizations (${data.authorizations.length})`);
+    if (data.authorizations.length === 0) { emptyNote('No authorizations on file.'); }
+    else {
+      renderTable([
+        { label: 'Auth #', w: 0.14, key: 'auth_number' },
+        { label: 'Payer', w: 0.18, key: 'payer_name' },
+        { label: 'Code', w: 0.10, get: r => [r.procedure_code, r.modifier].filter(Boolean).join(' ') },
+        { label: 'Period', w: 0.20, get: r => `${fmtDate(r.start_date)} – ${fmtDate(r.end_date)}` },
+        { label: 'Authorized', w: 0.10, key: 'authorized_units' },
+        { label: 'Used', w: 0.08, key: 'used_units' },
+        { label: 'Remaining', w: 0.10, key: 'remaining_units' },
+        { label: 'Status', w: 0.10, key: 'status' }
+      ], data.authorizations);
+    }
+  }
+
+  // ─── BILLING ─────────────────────────────────────────────────────────────────
+  if (data.invoices) {
+    const total = data.invoices.reduce((s, i) => s + parseFloat(i.total || 0), 0);
+    sectionHeader(`Invoices in Period (${data.invoices.length} • ${fmtMoney(total)} total)`);
+    if (data.invoices.length === 0) { emptyNote('No invoices in this period.'); }
+    else {
+      renderTable([
+        { label: 'Invoice #', w: 0.18, key: 'invoice_number' },
+        { label: 'Period', w: 0.26, get: r => `${fmtDate(r.billing_period_start)} – ${fmtDate(r.billing_period_end)}` },
+        { label: 'Total', w: 0.14, get: r => fmtMoney(r.total) },
+        { label: 'Status', w: 0.14, key: 'payment_status' },
+        { label: 'Due', w: 0.14, get: r => fmtDate(r.payment_due_date) },
+        { label: 'Paid', w: 0.14, get: r => fmtDate(r.payment_date) }
+      ], data.invoices);
+    }
+  }
+
+  // ─── AUDIT TRAIL ─────────────────────────────────────────────────────────────
+  if (data.auditLog) {
+    sectionHeader(`Access / Change Audit Trail (${data.auditLog.length})`);
+    if (data.auditLog.length === 0) { emptyNote('No audit events in this period.'); }
+    else {
+      renderTable([
+        { label: 'When', w: 0.26, get: r => fmtDateTime(r.timestamp) },
+        { label: 'User', w: 0.26, key: 'user_name' },
+        { label: 'Action', w: 0.26, key: 'action' },
+        { label: 'Table', w: 0.14, key: 'table_name' },
+        { label: 'IP', w: 0.08, key: 'ip_address' }
+      ], data.auditLog);
+    }
+  }
+
+  // ─── FOOTER (page numbers) ───────────────────────────────────────────────────
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
+    doc.fontSize(8).fillColor(MUTED).font('Helvetica').text(
+      `Chippewa Valley Home Care • Confidential Client Record • Page ${i + 1} of ${range.count}`,
+      50, doc.page.height - 40, { width: 512, align: 'center' }
+    );
+  }
+}
+
+// ─── HOURS BY PAYER ─────────────────────────────────────────────────────────
+// Aggregates clocked hours per referral_source / payer over a date range.
+// Useful for: contract performance, identifying under-served payers, MCO QA.
+router.get('/hours-by-payer', auth, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate + endDate required' });
+  try {
+    const result = await db.query(`
+      SELECT
+        COALESCE(rs.id::text, CASE WHEN c.is_private_pay THEN 'private' ELSE 'unknown' END) AS payer_key,
+        COALESCE(rs.name, CASE WHEN c.is_private_pay THEN 'Private Pay' ELSE 'Unknown' END) AS payer_name,
+        COALESCE(rs.payer_type, CASE WHEN c.is_private_pay THEN 'private_pay' ELSE 'unknown' END) AS payer_type,
+        COUNT(DISTINCT c.id)                AS active_clients,
+        COUNT(te.id)                         AS visits,
+        ROUND(SUM(te.duration_minutes) / 60.0, 2) AS total_hours,
+        ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 2) AS billable_hours,
+        ROUND(AVG(te.duration_minutes) / 60.0, 2) AS avg_visit_hours,
+        MIN(te.start_time::date) AS first_visit,
+        MAX(te.start_time::date) AS last_visit
+      FROM time_entries te
+      JOIN clients c ON te.client_id = c.id
+      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+      WHERE te.is_complete = true
+        AND te.start_time >= $1::date
+        AND te.start_time <  ($2::date + INTERVAL '1 day')
+      GROUP BY payer_key, payer_name, payer_type
+      ORDER BY billable_hours DESC NULLS LAST
+    `, [startDate, endDate]);
+    res.json({ rows: result.rows, period: { startDate, endDate } });
+  } catch (error) {
+    console.error('[reports/hours-by-payer]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── CAREGIVER UTILIZATION ───────────────────────────────────────────────────
+// scheduled hours vs actual hours vs capacity per caregiver over a window.
+// Identifies under-utilized caregivers (capacity not booked) and OT risk.
+router.get('/caregiver-utilization', auth, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate + endDate required' });
+  try {
+    const result = await db.query(`
+      WITH actuals AS (
+        SELECT caregiver_id,
+          ROUND(SUM(duration_minutes) / 60.0, 2) AS actual_hours,
+          COUNT(*) AS visits
+        FROM time_entries
+        WHERE is_complete = true
+          AND start_time >= $1::date AND start_time < ($2::date + INTERVAL '1 day')
+        GROUP BY caregiver_id
+      ),
+      weeks AS (
+        SELECT GREATEST(1, CEIL(($2::date - $1::date + 1)::numeric / 7))::int AS n
+      )
+      SELECT
+        u.id, u.first_name, u.last_name, u.is_active,
+        COALESCE(ca.max_hours_per_week, 40) AS max_hours_per_week,
+        (SELECT n FROM weeks) AS weeks_in_period,
+        COALESCE(ca.max_hours_per_week, 40) * (SELECT n FROM weeks) AS capacity_hours,
+        COALESCE(a.actual_hours, 0) AS actual_hours,
+        COALESCE(a.visits, 0) AS visits,
+        CASE
+          WHEN COALESCE(ca.max_hours_per_week, 40) * (SELECT n FROM weeks) > 0
+          THEN ROUND(COALESCE(a.actual_hours, 0) / (COALESCE(ca.max_hours_per_week, 40) * (SELECT n FROM weeks)) * 100, 1)
+          ELSE 0
+        END AS utilization_pct
+      FROM users u
+      LEFT JOIN caregiver_availability ca ON ca.caregiver_id = u.id
+      LEFT JOIN actuals a ON a.caregiver_id = u.id
+      WHERE u.role = 'caregiver' AND u.is_active = true
+      ORDER BY utilization_pct DESC NULLS LAST, u.last_name
+    `, [startDate, endDate]);
+    res.json({ rows: result.rows, period: { startDate, endDate } });
+  } catch (error) {
+    console.error('[reports/caregiver-utilization]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── CLIENT VISITS SUMMARY ──────────────────────────────────────────────────
+// Per-client visit count + hours over a window. Useful for invoice prep.
+router.get('/client-visits-summary', auth, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate + endDate required' });
+  try {
+    const result = await db.query(`
+      SELECT
+        c.id AS client_id, c.first_name, c.last_name,
+        rs.name AS payer_name,
+        ct.name AS care_type_name,
+        COUNT(te.id) AS visits,
+        COUNT(DISTINCT te.caregiver_id) AS distinct_caregivers,
+        ROUND(SUM(te.duration_minutes) / 60.0, 2) AS total_hours,
+        ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 2) AS billable_hours,
+        MIN(te.start_time::date) AS first_visit,
+        MAX(te.start_time::date) AS last_visit
+      FROM clients c
+      LEFT JOIN time_entries te
+        ON te.client_id = c.id
+        AND te.is_complete = true
+        AND te.start_time >= $1::date
+        AND te.start_time <  ($2::date + INTERVAL '1 day')
+      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+      LEFT JOIN care_types ct ON c.care_type_id = ct.id
+      WHERE c.is_active = true
+      GROUP BY c.id, c.first_name, c.last_name, rs.name, ct.name
+      HAVING COUNT(te.id) > 0
+      ORDER BY total_hours DESC NULLS LAST
+    `, [startDate, endDate]);
+    res.json({ rows: result.rows, period: { startDate, endDate } });
+  } catch (error) {
+    console.error('[reports/client-visits-summary]', error);
     res.status(500).json({ error: error.message });
   }
 });
