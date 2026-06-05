@@ -197,7 +197,7 @@ router.post('/send', auth, async (req, res) => {
       try { webpush = require('web-push'); } catch (e) { webpush = null; }
 
       if (webpush && process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
-        webpush.setVapidDetails('mailto:admin@chippewahomecare.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
+        webpush.setVapidDetails('mailto:admin@chippewavalleyhomecare.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
         for (const row of subscriptions.rows) {
           try {
             await webpush.sendNotification(row.subscription, JSON.stringify({ title: notifTitle, body: notifBody, data: { type: 'message', threadId } }));
@@ -251,7 +251,7 @@ router.post('/thread/:threadId/reply', auth, async (req, res) => {
       try { webpush = require('web-push'); } catch (e) { webpush = null; }
 
       if (webpush && process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
-        webpush.setVapidDetails('mailto:admin@chippewahomecare.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
+        webpush.setVapidDetails('mailto:admin@chippewavalleyhomecare.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
         const senderName = `${sender.rows[0].first_name} ${sender.rows[0].last_name}`;
         for (const row of participants.rows) {
           try {

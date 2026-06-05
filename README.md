@@ -100,7 +100,7 @@ npm start
 ```
 
 ### 3. Login
-- **Email**: admin@chippewahomecare.com
+- **Email**: admin@chippewavalleyhomecare.com
 - **Password**: (whatever you set in database)
 
 ---
@@ -235,7 +235,7 @@ Tested on:
 
 ### Test Login Credentials
 ```
-Email: admin@chippewahomecare.com
+Email: admin@chippewavalleyhomecare.com
 Password: (set when creating user)
 ```
 

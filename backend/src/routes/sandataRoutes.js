@@ -177,7 +177,18 @@ async function createEVVFromTimeEntry(timeEntryId) {
       }
     }
 
-    return result.rows[0];
+    // Auto-enqueue for Sandata submission if the visit is ready
+    const evvRecord = result.rows[0];
+    if (evvRecord && evvRecord.sandata_status === 'ready' && evvRecord.auto_submit_enabled !== false) {
+      try {
+        const { enqueueVisit } = require('../services/sandataAutoSubmit');
+        enqueueVisit(evvRecord.id).catch(e => console.error('[EVV Auto-Submit] Enqueue error:', e.message));
+      } catch (e) {
+        console.error('[EVV Auto-Submit] Module load error:', e.message);
+      }
+    }
+
+    return evvRecord;
   } catch (e) {
     console.error('[EVV] createEVVFromTimeEntry error:', e.message);
     return null;
@@ -419,6 +430,85 @@ router.post('/sync-caregiver/:caregiverId', auth, requireAdmin, async (req, res)
       }
     }
     res.json({ ok: response.ok, data: response.data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── AUTO-SUBMIT QUEUE STATUS ────────────────────────────────────────────────
+router.get('/queue', auth, requireAdmin, async (req, res) => {
+  try {
+    const { getQueueStatus } = require('../services/sandataAutoSubmit');
+    const status = await getQueueStatus();
+
+    // Also get recent failures needing manual attention
+    const failures = await db.query(`
+      SELECT sq.*, ev.service_date,
+        c.first_name AS client_first, c.last_name AS client_last,
+        u.first_name AS cg_first, u.last_name AS cg_last
+      FROM sandata_submission_queue sq
+      JOIN evv_visits ev ON sq.evv_visit_id = ev.id
+      JOIN clients c ON ev.client_id = c.id
+      JOIN users u ON ev.caregiver_id = u.id
+      WHERE sq.status = 'failed'
+        AND sq.completed_at > NOW() - INTERVAL '30 days'
+      ORDER BY sq.completed_at DESC
+      LIMIT 50
+    `);
+
+    res.json({ queueStatus: status, recentFailures: failures.rows });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── RETRY FAILED SUBMISSION ────────────────────────────────────────────────
+router.post('/queue/retry/:id', auth, requireAdmin, async (req, res) => {
+  try {
+    const { retrySubmission } = require('../services/sandataAutoSubmit');
+    await retrySubmission(req.params.id);
+    res.json({ success: true, message: 'Submission re-queued' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── EVV SUBMISSION STATUS DASHBOARD ────────────────────────────────────────
+router.get('/submission-status', auth, requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const start = startDate || new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+    const end = endDate || new Date().toISOString().split('T')[0];
+
+    const result = await db.query(`
+      SELECT
+        ev.id, ev.service_date, ev.sandata_status, ev.sandata_visit_id,
+        ev.sandata_submitted_at, ev.auto_submit_enabled,
+        c.first_name AS client_first, c.last_name AS client_last,
+        u.first_name AS cg_first, u.last_name AS cg_last,
+        sq.status AS queue_status, sq.retry_count, sq.last_error,
+        sq.submission_path
+      FROM evv_visits ev
+      JOIN clients c ON ev.client_id = c.id
+      JOIN users u ON ev.caregiver_id = u.id
+      LEFT JOIN sandata_submission_queue sq ON sq.evv_visit_id = ev.id
+      WHERE ev.service_date BETWEEN $1 AND $2
+      ORDER BY ev.service_date DESC, ev.actual_start DESC
+    `, [start, end]);
+
+    const visits = result.rows;
+    const summary = {
+      total: visits.length,
+      pending: visits.filter(v => v.sandata_status === 'pending').length,
+      ready: visits.filter(v => v.sandata_status === 'ready').length,
+      submitted: visits.filter(v => v.sandata_status === 'submitted').length,
+      accepted: visits.filter(v => v.sandata_status === 'accepted').length,
+      needsManual: visits.filter(v => v.sandata_status === 'needs_manual').length,
+      exception: visits.filter(v => v.sandata_status === 'exception').length,
+      inQueue: visits.filter(v => v.queue_status === 'queued' || v.queue_status === 'processing').length,
+    };
+
+    res.json({ summary, visits });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

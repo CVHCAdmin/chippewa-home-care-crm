@@ -33,7 +33,7 @@ psql $env:DATABASE_URL
 INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role) 
 VALUES (
   uuid_generate_v4(),
-  'admin@chippewahomecare.com',
+  'admin@chippewavalleyhomecare.com',
   crypt('TemporaryPassword123!', gen_salt('bf')),
   'Admin',
   'User',
@@ -73,7 +73,7 @@ netlify deploy --prod --dir=dist
 
 ### Step 5: Test Everything (5 min)
 1. Visit your Netlify URL
-2. Login with: admin@chippewahomecare.com / TemporaryPassword123!
+2. Login with: admin@chippewavalleyhomecare.com / TemporaryPassword123!
 3. You should see the admin dashboard!
 4. 🎉 Done!
 
@@ -186,7 +186,7 @@ psql $env:DATABASE_URL
 
 | Service | URL | Username |
 |---------|-----|----------|
-| **Admin Dashboard** | https://your-site.netlify.app | admin@chippewahomecare.com |
+| **Admin Dashboard** | https://your-site.netlify.app | admin@chippewavalleyhomecare.com |
 | **Backend API** | https://your-api.onrender.com | (API key in Authorization header) |
 | **Database** | Render internal connection | (see DATABASE_URL) |
 | **Render Dashboard** | https://dashboard.render.com | Your Render account |

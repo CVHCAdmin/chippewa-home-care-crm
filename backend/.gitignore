@@ -16,3 +16,9 @@ yarn-error.log*
 *.swp
 *.swo
 *~
+
+# Audit / verification artifacts (regenerated each run)
+audits/.admin_token
+audits/screenshots/
+audits/lighthouse-*.json
+audits/lh-*.json

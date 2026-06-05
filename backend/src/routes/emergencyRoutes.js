@@ -135,7 +135,7 @@ router.post('/miss-report', auth, async (req, res) => {
         try { webpush = require('web-push'); } catch (e) { webpush = null; }
 
         if (webpush && process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
-          webpush.setVapidDetails('mailto:admin@chippewahomecare.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
+          webpush.setVapidDetails('mailto:admin@chippewavalleyhomecare.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
         }
 
         for (const cg of availableCaregivers) {

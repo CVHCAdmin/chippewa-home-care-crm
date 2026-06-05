@@ -35,7 +35,7 @@ INSERT INTO users (
   id, email, password_hash, first_name, last_name, phone, role
 ) VALUES (
   uuid_generate_v4(),
-  'admin@chippewahomecare.com',
+  'admin@chippewavalleyhomecare.com',
   crypt('YourSecurePassword123!', gen_salt('bf')),
   'Admin',
   'User',
@@ -48,7 +48,7 @@ INSERT INTO users (
   id, email, password_hash, first_name, last_name, phone, role
 ) VALUES (
   uuid_generate_v4(),
-  'admin2@chippewahomecare.com',
+  'admin2@chippewavalleyhomecare.com',
   crypt('AnotherSecurePassword456!', gen_salt('bf')),
   'Admin',
   'Two',
@@ -127,7 +127,7 @@ NODE_ENV=production
 
 ### Connect Custom Domain (Optional)
 1. Go to **Site settings** → **Domain management**
-2. Add your custom domain (e.g., crm.chippewahomecare.com)
+2. Add your custom domain (e.g., crm.chippewavalleyhomecare.com)
 3. Update DNS records if needed
 
 ---
@@ -200,7 +200,7 @@ psql -h "host.onrender.com" -U "user" -d "database" < backup-2026-01-10.sql
 - [ ] Regular audit log reviews
 - [ ] Set up log monitoring
 - [ ] Enable rate limiting on API
-- [ ] Use HTTPS for all external APIs (SendGrid, PayPal, etc.)
+- [ ] Use HTTPS for all external APIs (SES, PayPal, etc.)
 - [ ] Implement CORS properly
 
 ---
@@ -242,15 +242,19 @@ ORDER BY changes DESC;
 
 ## 8. NOTIFICATIONS SETUP
 
-### Email (SendGrid)
+### Email (Amazon SES)
 ```bash
-# Install SendGrid
-npm install @sendgrid/mail
+# Install the SES SDK
+npm install @aws-sdk/client-sesv2
 
-# Add to .env
-SENDGRID_API_KEY=your-api-key
-SENDGRID_FROM_EMAIL=noreply@chippewahomecare.com
+# Add to .env (credentials are an IAM user with ses:SendEmail permission)
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your-access-key-id
+AWS_SECRET_ACCESS_KEY=your-secret-access-key
+EMAIL_FROM=noreply@chippewavalleyhomecare.com
 ```
+The `EMAIL_FROM` domain (or address) must be a verified identity in SES, and the
+account must be out of the SES sandbox to email arbitrary recipients.
 
 ### SMS (Twilio) - Optional
 ```bash
@@ -391,7 +395,7 @@ ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 - **Render Node.js Service**: $12/month
 - **Netlify Free**: $0 (with custom domain)
 - **Twilio SMS**: Pay as you go (~$0.0075 per message)
-- **SendGrid Email**: Free up to 100/day
+- **Amazon SES Email**: $0.10 per 1,000 emails (pennies/month at this volume)
 - **Total**: ~$27/month baseline + usage
 
 ---

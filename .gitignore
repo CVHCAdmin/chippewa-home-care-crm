@@ -55,3 +55,18 @@ frontend/.gradle/
 coverage/
 backend/src/tests/coverage/
 backend/src/server.js.bak
+backend/audits/.admin_token
+backend/audits/screenshots/
+backend/audits/lh-*.json
+backend/audits/lighthouse-*.json
+
+# Claude Code local config — may contain machine-specific paths AND credentials
+# embedded in tool-permission examples. Keep local-only.
+.claude/settings.local.json
+.claude/settings.json
+
+# Cloudflare wrangler cache
+.wrangler/
+
+# Standalone claims agent project (developed separately)
+cvhc-agent/
