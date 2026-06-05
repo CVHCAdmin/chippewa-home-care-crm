@@ -18,7 +18,7 @@ const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'PLACEHOLDER_REPLACE_
 
 if (webpush && VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
   webpush.setVapidDetails(
-    'mailto:admin@chippewahomecare.com',
+    'mailto:admin@chippewavalleyhomecare.com',
     VAPID_PUBLIC_KEY,
     VAPID_PRIVATE_KEY
   );
@@ -56,7 +56,13 @@ const sendPushToUser = async (userId, payload) => {
 
 // GET /api/push/vapid-key - Return public key for client subscription setup
 router.get('/vapid-key', (req, res) => {
-  res.json({ publicKey: VAPID_PUBLIC_KEY });
+  // If the placeholder is still in place, push is unconfigured. Return a
+  // 503 instead of handing the client a string it'll try to subscribe with
+  // (which silently breaks registration).
+  if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
+    return res.status(503).json({ error: 'Push notifications not configured', configured: false });
+  }
+  res.json({ publicKey: VAPID_PUBLIC_KEY, configured: true });
 });
 
 // POST /api/push/subscribe - Register a push subscription

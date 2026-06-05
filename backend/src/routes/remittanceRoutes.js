@@ -100,7 +100,24 @@ router.post('/batch', auth, requireAdmin, async (req, res) => {
         } catch(e) {}
       }
       if (matchedClaimId && item.paidAmount!=null) {
-        await db.query(`UPDATE claims SET paid_amount=$1,paid_date=$2,status=CASE WHEN $1>0 THEN 'paid' ELSE 'denied' END,denial_code=$3,denial_reason=$4 WHERE id=$5`,[item.paidAmount,paymentDate||new Date(),item.denialCode||null,item.denialReason||null,matchedClaimId]);
+        // Accumulate paid_amount instead of overwriting — a second partial
+        // remittance against the same claim would otherwise erase the first.
+        // Status is computed from accumulated total vs total_amount.
+        await db.query(
+          `UPDATE claims
+             SET paid_amount   = COALESCE(paid_amount, 0) + $1,
+                 paid_date     = $2,
+                 denial_code   = COALESCE($3, denial_code),
+                 denial_reason = COALESCE($4, denial_reason),
+                 status = CASE
+                   WHEN COALESCE(paid_amount, 0) + $1 >= COALESCE(total_amount, 0) AND COALESCE(total_amount, 0) > 0 THEN 'paid'
+                   WHEN COALESCE(paid_amount, 0) + $1 > 0 THEN 'partial'
+                   WHEN $1 = 0 AND $3 IS NOT NULL THEN 'denied'
+                   ELSE status
+                 END
+           WHERE id = $5`,
+          [item.paidAmount, paymentDate || new Date(), item.denialCode || null, item.denialReason || null, matchedClaimId]
+        );
       }
     }
     const total=(lineItems||[]).length;

@@ -6,6 +6,11 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
+const { verifyToken, requireAdmin } = require('../middleware/shared');
+
+// Every route in this file reads client authorization data or writes
+// schedules to production — admin-only across the board.
+router.use(verifyToken, requireAdmin);
 
 // ─── GET CLIENT OPTIMIZER DATA ────────────────────────────────────────────────
 // Returns active authorization (units→hours) + existing schedule info for a client

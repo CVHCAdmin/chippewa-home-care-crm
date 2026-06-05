@@ -864,8 +864,11 @@ async function notifyAdmins(type, title, message) {
   try {
     const admins = await db.query("SELECT id FROM users WHERE role = 'admin' AND is_active = true");
     for (const admin of admins.rows) {
+      // status column was added in migration_v25; defaulting to 'new' so the
+      // notification bell's unread filter (status IN ('new','unread')) sees it.
+      // Old code omitted status → defaulted to NULL → invisible to bell count.
       await db.query(
-        'INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)',
+        "INSERT INTO notifications (user_id, type, title, message, status) VALUES ($1, $2, $3, $4, 'new')",
         [admin.id, type, title, message]
       );
     }

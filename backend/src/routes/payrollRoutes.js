@@ -580,12 +580,21 @@ router.post('/calculate', auth, async (req, res) => {
           WHERE m.caregiver_id = u.id AND m.date >= $1 AND m.date <= $2
         ), 0)                                                      AS total_miles,
 
-        -- PTO
+        -- PTO: prorate any approved PTO that OVERLAPS the period (not just
+        -- PTO that fits entirely within it). A PTO entry spanning a period
+        -- boundary previously fell through both periods and never got paid.
+        -- We assume hours are spread evenly across the PTO's date range and
+        -- charge only the portion of days that intersect this pay period.
         COALESCE((
-          SELECT SUM(p.hours) FROM pto p
+          SELECT SUM(
+            p.hours
+              * (LEAST(p.end_date, $2::date) - GREATEST(p.start_date, $1::date) + 1)::numeric
+              / NULLIF((p.end_date - p.start_date + 1)::numeric, 0)
+          )
+          FROM pto p
           WHERE p.caregiver_id = u.id
-            AND p.start_date >= $1 AND p.end_date <= $2
             AND p.status = 'approved' AND p.type != 'unpaid'
+            AND p.start_date <= $2::date AND p.end_date >= $1::date
         ), 0)                                                      AS pto_hours,
 
         COALESCE(pr.status, 'draft')                               AS payroll_status,
@@ -703,8 +712,31 @@ router.get('/mileage', auth, async (req, res) => {
 // POST /api/payroll/mileage
 
 router.post('/mileage', auth, async (req, res) => {
-  const { caregiverId, date, miles, fromLocation, toLocation, notes } = req.body;
+  const { caregiverId, date, miles, fromLocation, toLocation, notes, force } = req.body;
+  if (!caregiverId || !date || miles == null) {
+    return res.status(400).json({ error: 'caregiverId, date, and miles are required' });
+  }
   try {
+    // Duplicate detection: same caregiver + same date + same from/to + same
+    // miles is almost always an accidental re-submit. Refuse unless force=true.
+    const dup = await db.query(
+      `SELECT id, miles, from_location, to_location, created_at
+         FROM mileage
+        WHERE caregiver_id = $1 AND date = $2
+          AND COALESCE(from_location, '') = COALESCE($3, '')
+          AND COALESCE(to_location, '')   = COALESCE($4, '')
+          AND miles = $5
+        LIMIT 1`,
+      [caregiverId, date, fromLocation || null, toLocation || null, miles]
+    );
+    if (dup.rows.length > 0 && !force) {
+      return res.status(409).json({
+        error: 'Looks like a duplicate mileage entry',
+        existing: dup.rows[0],
+        hint: 'Resubmit with force=true if this really is a separate trip.',
+      });
+    }
+
     const result = await db.query(`
       INSERT INTO mileage (caregiver_id, date, miles, from_location, to_location, notes, created_by)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *

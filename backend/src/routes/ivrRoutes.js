@@ -189,6 +189,14 @@ router.post('/clock-out', async (req, res) => {
       [durationMinutes, billableMinutes, discrepancyMinutes, timeEntryId]
     );
 
+    // Generate the Sandata EVV record. Web/mobile clock-outs already do this
+    // (timeTrackingRoutes.js:376). IVR didn't — every IVR-closed visit was
+    // skipping EVV submission entirely, which is a WI Medicaid violation.
+    try {
+      const { createEVVFromTimeEntry } = require('./sandataRoutes');
+      createEVVFromTimeEntry(timeEntryId).catch(e => console.error('[EVV ivr clock-out]', e.message));
+    } catch (e) { console.error('[EVV require]', e.message); }
+
     const hours = (durationMinutes / 60).toFixed(1);
     res.type('text/xml');
     res.send(`<?xml version="1.0" encoding="UTF-8"?>

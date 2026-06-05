@@ -463,6 +463,10 @@ if (require.main === module) {
       // Start WORCS background-check polling (every 30 min)
       const { startCron: startWorcsCron } = require('./jobs/worcsPoll');
       startWorcsCron();
+
+      // Daily authorization low-units / expiring-soon alerts
+      const { startCron: startAuthAlerts } = require('./jobs/authorizationAlerts');
+      startAuthAlerts();
     }
   });
 }

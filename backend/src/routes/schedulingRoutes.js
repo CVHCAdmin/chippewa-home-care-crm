@@ -206,7 +206,16 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
       const shiftHours = (new Date(`2000-01-01T${shift.end_time}`) - new Date(`2000-01-01T${shift.start_time}`)) / (1000*60*60);
       const requiredCerts = shift.required_certifications || [];
       const clientHistory = historyMap[shift.client_id] || {};
-      const existingConflicts = await db.query(`SELECT DISTINCT caregiver_id FROM schedules WHERE is_active=true AND date=$1 AND NOT (end_time<=$2 OR start_time>=$3)`, [shift.shift_date, shift.start_time, shift.end_time]);
+      // Conflict check must include recurring patterns that fall on this
+      // weekday — previously only checked exact-date one-offs, missing
+      // recurring conflicts and double-booking caregivers.
+      const existingConflicts = await db.query(
+        `SELECT DISTINCT caregiver_id FROM schedules
+          WHERE is_active = true
+            AND (date = $1::date OR day_of_week = EXTRACT(DOW FROM $1::date)::int)
+            AND NOT (end_time <= $2 OR start_time >= $3)`,
+        [shift.shift_date, shift.start_time, shift.end_time]
+      );
       const conflictingIds = existingConflicts.rows.map(r => r.caregiver_id);
 
       // Auth check — once per shift (per client), not per caregiver

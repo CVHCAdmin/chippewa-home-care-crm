@@ -149,7 +149,7 @@ router.get('/reports/compliance', auth, async (req, res) => {
 // Runs the Wisconsin caregiver eligibility engine against the most recent
 // WORCS background check for this caregiver. Does NOT persist a decision —
 // the admin is the legal decision-maker.
-router.get('/caregiver/:caregiverId/eligibility', async (req, res) => {
+router.get('/caregiver/:caregiverId/eligibility', auth, async (req, res) => {
   try {
     const result = await runEligibilityForCaregiver(req.params.caregiverId);
     res.json(result);
@@ -162,7 +162,7 @@ router.get('/caregiver/:caregiverId/eligibility', async (req, res) => {
 // ── POST /api/background-checks/poll-now ───────────────────────────────
 // Manual "poll WORCS now" trigger — bypasses the 30-minute cron for admins
 // who want results faster. Returns poll-cycle summary.
-router.post('/poll-now', async (req, res) => {
+router.post('/poll-now', auth, async (req, res) => {
   try {
     const summary = await runPollCycle();
     res.json({ success: true, ...summary });

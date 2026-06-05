@@ -70,14 +70,24 @@ const RULES = {
     return { status: 'pass' };
   },
   CAREGIVER_CREDENTIALS_CURRENT: async (claim) => {
+    // Match the actual background_checks schema: status takes values like
+    // 'completed' / 'pending' / 'in_progress' / 'disqualifying', and the
+    // pass/fail flag lives in `result`. Old code queried status='clear'
+    // which never existed, so this rule was always-warning AND useless.
     const bg = await db.query(`
-      SELECT * FROM background_checks
-      WHERE caregiver_id = $1
-        AND (expiration_date IS NULL OR expiration_date > CURRENT_DATE)
-        AND status = 'clear'
-      LIMIT 1
+      SELECT id, status, result, expiration_date, completion_date
+        FROM background_checks
+       WHERE caregiver_id = $1
+         AND (expiration_date IS NULL OR expiration_date > CURRENT_DATE)
+         AND COALESCE(status, '') NOT IN ('disqualifying', 'expired', 'pending', 'in_progress')
+         AND (
+           completion_date IS NOT NULL
+           OR LOWER(COALESCE(result, '')) IN ('clear', 'cleared', 'passed', 'pass', 'eligible')
+         )
+       ORDER BY completion_date DESC NULLS LAST, created_at DESC
+       LIMIT 1
     `, [claim.caregiver_id || claim.created_by]);
-    if (!bg.rows.length) return { status: 'warning', code: 'CLAIM_CRED_EXPIRED', message: 'Caregiver may have expired background check — verify before submitting' };
+    if (!bg.rows.length) return { status: 'warning', code: 'CLAIM_CRED_EXPIRED', message: 'Caregiver has no current passing background check on file — verify before submitting' };
     return { status: 'pass' };
   },
 };

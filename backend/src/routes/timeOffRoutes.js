@@ -162,18 +162,22 @@ router.get('/:id/affected-shifts', requireAdmin, async (req, res) => {
       [caregiver_id, start_date, end_date]
     );
 
-    // Expand recurring schedules into concrete dates within the range
+    // Expand recurring schedules into concrete dates within the range.
+    // Anchor everything to UTC so a server in UTC vs caregivers in Central
+    // can't produce off-by-one dates around DST or day boundaries (old code
+    // used new Date('YYYY-MM-DD' + 'T12:00:00') which is local-time and
+    // breaks when server TZ != caregiver TZ).
     const shifts = [...oneTime.rows];
     const startStr = typeof start_date === 'string' ? start_date.split('T')[0] : start_date;
     const endStr = typeof end_date === 'string' ? end_date.split('T')[0] : end_date;
-    const startD = new Date(startStr + 'T12:00:00');
-    const endD = new Date(endStr + 'T12:00:00');
+    const startD = new Date(startStr + 'T12:00:00Z');
+    const endD = new Date(endStr + 'T12:00:00Z');
 
     for (const sched of recurring.rows) {
       const dow = parseInt(sched.day_of_week);
       const d = new Date(startD);
       while (d <= endD) {
-        if (d.getDay() === dow) {
+        if (d.getUTCDay() === dow) {
           const dateStr = d.toISOString().split('T')[0];
           shifts.push({
             ...sched,
@@ -181,7 +185,7 @@ router.get('/:id/affected-shifts', requireAdmin, async (req, res) => {
             is_recurring: true
           });
         }
-        d.setDate(d.getDate() + 1);
+        d.setUTCDate(d.getUTCDate() + 1);
       }
     }
 

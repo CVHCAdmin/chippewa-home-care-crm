@@ -287,20 +287,30 @@ router.post('/shift-reminders', auth, async (req, res) => {
       if (!schedule.phone) continue;
 
       const message = `Reminder: You have a shift with ${schedule.client_first} ${schedule.client_last} tomorrow at ${schedule.start_time}.`;
-      
-      await db.query(`
-        INSERT INTO sms_messages (recipient_type, recipient_id, to_number, body, direction, status, sent_at)
-        VALUES ('caregiver', $1, $2, $3, 'outbound', 'sent', NOW())
-      `, [schedule.caregiver_id, schedule.phone, message]);
 
+      // Send FIRST, then record status based on actual result. Old code
+      // wrote status='sent' before calling Twilio, so a Twilio failure (or
+      // missing config) silently left the record marked sent.
+      let status = 'logged';
+      let errMsg = null;
       if (twilioClient && process.env.TWILIO_PHONE_NUMBER) {
-        await twilioClient.messages.create({
-          body: message,
-          from: process.env.TWILIO_PHONE_NUMBER,
-          to: schedule.phone
-        });
+        try {
+          await twilioClient.messages.create({
+            body: message,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: schedule.phone,
+          });
+          status = 'sent';
+        } catch (e) {
+          status = 'failed';
+          errMsg = e.message;
+        }
       }
-      sent++;
+      await db.query(`
+        INSERT INTO sms_messages (recipient_type, recipient_id, to_number, body, direction, status, error_message, sent_at)
+        VALUES ('caregiver', $1, $2, $3, 'outbound', $4, $5, CASE WHEN $4 = 'sent' THEN NOW() ELSE NULL END)
+      `, [schedule.caregiver_id, schedule.phone, message, status, errMsg]);
+      if (status === 'sent') sent++;
     }
 
     res.json({ sent, total: schedules.rows.length });

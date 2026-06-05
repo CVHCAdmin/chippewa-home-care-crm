@@ -147,16 +147,29 @@ router.post('/export', auth, requireAdmin, async (req, res) => {
     const { startDate, endDate, payPeriodId } = req.body;
     if (!startDate || !endDate) return res.status(400).json({ error: 'Date range required' });
 
+    // Split hours into regular vs overtime PER WEEK (FLSA: anything over 40
+     // hours in a workweek is overtime). Previous version totaled across the
+     // whole period and dumped everything as regular_hours → Gusto paid
+     // straight time on 45h weeks. Wage-and-hour exposure.
     const preview = await db.query(`
-      SELECT u.id, gem.gusto_employee_id,
-        ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric, 2) as total_hours
-      FROM users u
-      JOIN time_entries te ON te.caregiver_id = u.id
-      JOIN gusto_employee_map gem ON gem.user_id = u.id
-      WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1
-        AND te.is_complete = true AND u.role = 'caregiver'
-        AND gem.gusto_employee_id IS NOT NULL
-      GROUP BY u.id, gem.gusto_employee_id
+      WITH weekly AS (
+        SELECT u.id AS caregiver_id, gem.gusto_employee_id,
+          date_trunc('week', te.start_time) AS week_start,
+          SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600) AS week_hours
+        FROM users u
+        JOIN time_entries te ON te.caregiver_id = u.id
+        JOIN gusto_employee_map gem ON gem.user_id = u.id
+        WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1
+          AND te.is_complete = true AND u.role = 'caregiver'
+          AND gem.gusto_employee_id IS NOT NULL
+        GROUP BY u.id, gem.gusto_employee_id, date_trunc('week', te.start_time)
+      )
+      SELECT caregiver_id, gusto_employee_id,
+        ROUND(SUM(LEAST(week_hours, 40))::numeric, 2)        AS regular_hours,
+        ROUND(SUM(GREATEST(week_hours - 40, 0))::numeric, 2) AS overtime_hours,
+        ROUND(SUM(week_hours)::numeric, 2)                   AS total_hours
+      FROM weekly
+      GROUP BY caregiver_id, gusto_employee_id
     `, [startDate, endDate]);
 
     let exported = 0;
@@ -167,7 +180,8 @@ router.post('/export', auth, requireAdmin, async (req, res) => {
         // Push time entries to Gusto pay schedule
         const payload = {
           employee_id: emp.gusto_employee_id,
-          regular_hours: parseFloat(emp.total_hours),
+          regular_hours: parseFloat(emp.regular_hours),
+          overtime_hours: parseFloat(emp.overtime_hours),
           ...(payPeriodId ? { pay_period_id: payPeriodId } : {})
         };
         const result = await gustoRequest('PUT', `/companies/${cfg.companyId}/pay_schedules/unprocessed_termination_pay`, payload);
@@ -187,14 +201,26 @@ router.post('/export', auth, requireAdmin, async (req, res) => {
 router.get('/export-csv', auth, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
+    // Per-week split for FLSA overtime (>40 hrs/week → OT). Old query
+     // computed OT per individual shift and would miss weekly aggregation,
+     // OR (if read literally) double-count shifts >40h as their own OT.
     const result = await db.query(`
-      SELECT u.first_name, u.last_name, u.email,
-        ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric, 2) as regular_hours,
-        ROUND(SUM(CASE WHEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600 > 40 THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600 - 40 ELSE 0 END)::numeric, 2) as overtime_hours
-      FROM users u JOIN time_entries te ON te.caregiver_id = u.id
-      WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1
-        AND te.is_complete = true AND u.role = 'caregiver'
-      GROUP BY u.id, u.first_name, u.last_name, u.email ORDER BY u.last_name
+      WITH weekly AS (
+        SELECT u.id, u.first_name, u.last_name, u.email,
+          date_trunc('week', te.start_time) AS week_start,
+          SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600) AS week_hours
+        FROM users u
+        JOIN time_entries te ON te.caregiver_id = u.id
+        WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1
+          AND te.is_complete = true AND u.role = 'caregiver'
+        GROUP BY u.id, u.first_name, u.last_name, u.email, date_trunc('week', te.start_time)
+      )
+      SELECT first_name, last_name, email,
+        ROUND(SUM(LEAST(week_hours, 40))::numeric, 2)        AS regular_hours,
+        ROUND(SUM(GREATEST(week_hours - 40, 0))::numeric, 2) AS overtime_hours
+      FROM weekly
+      GROUP BY id, first_name, last_name, email
+      ORDER BY last_name
     `, [startDate || new Date().toISOString().split('T')[0], endDate || new Date().toISOString().split('T')[0]]);
 
     const lines = ['First Name,Last Name,Email,Regular Hours,Overtime Hours'];

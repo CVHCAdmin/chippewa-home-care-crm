@@ -224,8 +224,16 @@ async function checkAuthorizationForSubmission(claimId) {
  * Update authorization used_units after claim submission
  */
 async function deductAuthorizationUnits(claimId) {
+  // Idempotency: claim retries (network errors, manual re-submits) previously
+  // burned units multiple times because there was no "already deducted" flag.
+  // Track per-claim with units_deducted_at; ensure the column exists, then
+  // mark+deduct atomically using a single conditional UPDATE.
+  await db.query(
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS units_deducted_at TIMESTAMPTZ`
+  ).catch(e => console.error('[claimsEngine] add units_deducted_at:', e.message));
+
   const claim = await db.query(`
-    SELECT c.units_billed, c.authorization_id, c.client_id,
+    SELECT c.units_billed, c.authorization_id, c.client_id, c.units_deducted_at,
       a.authorized_units, a.used_units, a.low_units_alert_threshold,
       a.auth_number, a.end_date
     FROM claims c
@@ -238,6 +246,21 @@ async function deductAuthorizationUnits(claimId) {
   const c = claim.rows[0];
   const units = parseFloat(c.units_billed || 0);
   if (units <= 0 || !c.authorization_id) return;
+  if (c.units_deducted_at) {
+    console.log(`[claimsEngine] Claim ${claimId} already deducted at ${c.units_deducted_at} — skipping`);
+    return;
+  }
+
+  // Atomically claim the deduction: only succeeds if units_deducted_at is
+  // still NULL when the UPDATE runs (no concurrent deduction).
+  const claimRes = await db.query(
+    `UPDATE claims SET units_deducted_at = NOW() WHERE id = $1 AND units_deducted_at IS NULL RETURNING id`,
+    [claimId]
+  );
+  if (claimRes.rows.length === 0) {
+    console.log(`[claimsEngine] Claim ${claimId} concurrent deduction — skipping`);
+    return;
+  }
 
   await db.query(`
     UPDATE authorizations SET

@@ -333,21 +333,28 @@ router.post('/reset-password', async (req, res) => {
     if (!token || !newPassword) return res.status(400).json({ error: 'Token and new password are required' });
     if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
+    const hashed = await bcrypt.hash(newPassword, 10);
+
+    // Single atomic UPDATE that invalidates the token AND sets the password.
+    // Old code did SELECT-then-UPDATE which left a window where a leaked
+    // token could be replayed by a racing attacker. The conditional UPDATE
+    // means the second attempt can't find the token because the first
+    // attempt already cleared it.
     const result = await db.query(
-      `SELECT id, email FROM users WHERE reset_token = $1 AND reset_token_expires > NOW()`,
-      [token]
+      `UPDATE users
+          SET password_hash = $1,
+              reset_token = NULL,
+              reset_token_expires = NULL,
+              updated_at = NOW()
+        WHERE reset_token = $2
+          AND reset_token_expires > NOW()
+        RETURNING id, email`,
+      [hashed, token]
     );
 
     if (!result.rows.length) return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
 
     const user = result.rows[0];
-    const hashed = await bcrypt.hash(newPassword, 10);
-
-    await db.query(
-      `UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL, updated_at = NOW() WHERE id = $2`,
-      [hashed, user.id]
-    );
-
     await auditLog(user.id, 'UPDATE', 'users', user.id, null, { action: 'password_reset_via_email' });
 
     res.json({ success: true, message: 'Password has been reset. You can now sign in.' });

@@ -123,12 +123,23 @@ router.post('/care-plans/:id/generate-schedule', verifyToken, requireAdmin, asyn
     if (planResult.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
     const plan = planResult.rows[0];
 
-    // Authorization check
+    // Authorization check. If auth is exhausted, REFUSE to generate the
+    // schedules — old code only appended a warning and proceeded, which
+    // silently created out-of-auth recurring shifts. Pass ?force=true to
+    // override (rare; admin needs to be explicit).
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
     const shiftHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
     const weeklyHours = shiftHours * daysOfWeek.length;
     const authCheck = await checkAuthorizationBalance(plan.client_id, weeklyHours);
     const warnings = [...(authCheck.warnings || [])];
+    if (!authCheck.allowed && req.query.force !== 'true') {
+      return res.status(400).json({
+        error: authCheck.error || 'Authorization exhausted',
+        authorization: authCheck.authorization,
+        type: 'authorization',
+        hint: 'Pass ?force=true if you intend to schedule beyond authorized units.',
+      });
+    }
     if (!authCheck.allowed) {
       warnings.push(authCheck.error);
     }

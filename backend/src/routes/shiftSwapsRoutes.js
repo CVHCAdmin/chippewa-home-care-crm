@@ -97,14 +97,32 @@ router.put('/:id/approve', auth, async (req, res) => {
       return res.status(400).json({ error: 'Swap must be accepted by target caregiver first' });
     }
 
+    // Race guard: verify the schedule still exists and is active before
+    // mutating. Old code would happily UPDATE a deleted schedule (no-op)
+    // and then mark the swap 'approved', leaving a dangling swap row with
+    // no real schedule attached.
+    const sched = await db.query(
+      `SELECT id, caregiver_id, is_active FROM schedules WHERE id = $1`,
+      [s.schedule_id]
+    );
+    if (sched.rows.length === 0 || sched.rows[0].is_active === false) {
+      return res.status(409).json({ error: 'The original schedule was deleted or modified; swap can no longer be approved.' });
+    }
+    if (sched.rows[0].caregiver_id !== s.requesting_caregiver_id && sched.rows[0].caregiver_id !== s.target_caregiver_id) {
+      return res.status(409).json({ error: 'The schedule was reassigned to a different caregiver; swap can no longer be approved.' });
+    }
+
     // Update schedule with new caregiver
-    await db.query(`
-      UPDATE schedules SET caregiver_id = $1 WHERE id = $2
+    const upd = await db.query(`
+      UPDATE schedules SET caregiver_id = $1, updated_at = NOW() WHERE id = $2 AND is_active = true RETURNING id
     `, [s.target_caregiver_id, s.schedule_id]);
+    if (upd.rowCount === 0) {
+      return res.status(409).json({ error: 'Schedule changed during approval. Try again.' });
+    }
 
     // Update swap request
     await db.query(`
-      UPDATE shift_swap_requests 
+      UPDATE shift_swap_requests
       SET status = 'approved', admin_approved_by = $1, admin_approved_at = NOW()
       WHERE id = $2
     `, [req.user.id, req.params.id]);

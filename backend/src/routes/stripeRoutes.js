@@ -285,6 +285,32 @@ router.post('/webhook', express.raw({ type: 'application/json' }), requireStripe
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  // Idempotency: Stripe retries webhooks on any non-2xx response. Without
+  // tracking processed event ids, a retry would double-count payments.
+  // Track in a small dedicated table; create lazily.
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+        event_id VARCHAR(255) PRIMARY KEY,
+        event_type VARCHAR(100) NOT NULL,
+        processed_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    const dup = await db.query(`SELECT 1 FROM stripe_webhook_events WHERE event_id = $1`, [event.id]);
+    if (dup.rows.length > 0) {
+      console.log(`Stripe webhook ${event.id} already processed — skipping`);
+      return res.json({ received: true, duplicate: true });
+    }
+    await db.query(
+      `INSERT INTO stripe_webhook_events (event_id, event_type) VALUES ($1, $2) ON CONFLICT (event_id) DO NOTHING`,
+      [event.id, event.type]
+    );
+  } catch (e) {
+    console.error('Stripe idempotency check failed:', e.message);
+    // Fail closed: refuse to process if we can't track it, so Stripe retries later
+    return res.status(500).json({ error: 'idempotency check failed' });
+  }
+
   // Handle the event
   switch (event.type) {
     case 'checkout.session.completed': {
@@ -296,10 +322,10 @@ router.post('/webhook', express.raw({ type: 'application/json' }), requireStripe
 
         // Update invoice
         await db.query(`
-          UPDATE invoices 
-          SET 
+          UPDATE invoices
+          SET
             amount_paid = COALESCE(amount_paid, 0) + $1,
-            payment_status = CASE 
+            payment_status = CASE
               WHEN COALESCE(amount_paid, 0) + $1 >= total THEN 'paid'
               ELSE 'partial'
             END,

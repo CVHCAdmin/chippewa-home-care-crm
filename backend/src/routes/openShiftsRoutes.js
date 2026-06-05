@@ -147,13 +147,15 @@ router.post('/:id/claim', auth, async (req, res) => {
       return res.status(400).json({ error: 'Shift is no longer available' });
     }
 
-    // Check caregiver availability
+    // Check caregiver availability — must also filter is_active = true so
+    // soft-deleted schedules don't falsely block a legitimate claim.
     const conflicts = await db.query(`
-      SELECT id FROM schedules 
-      WHERE caregiver_id = $1 
+      SELECT id FROM schedules
+      WHERE caregiver_id = $1
       AND date = $2
       AND ((start_time, end_time) OVERLAPS ($3::time, $4::time))
-      AND status != 'cancelled'
+      AND is_active = true
+      AND COALESCE(status, '') != 'cancelled'
     `, [caregiverId, shift.rows[0].shift_date, shift.rows[0].start_time, shift.rows[0].end_time]);
 
     if (conflicts.rows.length > 0) {
@@ -191,6 +193,27 @@ router.post('/:id/approve', auth, async (req, res) => {
     const s = shift.rows[0];
     if (!s.claimed_by) {
       return res.status(400).json({ error: 'No claim to approve' });
+    }
+
+    // Re-check authorization at approval time. Auth could have been consumed
+    // between claim creation and approval; without this re-check, an approved
+    // shift could push the client over their authorized units.
+    try {
+      const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+      const startStr = typeof s.start_time === 'string' ? s.start_time : s.start_time.toISOString().slice(11,16);
+      const endStr   = typeof s.end_time   === 'string' ? s.end_time   : s.end_time.toISOString().slice(11,16);
+      const shiftHours = (new Date(`2000-01-01T${endStr}`) - new Date(`2000-01-01T${startStr}`)) / 3600000;
+      const authCheck = await checkAuthorizationBalance(s.client_id, shiftHours);
+      if (!authCheck.allowed && req.query.force !== 'true') {
+        return res.status(400).json({
+          error: authCheck.error || 'Authorization exhausted',
+          authorization: authCheck.authorization,
+          type: 'authorization',
+          hint: 'Pass ?force=true to approve anyway',
+        });
+      }
+    } catch (e) {
+      console.error('[openShifts approve] auth recheck failed:', e.message);
     }
 
     // Create or update schedule
