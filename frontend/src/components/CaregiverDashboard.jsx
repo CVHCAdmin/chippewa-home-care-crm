@@ -943,9 +943,101 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // RENDER PAGES
   const renderHomePage = () => {
     const todaysAppointments = getTodaysAppointments();
-    
+
+    // Compute "next up" — earliest shift today that hasn't started yet,
+    // or the currently in-progress one. Used by the hero strip.
+    const nowMs = Date.now();
+    const todayStr = new Date().toISOString().split('T')[0];
+    const ymd = new Date().toISOString().slice(0, 10);
+    const shiftStartMs = (appt) => {
+      const [h, m] = (appt.start_time || '00:00').split(':').map(Number);
+      const d = new Date(ymd + 'T00:00:00');
+      d.setHours(h || 0, m || 0, 0, 0);
+      return d.getTime();
+    };
+    const shiftEndMs = (appt) => {
+      const [h, m] = (appt.end_time || '00:00').split(':').map(Number);
+      const d = new Date(ymd + 'T00:00:00');
+      d.setHours(h || 0, m || 0, 0, 0);
+      return d.getTime();
+    };
+    const inProgress = activeSession
+      ? todaysAppointments.find(a => a.client_id === activeSession.client_id)
+      : null;
+    const nextUp = inProgress
+      ? inProgress
+      : todaysAppointments.find(a => shiftEndMs(a) >= nowMs);
+
+    const formatGap = (ms) => {
+      const mins = Math.round(ms / 60000);
+      if (mins <= 0) return 'now';
+      if (mins < 60) return `in ${mins}m`;
+      const h = Math.floor(mins / 60); const m = mins % 60;
+      return m ? `in ${h}h ${m}m` : `in ${h}h`;
+    };
+
     return (
     <>
+      {/* Next-up hero strip — what to do RIGHT NOW. Always at top. */}
+      {todaysAppointments.length > 0 && (() => {
+        if (inProgress) {
+          const client = getClientById(inProgress.client_id);
+          const overdue = nowMs > shiftEndMs(inProgress);
+          return (
+            <div style={{
+              padding: '0.9rem 1.1rem', marginBottom: '1rem', borderRadius: 12,
+              background: overdue ? 'linear-gradient(135deg,#DC2626 0%,#991B1B 100%)' : 'linear-gradient(135deg,#10B981 0%,#047857 100%)',
+              color: '#fff', boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+            }}>
+              <div style={{ fontSize: '0.78rem', opacity: 0.9, fontWeight: 700, letterSpacing: 0.5 }}>
+                {overdue ? '⚠️ ACTIVE SHIFT — OVERDUE' : '● CURRENTLY ON SHIFT'}
+              </div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 700, marginTop: 2 }}>
+                {client ? `${client.first_name} ${client.last_name}` : 'Unknown client'}
+              </div>
+              <div style={{ fontSize: '0.85rem', opacity: 0.95, marginTop: 2 }}>
+                Scheduled {formatTime(inProgress.start_time)}–{formatTime(inProgress.end_time)}
+                {overdue && ` · ${formatGap(nowMs - shiftEndMs(inProgress)).replace('in ','')} past end`}
+              </div>
+            </div>
+          );
+        }
+        if (nextUp) {
+          const client = getClientById(nextUp.client_id);
+          const gap = shiftStartMs(nextUp) - nowMs;
+          const startingSoon = gap > 0 && gap < 30 * 60 * 1000;
+          return (
+            <div style={{
+              padding: '0.9rem 1.1rem', marginBottom: '1rem', borderRadius: 12,
+              background: startingSoon ? 'linear-gradient(135deg,#F59E0B 0%,#D97706 100%)' : 'linear-gradient(135deg,#3B82F6 0%,#1D4ED8 100%)',
+              color: '#fff', boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+            }}>
+              <div style={{ fontSize: '0.78rem', opacity: 0.9, fontWeight: 700, letterSpacing: 0.5 }}>
+                {startingSoon ? '⏰ STARTING SOON' : 'NEXT UP'}
+              </div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 700, marginTop: 2 }}>
+                {client ? `${client.first_name} ${client.last_name}` : 'Unknown client'}
+                <span style={{ marginLeft: 8, fontSize: '0.9rem', opacity: 0.9, fontWeight: 500 }}>{formatGap(gap)}</span>
+              </div>
+              <div style={{ fontSize: '0.85rem', opacity: 0.95, marginTop: 2 }}>
+                {formatTime(nextUp.start_time)}–{formatTime(nextUp.end_time)}
+                {client?.address && ` · ${client.address}${client.city ? ', ' + client.city : ''}`}
+              </div>
+            </div>
+          );
+        }
+        // All shifts done for today
+        return (
+          <div style={{
+            padding: '0.9rem 1.1rem', marginBottom: '1rem', borderRadius: 12,
+            background: '#F3F4F6', color: '#374151', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '1.05rem', fontWeight: 700 }}>✅ All shifts complete for today</div>
+            <div style={{ fontSize: '0.82rem', color: '#6B7280', marginTop: 2 }}>Nice work — check tomorrow's schedule below.</div>
+          </div>
+        );
+      })()}
+
       {unreadMessages > 0 && (
         <div
           onClick={() => { setShowMessages(true); }}

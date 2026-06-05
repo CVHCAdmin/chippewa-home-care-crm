@@ -50,12 +50,44 @@ router.get('/notification-settings', verifyToken, async (req, res) => {
 
 router.put('/notification-settings', verifyToken, async (req, res) => {
   try {
-    const { emailEnabled, scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts } = req.body;
+    const {
+      emailEnabled, smsEnabled, pushEnabled,
+      scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts,
+      shiftReminderAlerts, billingAlerts, lowAuthAlerts, expiringCertAlerts, messageAlerts,
+      quietHoursStart, quietHoursEnd, quietHoursSkipEmergency,
+    } = req.body;
+    // Ensure a row exists
+    await db.query(
+      `INSERT INTO notification_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`,
+      [req.user.id]
+    );
     const result = await db.query(
-      `UPDATE notification_settings SET email_enabled=COALESCE($1,email_enabled), schedule_alerts=COALESCE($2,schedule_alerts),
-        payroll_alerts=COALESCE($3,payroll_alerts), absence_alerts=COALESCE($4,absence_alerts),
-        payment_alerts=COALESCE($5,payment_alerts), updated_at=NOW() WHERE user_id=$6 RETURNING *`,
-      [emailEnabled, scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts, req.user.id]
+      `UPDATE notification_settings SET
+         email_enabled = COALESCE($1, email_enabled),
+         sms_enabled   = COALESCE($2, sms_enabled),
+         push_enabled  = COALESCE($3, push_enabled),
+         schedule_alerts = COALESCE($4, schedule_alerts),
+         payroll_alerts  = COALESCE($5, payroll_alerts),
+         absence_alerts  = COALESCE($6, absence_alerts),
+         payment_alerts  = COALESCE($7, payment_alerts),
+         shift_reminder_alerts = COALESCE($8, shift_reminder_alerts),
+         billing_alerts        = COALESCE($9, billing_alerts),
+         low_auth_alerts       = COALESCE($10, low_auth_alerts),
+         expiring_cert_alerts  = COALESCE($11, expiring_cert_alerts),
+         message_alerts        = COALESCE($12, message_alerts),
+         quiet_hours_start     = $13,
+         quiet_hours_end       = $14,
+         quiet_hours_skip_emergency = COALESCE($15, quiet_hours_skip_emergency),
+         updated_at = NOW()
+       WHERE user_id = $16
+       RETURNING *`,
+      [
+        emailEnabled, smsEnabled, pushEnabled,
+        scheduleAlerts, payrollAlerts, absenceAlerts, paymentAlerts,
+        shiftReminderAlerts, billingAlerts, lowAuthAlerts, expiringCertAlerts, messageAlerts,
+        quietHoursStart || null, quietHoursEnd || null, quietHoursSkipEmergency,
+        req.user.id,
+      ]
     );
     res.json(result.rows[0] || {});
   } catch (error) { res.status(500).json({ error: error.message }); }

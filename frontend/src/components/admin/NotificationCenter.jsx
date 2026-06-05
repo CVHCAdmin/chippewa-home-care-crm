@@ -108,10 +108,28 @@ const NotificationCenter = ({ token }) => {
 
   const handleSaveSettings = async () => {
     try {
+      // Map DB snake_case (in state) → API camelCase
+      const payload = {
+        emailEnabled:        settings.email_enabled,
+        smsEnabled:          settings.sms_enabled,
+        pushEnabled:         settings.push_enabled,
+        scheduleAlerts:      settings.schedule_alerts,
+        payrollAlerts:       settings.payroll_alerts,
+        absenceAlerts:       settings.absence_alerts,
+        paymentAlerts:       settings.payment_alerts,
+        shiftReminderAlerts: settings.shift_reminder_alerts,
+        billingAlerts:       settings.billing_alerts,
+        lowAuthAlerts:       settings.low_auth_alerts,
+        expiringCertAlerts:  settings.expiring_cert_alerts,
+        messageAlerts:       settings.message_alerts,
+        quietHoursStart:     settings.quiet_hours_start || null,
+        quietHoursEnd:       settings.quiet_hours_end || null,
+        quietHoursSkipEmergency: settings.quiet_hours_skip_emergency,
+      };
       const res = await fetch(`${API_BASE_URL}/api/notification-settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error('Failed to save');
       setMessage('Settings saved!');
@@ -334,6 +352,69 @@ const NotificationCenter = ({ token }) => {
         <div className="card" style={{ padding: '1.5rem' }}>
           <h3 style={{ marginTop: 0 }}>Notification Settings</h3>
           <p style={{ color: '#666', marginBottom: '1.5rem' }}>Configure when automatic notifications are sent</p>
+
+          {/* MY PREFERENCES — per-user channel + event-type opt-outs + quiet hours */}
+          <div style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '2px solid #2ABBA7' }}>
+            <h4 style={{ color: '#0F766E', marginTop: 0 }}>📥 My Delivery Preferences</h4>
+            <p style={{ color: '#666', fontSize: '0.85rem', marginTop: 0 }}>How and when YOU receive notifications.</p>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <strong style={{ display: 'block', marginBottom: '0.5rem' }}>Channels</strong>
+              {[
+                ['email_enabled', '✉️ Email'],
+                ['sms_enabled',   '📱 Text message (SMS)'],
+                ['push_enabled',  '🔔 Push notifications'],
+              ].map(([key, label]) => (
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={settings[key] !== false}
+                    onChange={e => setSettings({ ...settings, [key]: e.target.checked })} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <strong style={{ display: 'block', marginBottom: '0.5rem' }}>Which alerts</strong>
+              {[
+                ['schedule_alerts',      '📅 Schedule changes'],
+                ['shift_reminder_alerts','⏰ Shift reminders'],
+                ['absence_alerts',       '🚫 Absence / no-show'],
+                ['payroll_alerts',       '💵 Payroll updates'],
+                ['payment_alerts',       '💳 Payments received'],
+                ['billing_alerts',       '🧾 Billing / invoices'],
+                ['low_auth_alerts',      '⚠️ Authorizations running low'],
+                ['expiring_cert_alerts', '📜 Certifications expiring'],
+                ['message_alerts',       '💬 New messages'],
+              ].map(([key, label]) => (
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={settings[key] !== false}
+                    onChange={e => setSettings({ ...settings, [key]: e.target.checked })} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <strong style={{ display: 'block', marginBottom: '0.5rem' }}>🌙 Quiet hours <span style={{ fontWeight: 400, color: '#6B7280', fontSize: '0.85rem' }}>(no notifications during this window)</span></strong>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', maxWidth: 380 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.75rem', color: '#6B7280' }}>From</label>
+                  <input type="time" value={settings.quiet_hours_start || ''}
+                    onChange={e => setSettings({ ...settings, quiet_hours_start: e.target.value || null })} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.75rem', color: '#6B7280' }}>Until</label>
+                  <input type="time" value={settings.quiet_hours_end || ''}
+                    onChange={e => setSettings({ ...settings, quiet_hours_end: e.target.value || null })} />
+                </div>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', cursor: 'pointer' }}>
+                <input type="checkbox" checked={settings.quiet_hours_skip_emergency !== false}
+                  onChange={e => setSettings({ ...settings, quiet_hours_skip_emergency: e.target.checked })} />
+                <span>Still send urgent alerts (no-show, emergency button) during quiet hours</span>
+              </label>
+            </div>
+          </div>
 
           <h4>Schedule Notifications</h4>
           <div style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid #ddd' }}>

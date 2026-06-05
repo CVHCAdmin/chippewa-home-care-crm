@@ -26,9 +26,15 @@ const AuditLogs = ({ token }) => {
   });
 
   useEffect(() => {
-    loadLogs();
     loadUsers();
   }, []);
+
+  // Re-fetch from API when the date range changes (other filters are
+  // applied client-side over the already-loaded rows).
+  useEffect(() => {
+    loadLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.startDate, filters.endDate]);
 
   useEffect(() => {
     applyFilters();
@@ -291,6 +297,42 @@ const AuditLogs = ({ token }) => {
       {/* Filters */}
       <div className="card">
         <h3>Filter Logs</h3>
+
+        {/* Time-range presets — one click to common windows */}
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+          {[
+            { label: 'Today',      days: 0 },
+            { label: 'Last 24h',   days: 1 },
+            { label: 'Last 7d',    days: 7 },
+            { label: 'Last 30d',   days: 30 },
+            { label: 'Last 90d',   days: 90 },
+          ].map(p => {
+            const end = new Date();
+            const start = new Date(end);
+            if (p.days > 0) start.setDate(start.getDate() - p.days);
+            const startStr = start.toISOString().split('T')[0];
+            const endStr   = end.toISOString().split('T')[0];
+            const active = filters.startDate === startStr && filters.endDate === endStr;
+            return (
+              <button key={p.label} type="button"
+                onClick={() => setFilters({ ...filters, startDate: startStr, endDate: endStr })}
+                style={{
+                  padding: '0.35rem 0.7rem',
+                  background: active ? '#2563EB' : '#fff',
+                  color: active ? '#fff' : '#374151',
+                  border: '1px solid ' + (active ? '#2563EB' : '#D1D5DB'),
+                  borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+                }}>
+                {p.label}
+              </button>
+            );
+          })}
+          <button type="button" onClick={() => setFilters({ ...filters, userId: '', action: '', entityType: '', searchTerm: '' })}
+            style={{ marginLeft: 'auto', padding: '0.35rem 0.7rem', background: 'none', color: '#6B7280', border: '1px solid #D1D5DB', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem' }}>
+            ↺ Clear filters
+          </button>
+        </div>
+
         <div className="filter-controls" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
           <div className="form-group">
             <label>Start Date</label>

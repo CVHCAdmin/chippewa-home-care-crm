@@ -312,6 +312,23 @@ router.delete('/:id', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// PATCH /api/clients/:id/status  body: { isActive: bool }
+// Dedicated status toggle so bulk activate/deactivate doesn't have to round-trip
+// through the full PUT (which doesn't currently touch is_active).
+router.patch('/:id/status', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { isActive } = req.body;
+    if (typeof isActive !== 'boolean') return res.status(400).json({ error: 'isActive (boolean) required' });
+    const result = await db.query(
+      `UPDATE clients SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_active`,
+      [isActive, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
+    await auditLog(req.user.id, isActive ? 'REACTIVATE' : 'DEACTIVATE', 'clients', req.params.id, null, { isActive });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // GET /api/clients/:id/onboarding
 router.get('/:id/onboarding', verifyToken, async (req, res) => {
   try {

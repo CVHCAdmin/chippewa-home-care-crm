@@ -102,6 +102,10 @@ const ClientsManagement = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [selectedClient, setSelectedClient] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkAction, setBulkAction] = useState(null); // 'activate' | 'deactivate' | 'assign-payer'
+  const [bulkPayerId, setBulkPayerId] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [reportClient, setReportClient] = useState(null);
   const [careTasksClient, setCareTasksClient] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -576,9 +580,38 @@ const ClientsManagement = ({ token }) => {
         </div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
+          {/* Bulk actions bar — only shown when at least one client is selected */}
+          {selectedIds.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 0.875rem', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 600, color: '#1D4ED8' }}>
+                ✅ {selectedIds.length} selected
+              </span>
+              <button onClick={() => setBulkAction('activate')}
+                style={{ padding: '0.35rem 0.75rem', background: '#059669', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
+                ✓ Activate
+              </button>
+              <button onClick={() => setBulkAction('deactivate')}
+                style={{ padding: '0.35rem 0.75rem', background: '#DC2626', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
+                ✕ Deactivate
+              </button>
+              <button onClick={() => { setBulkPayerId(''); setBulkAction('assign-payer'); }}
+                style={{ padding: '0.35rem 0.75rem', background: '#6366F1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
+                🏥 Assign Payer
+              </button>
+              <button onClick={() => setSelectedIds([])} style={{ padding: '0.35rem 0.75rem', background: 'none', border: '1px solid #D1D5DB', borderRadius: 6, cursor: 'pointer', fontSize: '0.82rem', color: '#6B7280' }}>
+                Clear
+              </button>
+            </div>
+          )}
+
           <table className="table">
             <thead>
               <tr>
+                <th style={{ width: 32 }}>
+                  <input type="checkbox"
+                    checked={filteredClients.length > 0 && selectedIds.length === filteredClients.length}
+                    onChange={(e) => setSelectedIds(e.target.checked ? filteredClients.map(c => c.id) : [])} />
+                </th>
                 <th>Name</th>
                 <th>Phone</th>
                 <th>Address</th>
@@ -590,7 +623,12 @@ const ClientsManagement = ({ token }) => {
             </thead>
             <tbody>
               {filteredClients.map(client => (
-                <tr key={client.id}>
+                <tr key={client.id} style={{ background: selectedIds.includes(client.id) ? '#EFF6FF' : undefined }}>
+                  <td>
+                    <input type="checkbox"
+                      checked={selectedIds.includes(client.id)}
+                      onChange={(e) => setSelectedIds(prev => e.target.checked ? [...prev, client.id] : prev.filter(id => id !== client.id))} />
+                  </td>
                   <td>
                     <strong>{client.first_name} {client.last_name}</strong>
                     {client.date_of_birth && (<small style={{ display: 'block', color: '#666' }}>DOB: {new Date(client.date_of_birth).toLocaleDateString()}</small>)}
@@ -619,6 +657,69 @@ const ClientsManagement = ({ token }) => {
           Showing {filteredClients.length} of {clients.length} clients
         </div>
       )}
+
+      {/* Bulk action modal — activate, deactivate, or assign payer */}
+      {bulkAction && (() => {
+        const selected = clients.filter(c => selectedIds.includes(c.id));
+        const isActDeact = bulkAction === 'activate' || bulkAction === 'deactivate';
+        const verb = bulkAction === 'activate' ? 'Activate' : bulkAction === 'deactivate' ? 'Deactivate' : 'Assign payer to';
+        const apply = async () => {
+          if (bulkAction === 'assign-payer' && !bulkPayerId) { alert('Pick a payer'); return; }
+          setBulkBusy(true);
+          let succ = 0, fail = 0;
+          for (const c of selected) {
+            try {
+              let r;
+              if (bulkAction === 'activate' || bulkAction === 'deactivate') {
+                r = await fetch(`${API_BASE_URL}/api/clients/${c.id}/status`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({ isActive: bulkAction === 'activate' }),
+                });
+              } else {
+                r = await fetch(`${API_BASE_URL}/api/clients/${c.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({ referralSourceId: bulkPayerId, isPrivatePay: false }),
+                });
+              }
+              if (r.ok) succ++; else fail++;
+            } catch { fail++; }
+          }
+          setBulkBusy(false);
+          setBulkAction(null);
+          setSelectedIds([]);
+          alert(`Updated ${succ}${fail ? ` (${fail} failed)` : ''}`);
+          loadData();
+        };
+        return (
+          <div className="modal active" onClick={() => !bulkBusy && setBulkAction(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+              <h3 style={{ margin: 0 }}>{verb} {selected.length} client{selected.length !== 1 ? 's' : ''}?</h3>
+              {bulkAction === 'assign-payer' && (
+                <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                  <label>Payer / Referral Source</label>
+                  <select value={bulkPayerId} onChange={(e) => setBulkPayerId(e.target.value)}>
+                    <option value="">Select…</option>
+                    {referralSources.filter(rs => rs.is_active !== false).map(rs => (
+                      <option key={rs.id} value={rs.id}>{rs.name}{rs.type ? ` (${rs.type})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 6, marginTop: '0.5rem', padding: '0.5rem', fontSize: '0.85rem' }}>
+                {selected.map(c => <div key={c.id}>{c.first_name} {c.last_name}</div>)}
+              </div>
+              <div className="modal-actions" style={{ marginTop: '0.75rem' }}>
+                <button className="btn btn-secondary" disabled={bulkBusy} onClick={() => setBulkAction(null)}>Cancel</button>
+                <button className="btn btn-primary" disabled={bulkBusy || (bulkAction === 'assign-payer' && !bulkPayerId)} onClick={apply}>
+                  {bulkBusy ? 'Applying…' : (isActDeact ? `${verb} ${selected.length}` : `Assign to ${selected.length}`)}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <EditClientModal client={selectedClient} referralSources={referralSources} careTypes={careTypes} isOpen={showEditModal} onClose={() => { setShowEditModal(false); setSelectedClient(null); }} onSuccess={loadData} token={token} />
 
