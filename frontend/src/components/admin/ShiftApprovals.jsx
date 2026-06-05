@@ -10,6 +10,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import CareTaskChecklist from '../CareTaskChecklist';
+import VisitGpsMap from './VisitGpsMap';
 
 const fmtHrs = (h) => (h == null || h === '' ? '—' : `${parseFloat(h).toFixed(2)}h`);
 const fmt$ = (n) => (n == null || n === '' ? '—' : `$${parseFloat(n).toFixed(2)}`);
@@ -33,6 +34,7 @@ export default function ShiftApprovals({ token }) {
   const [editNotes, setEditNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [taskViewerFor, setTaskViewerFor] = useState(null); // time entry id to inspect tasks
+  const [mapViewerFor, setMapViewerFor] = useState(null);   // time entry row to inspect GPS
 
   const hdr = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
@@ -202,6 +204,7 @@ export default function ShiftApprovals({ token }) {
                           <button disabled={busy} style={btn('#2ABBA7')} onClick={() => approveAsIs(r)}>Approve</button>
                           <button disabled={busy} style={btn('#6366F1')} onClick={() => startEdit(r)}>Edit</button>
                           <button disabled={busy} style={btn('#0891B2')} onClick={() => setTaskViewerFor(r.id)} title="See which assigned tasks the caregiver marked complete/skipped/refused">📋 Tasks</button>
+                          <button disabled={busy} style={btn('#7C3AED')} onClick={() => setMapViewerFor(r)} title="View GPS trail on a map">🗺️ Map</button>
                           <button disabled={busy} style={btn('#EF4444')} onClick={() => reject(r)}>Reject</button>
                         </div>
                       )}
@@ -225,6 +228,25 @@ export default function ShiftApprovals({ token }) {
               <button onClick={() => setTaskViewerFor(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6B7280' }}>×</button>
             </div>
             <CareTaskChecklist token={token} timeEntryId={taskViewerFor} />
+          </div>
+        </div>
+      )}
+
+      {mapViewerFor && (
+        <div onClick={() => setMapViewerFor(null)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20,
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 10, maxWidth: 900, width: '95%', maxHeight: '90vh', overflow: 'auto', padding: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h3 style={{ margin: 0, fontSize: '1rem' }}>
+                🗺️ GPS Trail — {mapViewerFor.client_first_name} {mapViewerFor.client_last_name}
+              </h3>
+              <button onClick={() => setMapViewerFor(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6B7280' }}>×</button>
+            </div>
+            <VisitGpsMap token={token} timeEntryId={mapViewerFor.id}
+              clientLat={mapViewerFor.client_lat} clientLng={mapViewerFor.client_lng}
+              clientName={`${mapViewerFor.client_first_name} ${mapViewerFor.client_last_name}`} />
           </div>
         </div>
       )}

@@ -16,6 +16,95 @@ const sendPush = (...args) => {
   return _sendPush(...args);
 };
 
+// GET /api/open-shifts/:id/smart-fill-suggestions  (admin)
+// Returns the same suggest-caregivers ranking but scoped to this open shift's
+// client/date/time. Used by the one-click smart-fill UI.
+router.get('/:id/smart-fill-suggestions', auth, async (req, res) => {
+  try {
+    const shift = await db.query(
+      `SELECT id, client_id, shift_date, start_time, end_time, status FROM open_shifts WHERE id = $1`,
+      [req.params.id]
+    );
+    if (shift.rows.length === 0) return res.status(404).json({ error: 'Open shift not found' });
+    const s = shift.rows[0];
+    if (s.status !== 'open') return res.status(409).json({ error: `Shift is ${s.status}, not open` });
+
+    // Just call the suggest-caregivers route handler internally by re-using the
+    // same DB query patterns. To keep this small we forward to /api/scheduling
+    // — but here we just emit the params the frontend should re-pass through it.
+    res.json({
+      forwardTo: '/api/scheduling/suggest-caregivers',
+      params: {
+        clientId:  s.client_id,
+        date:      typeof s.shift_date === 'string' ? s.shift_date : s.shift_date.toISOString().slice(0, 10),
+        startTime: s.start_time,
+        endTime:   s.end_time,
+      },
+    });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /api/open-shifts/:id/smart-fill  body: { caregiverId }  (admin)
+// Assigns the open shift directly to a chosen caregiver, skipping the
+// caregiver-claim → admin-approve workflow. Re-checks auth balance.
+router.post('/:id/smart-fill', auth, async (req, res) => {
+  const { caregiverId } = req.body;
+  if (!caregiverId) return res.status(400).json({ error: 'caregiverId required' });
+  try {
+    const shift = await db.query(`SELECT * FROM open_shifts WHERE id = $1`, [req.params.id]);
+    if (shift.rows.length === 0) return res.status(404).json({ error: 'Open shift not found' });
+    const s = shift.rows[0];
+    if (s.status !== 'open') return res.status(409).json({ error: `Shift is ${s.status}, not open` });
+
+    // Auth balance re-check (same shape as approve endpoint)
+    try {
+      const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
+      const startStr = typeof s.start_time === 'string' ? s.start_time : s.start_time.toISOString().slice(11,16);
+      const endStr   = typeof s.end_time   === 'string' ? s.end_time   : s.end_time.toISOString().slice(11,16);
+      const shiftHours = (new Date(`2000-01-01T${endStr}`) - new Date(`2000-01-01T${startStr}`)) / 3600000;
+      const authCheck = await checkAuthorizationBalance(s.client_id, shiftHours);
+      if (!authCheck.allowed && req.query.force !== 'true') {
+        return res.status(400).json({
+          error: authCheck.error || 'Authorization exhausted',
+          authorization: authCheck.authorization, type: 'authorization',
+          hint: 'Pass ?force=true to assign anyway',
+        });
+      }
+    } catch (e) { console.error('[openShifts smart-fill] auth recheck failed:', e.message); }
+
+    // Same as approve: update existing schedule or create one
+    if (s.schedule_id) {
+      await db.query(`UPDATE schedules SET caregiver_id = $1, status = 'scheduled', updated_at = NOW() WHERE id = $2`,
+        [caregiverId, s.schedule_id]);
+    } else {
+      await db.query(`
+        INSERT INTO schedules (client_id, caregiver_id, date, start_time, end_time, care_type_id, status, schedule_type)
+        VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', 'one-time')
+      `, [s.client_id, caregiverId, s.shift_date, s.start_time, s.end_time, s.care_type_id]);
+    }
+    await db.query(`
+      UPDATE open_shifts
+        SET status = 'filled', claimed_by = $1, claimed_at = NOW(),
+            approved_by = $2, approved_at = NOW()
+      WHERE id = $3
+    `, [caregiverId, req.user.id, req.params.id]);
+
+    // Notify the assigned caregiver
+    try {
+      sendPush(caregiverId, {
+        title: '📋 New shift assigned',
+        body:  `You've been assigned to ${typeof s.shift_date === 'string' ? s.shift_date : s.shift_date.toISOString().slice(0,10)} ${s.start_time}-${s.end_time}.`,
+        data:  { type: 'shift_assigned', eventType: 'schedule', shiftId: s.id },
+      }).catch(() => {});
+    } catch {}
+
+    res.json({ success: true, openShiftId: s.id, assignedTo: caregiverId });
+  } catch (error) {
+    console.error('[openShifts smart-fill]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get all open shifts
 router.get('/available', auth, async (req, res) => {
   try {

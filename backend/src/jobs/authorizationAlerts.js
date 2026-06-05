@@ -42,10 +42,21 @@ async function scanOnce() {
     const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
     if (admins.rows.length === 0) return;
 
+    const { shouldNotify } = require('../helpers/notificationPrefs');
+    // For each admin, determine once whether they want low_auth / expiring_cert
+    // in-app notifications. low_units and expiring use the same event categories.
+    const wantLowAuth   = {};
+    const wantExpiring  = {};
+    for (const adm of admins.rows) {
+      wantLowAuth[adm.id]  = await shouldNotify(adm.id, 'push', 'low_auth');
+      wantExpiring[adm.id] = await shouldNotify(adm.id, 'push', 'expiring_cert');
+    }
+
     for (const a of low.rows) {
       const title = `Authorization running low: ${a.client_first} ${a.client_last}`;
       const message = `Auth ${a.auth_number || ''} has ${a.remaining_units} units remaining (threshold ${a.low_units_alert_threshold}). Expires ${a.end_date}.`;
       for (const adm of admins.rows) {
+        if (!wantLowAuth[adm.id]) continue;
         await db.query(
           `INSERT INTO notifications (user_id, type, title, message, status)
            VALUES ($1, 'auth_low_units', $2, $3, 'new')`,
@@ -60,6 +71,7 @@ async function scanOnce() {
       const title = `Authorization expiring in ${days} day(s): ${a.client_first} ${a.client_last}`;
       const message = `Auth ${a.auth_number || ''} ends ${a.end_date}. Schedule renewal now to avoid coverage gap.`;
       for (const adm of admins.rows) {
+        if (!wantExpiring[adm.id]) continue;
         await db.query(
           `INSERT INTO notifications (user_id, type, title, message, status)
            VALUES ($1, 'auth_expiring', $2, $3, 'new')`,

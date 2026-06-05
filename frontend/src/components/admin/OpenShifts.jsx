@@ -12,6 +12,69 @@ const OpenShifts = ({ token }) => {
   const [claims, setClaims] = useState([]);
   const [clients, setClients] = useState([]);
   const [careTypes, setCareTypes] = useState([]);
+  const [smartFillShift, setSmartFillShift] = useState(null);
+  const [smartFillSuggestions, setSmartFillSuggestions] = useState([]);
+  const [smartFillLoading, setSmartFillLoading] = useState(false);
+  const [smartFillBusy, setSmartFillBusy] = useState(null);
+
+  const loadSmartFillSuggestions = async (shift) => {
+    setSmartFillLoading(true);
+    setSmartFillSuggestions([]);
+    try {
+      const dateStr = typeof shift.shift_date === 'string'
+        ? shift.shift_date.slice(0,10)
+        : new Date(shift.shift_date).toISOString().slice(0,10);
+      const qs = new URLSearchParams({
+        clientId: shift.client_id,
+        date: dateStr,
+        startTime: shift.start_time?.slice(0,5),
+        endTime:   shift.end_time?.slice(0,5),
+      });
+      const r = await fetch(`${API_BASE_URL}/api/scheduling/suggest-caregivers?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await r.json();
+      setSmartFillSuggestions(data?.suggestions || []);
+    } catch (e) { /* ignore */ }
+    finally { setSmartFillLoading(false); }
+  };
+
+  const assignSmartFill = async (caregiverId) => {
+    if (!smartFillShift) return;
+    setSmartFillBusy(caregiverId);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/open-shifts/${smartFillShift.id}/smart-fill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ caregiverId }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        if (data.type === 'authorization' && window.confirm(`${data.error}\n\nAssign anyway?`)) {
+          const r2 = await fetch(`${API_BASE_URL}/api/open-shifts/${smartFillShift.id}/smart-fill?force=true`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ caregiverId }),
+          });
+          if (!r2.ok) throw new Error((await r2.json()).error || 'Failed');
+        } else {
+          throw new Error(data.error || 'Failed');
+        }
+      }
+      setSmartFillShift(null);
+      setSmartFillSuggestions([]);
+      loadShifts();
+    } catch (e) { alert('Smart fill failed: ' + e.message); }
+    finally { setSmartFillBusy(null); }
+  };
+
+  const tierBadge = (tier) => {
+    const C = {
+      excellent: { bg: '#D1FAE5', fg: '#065F46', label: '★ Excellent' },
+      good:      { bg: '#DBEAFE', fg: '#1E40AF', label: '✓ Good' },
+      maybe:     { bg: '#FEF3C7', fg: '#92400E', label: '? Maybe' },
+      avoid:     { bg: '#FEE2E2', fg: '#991B1B', label: '⚠ Avoid' },
+    };
+    return C[tier] || C.maybe;
+  };
 
   useEffect(() => {
     loadShifts();
@@ -293,7 +356,15 @@ const OpenShifts = ({ token }) => {
                     <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                       {shift.status === 'open' && (
                         <>
-                          <button 
+                          <button
+                            className="btn btn-sm"
+                            style={{ background: '#0F766E', color: '#fff', border: 'none' }}
+                            onClick={() => { setSmartFillShift(shift); loadSmartFillSuggestions(shift); }}
+                            title="Suggest best caregivers and one-click assign"
+                          >
+                            ✨ Smart Fill
+                          </button>
+                          <button
                             className="btn btn-sm btn-secondary"
                             onClick={() => broadcastShift(shift.id)}
                             title="Send SMS to caregivers"
@@ -396,6 +467,64 @@ const OpenShifts = ({ token }) => {
                     ))}
                   </tbody>
                 </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Smart-fill modal */}
+      {smartFillShift && (
+        <div className="modal-overlay" onClick={() => !smartFillBusy && setSmartFillShift(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+            <div className="modal-header">
+              <h3>✨ Smart Fill — Suggested Caregivers</h3>
+              <button className="modal-close" onClick={() => setSmartFillShift(null)}>×</button>
+            </div>
+            <div>
+              <div style={{ background: '#F9FAFB', padding: '0.75rem', borderRadius: 6, marginBottom: '0.75rem', fontSize: '0.88rem' }}>
+                <strong>{smartFillShift.client_first_name} {smartFillShift.client_last_name}</strong> ·{' '}
+                {new Date(smartFillShift.shift_date).toLocaleDateString()} ·{' '}
+                {smartFillShift.start_time?.slice(0,5)}–{smartFillShift.end_time?.slice(0,5)}
+              </div>
+              {smartFillLoading ? (
+                <p style={{ color: '#6B7280' }}>Ranking caregivers…</p>
+              ) : smartFillSuggestions.length === 0 ? (
+                <p style={{ color: '#9CA3AF' }}>No suitable caregivers found. Try broadcasting the shift instead.</p>
+              ) : (
+                <div style={{ display: 'grid', gap: '0.4rem', maxHeight: 460, overflow: 'auto' }}>
+                  {smartFillSuggestions.slice(0, 12).map((sg, idx) => {
+                    const t = tierBadge(sg.tier);
+                    return (
+                      <div key={sg.id} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '0.6rem 0.75rem', background: '#fff',
+                        border: '1px solid #E5E7EB', borderRadius: 8,
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontWeight: 700 }}>{idx + 1}. {sg.first_name} {sg.last_name}</span>
+                            <span style={{ background: t.bg, color: t.fg, fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 10 }}>
+                              {t.label} · {sg.score}
+                            </span>
+                          </div>
+                          {sg.reasons && sg.reasons.length > 0 && (
+                            <div style={{ marginTop: 2, fontSize: '0.72rem', color: '#6B7280' }}>
+                              {sg.reasons.slice(0, 4).join(' · ')}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          className="btn btn-sm btn-primary"
+                          disabled={!!smartFillBusy}
+                          onClick={() => assignSmartFill(sg.id)}
+                          style={{ marginLeft: 8 }}>
+                          {smartFillBusy === sg.id ? 'Assigning…' : 'Assign'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>

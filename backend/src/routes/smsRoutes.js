@@ -282,9 +282,14 @@ router.post('/shift-reminders', auth, async (req, res) => {
       AND s.is_active = true
     `);
 
-    let sent = 0;
+    const { shouldNotify } = require('../helpers/notificationPrefs');
+    let sent = 0, skipped = 0;
     for (const schedule of schedules.rows) {
       if (!schedule.phone) continue;
+
+      // Respect this caregiver's SMS toggle + shift_reminder opt-out + quiet hours
+      const allowed = await shouldNotify(schedule.caregiver_id, 'sms', 'shift_reminder');
+      if (!allowed) { skipped++; continue; }
 
       const message = `Reminder: You have a shift with ${schedule.client_first} ${schedule.client_last} tomorrow at ${schedule.start_time}.`;
 
@@ -313,7 +318,7 @@ router.post('/shift-reminders', auth, async (req, res) => {
       if (status === 'sent') sent++;
     }
 
-    res.json({ sent, total: schedules.rows.length });
+    res.json({ sent, skipped, total: schedules.rows.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -25,8 +25,22 @@ if (webpush && VAPID_PUBLIC_KEY !== 'PLACEHOLDER_REPLACE_WITH_REAL_KEY') {
 }
 
 // Helper: send push to a user
+// payload may include { eventType, urgent } so the prefs gate can honor
+// channel toggle + event opt-out + quiet hours. If omitted, allowed by default.
 const sendPushToUser = async (userId, payload) => {
   try {
+    // Respect user notification preferences
+    try {
+      const { shouldNotify } = require('../helpers/notificationPrefs');
+      const evt = payload?.data?.eventType || payload?.eventType;
+      const urgent = !!(payload?.data?.urgent || payload?.urgent);
+      const ok = await shouldNotify(userId, 'push', evt || null, { urgent });
+      if (!ok) {
+        console.log(`[PUSH] skipped for ${userId} — user prefs (event=${evt}, urgent=${urgent})`);
+        return;
+      }
+    } catch (e) { /* prefs helper failure → don't block notifications */ }
+
     const subs = await db.query(
       `SELECT subscription FROM push_subscriptions WHERE user_id = $1 AND is_active = true`,
       [userId]

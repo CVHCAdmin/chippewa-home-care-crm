@@ -61,6 +61,8 @@ router.put('/notification-settings', verifyToken, async (req, res) => {
       `INSERT INTO notification_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`,
       [req.user.id]
     );
+    // Invalidate the in-process cache so the change takes effect immediately
+    try { require('../helpers/notificationPrefs').invalidate(req.user.id); } catch {}
     const result = await db.query(
       `UPDATE notification_settings SET
          email_enabled = COALESCE($1, email_enabled),
