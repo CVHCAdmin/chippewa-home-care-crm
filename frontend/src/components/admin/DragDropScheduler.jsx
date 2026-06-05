@@ -717,6 +717,19 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             {formatTime(s.start_time)}-{formatTime(s.end_time)} ({durH}h)
             {!s.date && !s._isOneTime && <span style={{ marginLeft:4, opacity:0.7 }}>&#8635;</span>}
           </div>
+          {/* Care type + payer rate hint — helps catch wrong-rate scheduling. */}
+          {client && (client.care_type_name || client.referral_source_name || client.private_pay_rate) && (
+            <div style={{ opacity:0.85, fontSize:9, marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}
+                 title={`${client.care_type_name || 'No care type'} · ${client.referral_source_name || (client.is_private_pay ? 'Private Pay' : '—')}${client.private_pay_rate ? ` · $${parseFloat(client.private_pay_rate).toFixed(2)}/hr` : ''}`}>
+              {client.care_type_name && <span>{client.care_type_name}</span>}
+              {client.care_type_name && (client.referral_source_name || client.private_pay_rate) && <span> · </span>}
+              {client.referral_source_name
+                ? <span>{client.referral_source_name}</span>
+                : client.is_private_pay
+                  ? <span>Private{client.private_pay_rate ? ` $${parseFloat(client.private_pay_rate).toFixed(0)}` : ''}</span>
+                  : null}
+            </div>
+          )}
         </div>
       </React.Fragment>
     );

@@ -1067,7 +1067,15 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 const balance = total - paid;
                 return (
                   <tr key={invoice.id}>
-                    <td><strong>{invoice.invoice_number}</strong></td>
+                    <td>
+                      {invoice.seq_number != null && (
+                        <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>#{invoice.seq_number}</div>
+                      )}
+                      <div style={{ fontSize: '0.7rem', color: '#6B7280', fontFamily: 'monospace' }}
+                           title="Internal unique code (use this for system lookups)">
+                        {invoice.invoice_number}
+                      </div>
+                    </td>
                     <td>{invoice.first_name} {invoice.last_name}</td>
                     <td>{invoice.referral_source_name || <span className="badge badge-info">Private</span>}</td>
                     <td>{formatDate(invoice.billing_period_start)} - {formatDate(invoice.billing_period_end)}</td>
@@ -1118,7 +1126,10 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   const balance = parseFloat(invoice.total || 0) - parseFloat(invoice.amount_paid || 0);
                   return (
                     <tr key={invoice.id}>
-                      <td><strong>{invoice.invoice_number}</strong></td>
+                      <td>
+                        {invoice.seq_number != null && <div style={{ fontWeight: 800 }}>#{invoice.seq_number}</div>}
+                        <div style={{ fontSize: '0.7rem', color: '#6B7280', fontFamily: 'monospace' }}>{invoice.invoice_number}</div>
+                      </td>
                       <td>{invoice.first_name} {invoice.last_name}</td>
                       <td>{invoice.referral_source_name || 'Private Pay'}</td>
                       <td>{formatDate(invoice.payment_due_date)}</td>
@@ -1291,7 +1302,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <select value={paymentFormData.invoiceId} onChange={(e) => setPaymentFormData({ ...paymentFormData, invoiceId: e.target.value })} required>
                   <option value="">Select invoice...</option>
                   {invoices.filter(i => i.payment_status !== 'paid').map(inv => (
-                    <option key={inv.id} value={inv.id}>{inv.invoice_number} - {inv.first_name} {inv.last_name} - {formatCurrency(inv.total)}</option>
+                    <option key={inv.id} value={inv.id}>{inv.seq_number != null ? `#${inv.seq_number} (${inv.invoice_number})` : inv.invoice_number} - {inv.first_name} {inv.last_name} - {formatCurrency(inv.total)}</option>
                   ))}
                 </select>
               </div>
@@ -1375,7 +1386,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <label>Invoice *</label>
                 <select value={adjustmentFormData.invoiceId} onChange={(e) => setAdjustmentFormData({ ...adjustmentFormData, invoiceId: e.target.value })} required>
                   <option value="">Select invoice...</option>
-                  {invoices.filter(i => i.payment_status !== 'paid').map(inv => <option key={inv.id} value={inv.id}>{inv.invoice_number} - {formatCurrency(inv.total)}</option>)}
+                  {invoices.filter(i => i.payment_status !== 'paid').map(inv => <option key={inv.id} value={inv.id}>{inv.seq_number != null ? `#${inv.seq_number} (${inv.invoice_number})` : inv.invoice_number} - {formatCurrency(inv.total)}</option>)}
                 </select>
               </div>
               <div className="form-grid-2">
@@ -1404,7 +1415,13 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
           <div className="modal-content modal-large" style={{ maxWidth: '900px' }}>
             {/* Screen-only header */}
             <div className="modal-header no-print">
-              <h2>Invoice {selectedInvoice.invoice_number}</h2>
+              <h2>Invoice {selectedInvoice.seq_number != null ? `#${selectedInvoice.seq_number}` : selectedInvoice.invoice_number}
+                {selectedInvoice.seq_number != null && (
+                  <span style={{ fontSize: '0.7rem', color: '#9CA3AF', fontWeight: 400, fontFamily: 'monospace', marginLeft: 8 }}>
+                    {selectedInvoice.invoice_number}
+                  </span>
+                )}
+              </h2>
               <button className="close-btn" onClick={() => setShowInvoiceModal(false)}>×</button>
             </div>
             
@@ -1682,7 +1699,14 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 </div>
                 <div className="invoice-header-right">
                   <h1 className="invoice-title-large">INVOICE</h1>
-                  <div className="invoice-number-display"># {selectedInvoice.invoice_number}</div>
+                  <div className="invoice-number-display">
+                    {selectedInvoice.seq_number != null ? `Invoice #${selectedInvoice.seq_number}` : `# ${selectedInvoice.invoice_number}`}
+                    {selectedInvoice.seq_number != null && (
+                      <div style={{ fontSize: '0.7rem', color: '#9CA3AF', fontFamily: 'monospace', fontWeight: 400 }}>
+                        Ref: {selectedInvoice.invoice_number}
+                      </div>
+                    )}
+                  </div>
                   <div className="invoice-balance-box">
                     <div className="invoice-balance-label">Balance Due</div>
                     <div className="invoice-balance-amount">{formatCurrency(parseFloat(selectedInvoice.total || 0) - parseFloat(selectedInvoice.amount_paid || 0))}</div>

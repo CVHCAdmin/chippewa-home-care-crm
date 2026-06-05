@@ -215,6 +215,13 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
 
   const handleOpenRates = async (caregiver) => {
     setSelectedCaregiver(caregiver);
+    // Pre-fill the new-rate form with the caregiver's existing default rate
+    // so the input doesn't sit at the suggestion of "15.00" (below WI min wage
+    // for some care types and the prior cause of accidental under-pay entries).
+    setRateFormData({
+      careTypeId: '',
+      hourlyRate: caregiver.default_pay_rate != null ? String(parseFloat(caregiver.default_pay_rate).toFixed(2)) : '',
+    });
     try {
       const response = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${caregiver.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -245,7 +252,12 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
 
       if (!response.ok) throw new Error('Failed to add rate');
 
-      setRateFormData({ careTypeId: '', hourlyRate: '' });
+      setRateFormData({
+        careTypeId: '',
+        hourlyRate: selectedCaregiver?.default_pay_rate != null
+          ? String(parseFloat(selectedCaregiver.default_pay_rate).toFixed(2))
+          : ''
+      });
       
       const ratesRes = await fetch(`${API_BASE_URL}/api/caregiver-care-type-rates?caregiverId=${selectedCaregiver.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -602,7 +614,11 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label>Hourly Rate</label>
-                    <input type="number" step="0.01" min="0" value={rateFormData.hourlyRate} onChange={(e) => setRateFormData({ ...rateFormData, hourlyRate: e.target.value })} placeholder="15.00" required />
+                    <input type="number" step="0.01" min="0"
+                      value={rateFormData.hourlyRate}
+                      onChange={(e) => setRateFormData({ ...rateFormData, hourlyRate: e.target.value })}
+                      placeholder={selectedCaregiver?.default_pay_rate ? `default ${parseFloat(selectedCaregiver.default_pay_rate).toFixed(2)}` : 'rate'}
+                      required />
                   </div>
 
                   <button type="submit" className="btn btn-primary" style={{ height: 'fit-content' }}>Add</button>
