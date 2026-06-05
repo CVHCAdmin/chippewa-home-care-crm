@@ -349,9 +349,12 @@ export default function FormBuilder({ token }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
               {filteredTemplates.map(t => (
                 <div key={t.id} style={{ background: '#fff', border: `1px solid ${t.is_active ? '#E5E7EB' : '#F3F4F6'}`, borderTop: `3px solid ${catColor(t.category)}`, borderRadius: '10px', padding: '1rem', opacity: t.is_active ? 1 : 0.6 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
-                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#111827' }}>{t.name}</span>
-                    <span style={{ background: catColor(t.category) + '18', color: catColor(t.category), padding: '0.1rem 0.45rem', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700, whiteSpace: 'nowrap', marginLeft: '0.5rem' }}>{t.category.replace(/_/g,' ')}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', gap: '0.4rem' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#111827' }}>
+                      {t.is_built_in && <span title="Built-in template" style={{ marginRight: 4, color: '#D97706' }}>★</span>}
+                      {t.name}
+                    </span>
+                    <span style={{ background: catColor(t.category) + '18', color: catColor(t.category), padding: '0.1rem 0.45rem', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700, whiteSpace: 'nowrap' }}>{t.category.replace(/_/g,' ')}</span>
                   </div>
                   {t.description && <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: '#6B7280', lineHeight: 1.4 }}>{t.description}</p>}
                   <div style={{ fontSize: '0.75rem', color: '#9CA3AF', marginBottom: '0.75rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>

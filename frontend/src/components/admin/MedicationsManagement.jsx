@@ -4,6 +4,7 @@ import { toast } from '../Toast';
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import VitalsTracker from './VitalsTracker';
+import VisitPhotoGallery from './VisitPhotoGallery';
 
 const MedicationsManagement = ({ token }) => {
   const [clients, setClients] = useState([]);
@@ -232,6 +233,12 @@ const MedicationsManagement = ({ token }) => {
             >
               📋 Vitals
             </button>
+            <button
+              className={`btn ${activeTab === 'photos' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setActiveTab('photos')}
+            >
+              📷 Visit Photos
+            </button>
             <div style={{ marginLeft: 'auto' }}>
               {activeTab === 'medications' && (
                 <button className="btn btn-primary" onClick={() => { setEditingMed(null); setShowAddModal(true); }}>
@@ -249,6 +256,13 @@ const MedicationsManagement = ({ token }) => {
           {/* Vitals Tab */}
           {activeTab === 'vitals' && (
             <VitalsTracker token={token} clientId={selectedClient} />
+          )}
+
+          {/* Visit Photos Tab */}
+          {activeTab === 'photos' && (
+            <div className="card">
+              <VisitPhotoGallery token={token} clientId={selectedClient} />
+            </div>
           )}
 
           {/* Medications Tab */}
