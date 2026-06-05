@@ -1558,6 +1558,55 @@ router.get('/caregiver-utilization', auth, async (req, res) => {
   }
 });
 
+// ─── CLIENT REVENUE BY MONTH ────────────────────────────────────────────────
+// Per-client invoice totals + collected vs outstanding aging buckets,
+// grouped by billing month over the date range. Useful for spotting clients
+// who consistently pay late and for monthly P&L per client.
+router.get('/client-revenue-by-month', auth, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate + endDate required' });
+  try {
+    const result = await db.query(`
+      SELECT
+        c.id AS client_id,
+        c.first_name, c.last_name,
+        TO_CHAR(date_trunc('month', i.billing_period_start), 'YYYY-MM') AS month,
+        COUNT(i.id)                                       AS invoice_count,
+        ROUND(SUM(i.total)::numeric, 2)                   AS total_billed,
+        ROUND(SUM(COALESCE(i.amount_paid, 0))::numeric, 2) AS total_paid,
+        ROUND(SUM(i.total - COALESCE(i.amount_paid, 0))::numeric, 2) AS outstanding,
+        COUNT(*) FILTER (WHERE i.payment_status = 'paid') AS paid_count,
+        COUNT(*) FILTER (WHERE i.payment_status = 'pending' AND i.payment_due_date < CURRENT_DATE) AS overdue_count,
+        MAX(i.billing_period_end) AS last_billed
+      FROM invoices i
+      JOIN clients c ON i.client_id = c.id
+      WHERE i.billing_period_start >= $1::date
+        AND i.billing_period_start <= $2::date
+      GROUP BY c.id, c.first_name, c.last_name, date_trunc('month', i.billing_period_start)
+      ORDER BY month DESC, total_billed DESC
+    `, [startDate, endDate]);
+
+    if (req.query.format === 'csv') {
+      return sendCSV(res, `client-revenue-by-month-${startDate}-to-${endDate}.csv`, result.rows, [
+        { key: 'month',         label: 'Month' },
+        { key: 'first_name',    label: 'First' },
+        { key: 'last_name',     label: 'Last' },
+        { key: 'invoice_count', label: 'Invoices' },
+        { key: 'total_billed',  label: 'Billed' },
+        { key: 'total_paid',    label: 'Paid' },
+        { key: 'outstanding',   label: 'Outstanding' },
+        { key: 'paid_count',    label: 'Paid Invoices' },
+        { key: 'overdue_count', label: 'Overdue Invoices' },
+        { key: 'last_billed',   label: 'Last Billed' },
+      ]);
+    }
+    res.json({ rows: result.rows, period: { startDate, endDate } });
+  } catch (error) {
+    console.error('[reports/client-revenue-by-month]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── CLIENT VISITS SUMMARY ──────────────────────────────────────────────────
 // Per-client visit count + hours over a window. Useful for invoice prep.
 router.get('/client-visits-summary', auth, async (req, res) => {

@@ -228,7 +228,8 @@ const AuditLogs = ({ token }) => {
 
   const downloadComplianceReport = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/audit-logs/compliance-report`, {
+      // Hit the .pdf endpoint so we get a real printable PDF, not JSON-as-blob
+      const response = await fetch(`${API_BASE_URL}/api/audit-logs/compliance-report.pdf`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -246,8 +247,10 @@ const AuditLogs = ({ token }) => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `hipaa-compliance-report-${new Date().toISOString().split('T')[0]}.pdf`;
+      a.download = `hipaa-compliance-report-${filters.startDate}-to-${filters.endDate}.pdf`;
       a.click();
+      window.URL.revokeObjectURL(url);
+      toast('HIPAA report downloaded', 'success');
     } catch (error) {
       toast('Failed to generate report: ' + error.message, 'error');
     }

@@ -233,4 +233,99 @@ router.post('/compliance-report', async (req, res) => {
   }
 });
 
+// POST /api/audit-logs/compliance-report.pdf — render the compliance report
+// as a printable PDF suitable for regulator submission.
+router.post('/compliance-report.pdf', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    const params = [];
+    let dateFilter = '';
+    if (startDate) { params.push(startDate); dateFilter += ` AND created_at >= $${params.length}`; }
+    if (endDate)   { params.push(endDate);   dateFilter += ` AND created_at <= $${params.length}`; }
+
+    const [total, byAction, byTable, byUser, sensitive, alerts, dataChanges] = await Promise.all([
+      db.query(`SELECT COUNT(*) as total FROM audit_logs WHERE 1=1${dateFilter}`, params),
+      db.query(`SELECT action, COUNT(*) as count FROM audit_logs WHERE 1=1${dateFilter} GROUP BY action ORDER BY count DESC LIMIT 25`, params),
+      db.query(`SELECT table_name, COUNT(*) as count FROM audit_logs WHERE table_name IS NOT NULL${dateFilter} GROUP BY table_name ORDER BY count DESC LIMIT 25`, params),
+      db.query(`SELECT u.first_name, u.last_name, u.email, COUNT(*) as event_count FROM audit_logs a JOIN users u ON a.user_id = u.id WHERE 1=1${dateFilter} GROUP BY u.id, u.first_name, u.last_name, u.email ORDER BY event_count DESC LIMIT 20`, params),
+      db.query(`SELECT COUNT(*) AS n FROM audit_logs WHERE is_sensitive = true${dateFilter}`, params),
+      db.query(`SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'SECURITY_ALERT'${dateFilter}`, params),
+      db.query(`SELECT COUNT(*) AS n FROM audit_logs WHERE action IN ('INSERT','UPDATE','DELETE','CREATE')${dateFilter}`, params),
+    ]);
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'LETTER', margin: 54 });
+    const fname = `hipaa-audit-${startDate || 'all'}-to-${endDate || new Date().toISOString().slice(0,10)}.pdf`.replace(/[^a-zA-Z0-9._-]/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+    doc.pipe(res);
+
+    doc.fillColor('#1D4ED8').font('Helvetica-Bold').fontSize(18).text('HIPAA Audit & Compliance Report');
+    doc.fillColor('#6B7280').font('Helvetica').fontSize(9).text('Chippewa Valley Home Care');
+    doc.moveDown(0.4);
+    doc.fillColor('#374151').font('Helvetica').fontSize(10);
+    doc.text(`Period: ${startDate || 'all-time'} to ${endDate || new Date().toISOString().slice(0,10)}`);
+    doc.text(`Generated: ${new Date().toLocaleString()}`);
+    doc.moveDown(0.5);
+
+    // Summary block
+    const summary = [
+      ['Total events recorded',     parseInt(total.rows[0].total)],
+      ['Data-change events',        parseInt(dataChanges.rows[0].n)],
+      ['Sensitive (PHI-flagged) events', parseInt(sensitive.rows[0].n)],
+      ['Security alerts raised',    parseInt(alerts.rows[0].n)],
+      ['Distinct active users',     byUser.rows.length],
+    ];
+    doc.fillColor('#1E3A8A').font('Helvetica-Bold').fontSize(12).text('SUMMARY');
+    doc.moveTo(54, doc.y + 2).lineTo(558, doc.y + 2).strokeColor('#BFDBFE').stroke();
+    doc.moveDown(0.3);
+    doc.fillColor('#111827').font('Helvetica').fontSize(10);
+    summary.forEach(([label, val]) => {
+      doc.text(`${label}:`, { continued: true }).font('Helvetica-Bold').text(`  ${val.toLocaleString()}`).font('Helvetica');
+    });
+
+    const section = (title, rows, columns) => {
+      doc.moveDown(0.7);
+      doc.fillColor('#1E3A8A').font('Helvetica-Bold').fontSize(12).text(title);
+      doc.moveTo(54, doc.y + 2).lineTo(558, doc.y + 2).strokeColor('#BFDBFE').stroke();
+      doc.moveDown(0.3);
+      doc.fillColor('#111827').font('Helvetica').fontSize(9);
+      if (rows.length === 0) { doc.text('(none)'); return; }
+      // Header row
+      const colW = 504 / columns.length;
+      const headerY = doc.y;
+      columns.forEach((c, i) => {
+        doc.font('Helvetica-Bold').text(c.label, 54 + i * colW, headerY, { width: colW, ellipsis: true });
+      });
+      doc.moveDown(0.2);
+      // Body
+      doc.font('Helvetica');
+      rows.forEach(r => {
+        if (doc.y > 720) { doc.addPage(); }
+        const rowY = doc.y;
+        columns.forEach((c, i) => {
+          const v = r[c.key];
+          doc.text(String(v == null ? '' : v), 54 + i * colW, rowY, { width: colW, ellipsis: true });
+        });
+        doc.moveDown(0.15);
+      });
+    };
+
+    section('Top Actions',  byAction.rows, [{ key: 'action', label: 'Action' }, { key: 'count', label: 'Count' }]);
+    section('Top Tables',   byTable.rows,  [{ key: 'table_name', label: 'Table' }, { key: 'count', label: 'Count' }]);
+    section('Top Users',    byUser.rows.map(u => ({ ...u, name: `${u.first_name} ${u.last_name}` })),
+      [{ key: 'name', label: 'User' }, { key: 'email', label: 'Email' }, { key: 'event_count', label: 'Events' }]);
+
+    // Footer
+    doc.fontSize(7).fillColor('#9CA3AF').text(
+      'Generated automatically per HIPAA §164.312(b) audit-control requirements. Contains Protected Health Information access metadata — handle accordingly.',
+      54, 750, { width: 504, align: 'center' }
+    );
+    doc.end();
+  } catch (error) {
+    console.error('[audit compliance pdf]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

@@ -47,7 +47,7 @@ const ReportsAnalytics = ({ token }) => {
   };
 
   // New GET-style drill-down reports added later — different endpoint shape
-  const GET_REPORTS = new Set(['hours-by-payer', 'caregiver-utilization', 'client-visits-summary']);
+  const GET_REPORTS = new Set(['hours-by-payer', 'caregiver-utilization', 'client-visits-summary', 'client-revenue-by-month']);
 
   const generateReport = async () => {
     setLoading(true);
@@ -631,6 +631,18 @@ const ReportsAnalytics = ({ token }) => {
     { key: 'utilization_pct',    label: 'Util %', right: true, format: 'pct' },
   ]);
 
+  const renderClientRevenueByMonth = () => renderTable([
+    { key: 'month',         label: 'Month', bold: true },
+    { key: 'first_name',    label: 'First', bold: true },
+    { key: 'last_name',     label: 'Last',  bold: true },
+    { key: 'invoice_count', label: 'Invoices',    right: true, format: 'num' },
+    { key: 'total_billed',  label: 'Billed ($)',  right: true, format: 'num' },
+    { key: 'total_paid',    label: 'Paid ($)',    right: true, format: 'num' },
+    { key: 'outstanding',   label: 'Outstanding ($)', right: true, format: 'num' },
+    { key: 'paid_count',    label: 'Paid',        right: true, format: 'num' },
+    { key: 'overdue_count', label: 'Overdue',     right: true, format: 'num' },
+  ]);
+
   const renderClientVisitsSummary = () => renderTable([
     { key: 'first_name', label: 'First', bold: true },
     { key: 'last_name',  label: 'Last',  bold: true },
@@ -662,6 +674,8 @@ const ReportsAnalytics = ({ token }) => {
         return renderCaregiverUtilization();
       case 'client-visits-summary':
         return renderClientVisitsSummary();
+      case 'client-revenue-by-month':
+        return renderClientRevenueByMonth();
       default:
         return null;
     }
@@ -684,7 +698,8 @@ const ReportsAnalytics = ({ token }) => {
             { value: 'revenue', label: 'Revenue' },
             { value: 'hours-by-payer', label: 'Hours by Payer' },
             { value: 'caregiver-utilization', label: 'Caregiver Utilization' },
-            { value: 'client-visits-summary', label: 'Client Visits Summary' }
+            { value: 'client-visits-summary', label: 'Client Visits Summary' },
+            { value: 'client-revenue-by-month', label: 'Client Revenue by Month' }
           ].map(type => (
             <button
               key={type.value}

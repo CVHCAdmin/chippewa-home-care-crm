@@ -1533,9 +1533,62 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     };
 
+    // ── Week-at-a-glance: 7 days starting today, with totals per day
+    const hoursOf = (s) => {
+      const [sh, sm] = (s.start_time || '00:00').split(':').map(Number);
+      const [eh, em] = (s.end_time   || '00:00').split(':').map(Number);
+      let mins = (eh * 60 + em) - (sh * 60 + sm);
+      if (mins < 0) mins += 24 * 60;
+      return mins / 60;
+    };
+    const weekDays = [];
+    for (let d = 0; d < 7; d++) {
+      const dt = new Date(today); dt.setDate(today.getDate() + d);
+      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      const dayShifts = byDate[key] || [];
+      const totalHrs = dayShifts.reduce((sum, s) => sum + hoursOf(s), 0);
+      weekDays.push({ key, dt, shifts: dayShifts, totalHrs, isToday: d === 0 });
+    }
+    const weekTotalHrs = weekDays.reduce((s, d) => s + d.totalHrs, 0);
+
     return (
       <>
         <div className="schedule-header"><h3>📅 My Schedule</h3></div>
+
+        {/* Week-at-a-glance strip */}
+        <div style={{ marginBottom: '0.75rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', fontSize: '0.85rem', color: '#374151' }}>
+            <strong>This Week</strong>
+            <span>{weekTotalHrs.toFixed(1)}h total</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
+            {weekDays.map(d => (
+              <div key={d.key}
+                style={{
+                  padding: '6px 4px', textAlign: 'center', borderRadius: 6,
+                  background: d.isToday ? '#DBEAFE' : (d.shifts.length > 0 ? '#F0FDF4' : '#F3F4F6'),
+                  border: d.isToday ? '1px solid #93C5FD' : '1px solid transparent',
+                  fontSize: '0.7rem',
+                }}>
+                <div style={{ fontWeight: 700, color: d.isToday ? '#1E40AF' : '#374151' }}>
+                  {d.dt.toLocaleDateString('en-US', { weekday: 'short' })}
+                </div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#111827', marginTop: 2 }}>
+                  {d.dt.getDate()}
+                </div>
+                {d.shifts.length > 0 ? (
+                  <>
+                    <div style={{ fontWeight: 700, color: '#059669', marginTop: 4 }}>{d.totalHrs.toFixed(1)}h</div>
+                    <div style={{ color: '#6B7280' }}>{d.shifts.length} shift{d.shifts.length !== 1 ? 's' : ''}</div>
+                  </>
+                ) : (
+                  <div style={{ color: '#9CA3AF', marginTop: 4 }}>off</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
         {concreteShifts.length === 0 ? (
           <div className="card text-center"><p className="text-muted">No upcoming shifts</p></div>
         ) : (
