@@ -1466,24 +1466,37 @@ router.get('/hours-by-payer', auth, async (req, res) => {
   const { startDate, endDate } = req.query;
   if (!startDate || !endDate) return res.status(400).json({ error: 'startDate + endDate required' });
   try {
+    // Wrap in a CTE so the GROUP BY can reference the derived payer columns
+    // without dragging c.is_private_pay into the grouping (Postgres needs
+    // every non-aggregate referenced column to appear in GROUP BY).
     const result = await db.query(`
+      WITH labeled AS (
+        SELECT
+          COALESCE(rs.id::text, CASE WHEN c.is_private_pay THEN 'private' ELSE 'unknown' END) AS payer_key,
+          COALESCE(rs.name, CASE WHEN c.is_private_pay THEN 'Private Pay' ELSE 'Unknown' END) AS payer_name,
+          COALESCE(rs.payer_type, CASE WHEN c.is_private_pay THEN 'private_pay' ELSE 'unknown' END) AS payer_type,
+          c.id AS client_id,
+          te.id AS te_id,
+          te.duration_minutes,
+          te.billable_minutes,
+          te.start_time
+        FROM time_entries te
+        JOIN clients c ON te.client_id = c.id
+        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+        WHERE te.is_complete = true
+          AND te.start_time >= $1::date
+          AND te.start_time <  ($2::date + INTERVAL '1 day')
+      )
       SELECT
-        COALESCE(rs.id::text, CASE WHEN c.is_private_pay THEN 'private' ELSE 'unknown' END) AS payer_key,
-        COALESCE(rs.name, CASE WHEN c.is_private_pay THEN 'Private Pay' ELSE 'Unknown' END) AS payer_name,
-        COALESCE(rs.payer_type, CASE WHEN c.is_private_pay THEN 'private_pay' ELSE 'unknown' END) AS payer_type,
-        COUNT(DISTINCT c.id)                AS active_clients,
-        COUNT(te.id)                         AS visits,
-        ROUND(SUM(te.duration_minutes) / 60.0, 2) AS total_hours,
-        ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 2) AS billable_hours,
-        ROUND(AVG(te.duration_minutes) / 60.0, 2) AS avg_visit_hours,
-        MIN(te.start_time::date) AS first_visit,
-        MAX(te.start_time::date) AS last_visit
-      FROM time_entries te
-      JOIN clients c ON te.client_id = c.id
-      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
-      WHERE te.is_complete = true
-        AND te.start_time >= $1::date
-        AND te.start_time <  ($2::date + INTERVAL '1 day')
+        payer_key, payer_name, payer_type,
+        COUNT(DISTINCT client_id) AS active_clients,
+        COUNT(te_id)              AS visits,
+        ROUND(SUM(duration_minutes) / 60.0, 2) AS total_hours,
+        ROUND(SUM(COALESCE(billable_minutes, duration_minutes)) / 60.0, 2) AS billable_hours,
+        ROUND(AVG(duration_minutes) / 60.0, 2) AS avg_visit_hours,
+        MIN(start_time::date) AS first_visit,
+        MAX(start_time::date) AS last_visit
+      FROM labeled
       GROUP BY payer_key, payer_name, payer_type
       ORDER BY billable_hours DESC NULLS LAST
     `, [startDate, endDate]);
