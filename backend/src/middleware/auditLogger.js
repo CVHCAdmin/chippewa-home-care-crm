@@ -198,8 +198,37 @@ const auditLogger = (pool) => {
     }
   };
 
+  // Skip telemetry endpoints — these used to flood audit_logs with hundreds
+  // of thousands of useless rows (every GPS ping, geofence check, travel
+  // warning). They're not HIPAA audit events and contain no record_id.
+  // If you need an HTTP access log, write it to a separate table.
+  const NOISE_PATH_PATTERNS = [
+    /\/geofence\/check/i,
+    /\/gps-failure/i,
+    /\/check-warnings/i,
+    /\/check-travel-time/i,
+    /\/check-weekly-hours/i,
+    /\/15-min-warning/i,
+    /\/api\/scheduling\/coverage-overview/i,
+    /\/api\/scheduling\/suggest-caregivers/i,
+    /\/api\/scheduling\/check-/i,
+    /\/api\/dashboard\/(summary|action-items|live-board|referrals|caregiver-hours)/i,
+    /\/api\/notifications\/?/i,
+    /\/api\/push\/(vapid-key|subscribe|unsubscribe)/i,
+    /\/api\/time-entries\/.*\/gps/i,
+    /^\/$/,            // health/root probes
+    /^\/api\/?$/,
+  ];
+  const isNoiseRequest = (req) => {
+    if (!req.path) return false;
+    return NOISE_PATH_PATTERNS.some(rx => rx.test(req.path));
+  };
+
   // Middleware for HTTP requests
   const middleware = async (req, res, next) => {
+    // Skip telemetry endpoints entirely — they were 95% of audit_logs volume
+    if (isNoiseRequest(req)) return next();
+
     // Skip GET requests for logging, but still check suspicious activity
     if (req.method === 'GET') {
       const user_id = req.user?.id || req.user?.userId;

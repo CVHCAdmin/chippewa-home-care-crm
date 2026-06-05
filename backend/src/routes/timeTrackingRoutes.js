@@ -684,4 +684,105 @@ router.patch('/:id/approve', verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// ─── VISIT PHOTOS (proof-of-care) ────────────────────────────────────────────
+
+// POST /api/time-entries/:id/photos — attach a photo to a time entry
+// Body: { imageBase64 (data URI), caption?, category? }
+router.post(':id/photos', verifyToken, async (req, res) => {
+  const { imageBase64, caption, category } = req.body;
+  if (!imageBase64 || !imageBase64.startsWith('data:image')) {
+    return res.status(400).json({ error: 'imageBase64 (data URI) is required' });
+  }
+  // ~6.6MB encoded == ~5MB raw — CHECK constraint catches anything bigger
+  if (imageBase64.length > 7_000_000) {
+    return res.status(400).json({ error: 'Photo too large — keep under ~5MB raw' });
+  }
+  try {
+    // Only the caregiver who owns this time entry, or admin, can upload
+    const te = await db.query(`SELECT caregiver_id, client_id FROM time_entries WHERE id = $1`, [req.params.id]);
+    if (te.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
+    if (req.user?.role !== 'admin' && req.user?.id !== te.rows[0].caregiver_id) {
+      return res.status(403).json({ error: 'Only the assigned caregiver or an admin can upload visit photos' });
+    }
+
+    const result = await db.query(
+      `INSERT INTO visit_photos
+       (time_entry_id, caregiver_id, client_id, caption, category, image_base64, image_size)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, caption, category, taken_at, image_size`,
+      [req.params.id, te.rows[0].caregiver_id, te.rows[0].client_id,
+       caption || null, category || null, imageBase64, Math.floor(imageBase64.length * 0.75)]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    if (error.message.includes('visit_photo_size_cap')) {
+      return res.status(400).json({ error: 'Photo exceeds size limit (5MB)' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/time-entries/:id/photos — list photos for a time entry
+router.get(':id/photos', verifyToken, async (req, res) => {
+  try {
+    const te = await db.query(`SELECT caregiver_id, client_id FROM time_entries WHERE id = $1`, [req.params.id]);
+    if (te.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
+    if (req.user?.role !== 'admin' && req.user?.id !== te.rows[0].caregiver_id) {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
+    const result = await db.query(
+      `SELECT vp.id, vp.caption, vp.category, vp.image_base64, vp.image_size, vp.taken_at, vp.uploaded_at,
+              u.first_name, u.last_name
+         FROM visit_photos vp
+         LEFT JOIN users u ON vp.caregiver_id = u.id
+        WHERE vp.time_entry_id = $1
+        ORDER BY vp.taken_at`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/time-entries/photos/client/:clientId — recent photos for a client (admin)
+router.get('/photos/client/:clientId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+    const result = await db.query(
+      `SELECT vp.id, vp.caption, vp.category, vp.taken_at, vp.image_size,
+              vp.time_entry_id, u.first_name, u.last_name
+         FROM visit_photos vp
+         LEFT JOIN users u ON vp.caregiver_id = u.id
+        WHERE vp.client_id = $1
+        ORDER BY vp.taken_at DESC
+        LIMIT $2`,
+      [req.params.clientId, limit]
+    );
+    // Note: omits image_base64 from list view for bandwidth; fetch individually via /photo/:id
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/time-entries/photo/:photoId — fetch a single photo (with image)
+router.get('/photo/:photoId', verifyToken, async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT vp.*, te.caregiver_id FROM visit_photos vp
+         JOIN time_entries te ON vp.time_entry_id = te.id
+        WHERE vp.id = $1`, [req.params.photoId]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Photo not found' });
+    if (req.user?.role !== 'admin' && req.user?.id !== r.rows[0].caregiver_id) {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
+    res.json(r.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// DELETE /api/time-entries/photo/:photoId — admin only
+router.delete('/photo/:photoId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const r = await db.query(`DELETE FROM visit_photos WHERE id = $1 RETURNING id`, [req.params.photoId]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Photo not found' });
+    res.json({ deleted: r.rows[0].id });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 module.exports = router;

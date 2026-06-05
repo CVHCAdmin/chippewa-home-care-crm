@@ -157,6 +157,106 @@ router.delete('/care-plan-templates/:id', verifyToken, requireAdmin, async (req,
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// GET /api/clinical/care-plans/:id/pdf — render a care plan as a printable PDF.
+// Use case: regulator/binder/paper backup, family copy.
+router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT cp.*, c.first_name AS client_first, c.last_name AS client_last,
+              c.date_of_birth, c.address, c.city, c.state, c.zip, c.phone,
+              c.emergency_contact_name, c.emergency_contact_phone,
+              u.first_name AS author_first, u.last_name AS author_last
+         FROM care_plans cp
+         JOIN clients c ON cp.client_id = c.id
+         LEFT JOIN users u ON cp.created_by = u.id
+        WHERE cp.id = $1`,
+      [req.params.id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
+    const p = r.rows[0];
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'LETTER', margin: 54 });
+    const fname = `care-plan-${p.client_last}-${p.client_first}-${new Date(p.created_at).toISOString().slice(0,10)}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname.replace(/[^a-zA-Z0-9._-]/g, '_')}"`);
+    doc.pipe(res);
+
+    const section = (title, body) => {
+      if (!body || !String(body).trim()) return;
+      doc.moveDown(0.6).fillColor('#1E3A8A').font('Helvetica-Bold').fontSize(11).text(title.toUpperCase());
+      doc.moveTo(54, doc.y + 2).lineTo(558, doc.y + 2).strokeColor('#BFDBFE').stroke();
+      doc.moveDown(0.3).fillColor('#111827').font('Helvetica').fontSize(10).text(String(body), { lineGap: 2 });
+    };
+
+    // Header
+    doc.fillColor('#1D4ED8').font('Helvetica-Bold').fontSize(20).text('Care Plan');
+    doc.fillColor('#6B7280').font('Helvetica').fontSize(9).text('Chippewa Valley Home Care');
+    doc.moveDown(0.5);
+
+    // Client block
+    doc.fillColor('#111827').font('Helvetica-Bold').fontSize(13).text(`${p.client_first} ${p.client_last}`);
+    const small = [];
+    if (p.date_of_birth) small.push(`DOB: ${new Date(p.date_of_birth).toLocaleDateString()}`);
+    if (p.phone) small.push(`Phone: ${p.phone}`);
+    if (p.address) small.push(`${p.address}${p.city ? `, ${p.city}` : ''}${p.state ? `, ${p.state}` : ''} ${p.zip || ''}`);
+    doc.font('Helvetica').fontSize(9).fillColor('#6B7280').text(small.join('  ·  '));
+
+    // Plan meta
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(9).fillColor('#374151');
+    doc.text(`Plan ID: ${p.id}`);
+    doc.text(`Service Type: ${p.service_type || '—'}     Frequency: ${p.frequency || '—'}`);
+    doc.text(`Start: ${p.start_date ? new Date(p.start_date).toLocaleDateString() : '—'}    End: ${p.end_date ? new Date(p.end_date).toLocaleDateString() : 'Ongoing'}`);
+    if (p.author_first) doc.text(`Created by: ${p.author_first} ${p.author_last}   on ${new Date(p.created_at).toLocaleDateString()}`);
+
+    // Sections
+    section('Service Description', p.service_description);
+    section('Care Goals', p.care_goals);
+    section('Special Instructions', p.special_instructions);
+    section('Precautions', p.precautions);
+    section('Medication Notes', p.medication_notes);
+    section('Mobility Notes', p.mobility_notes);
+    section('Dietary Notes', p.dietary_notes);
+    section('Communication Notes', p.communication_notes);
+
+    if (p.emergency_contact_name || p.emergency_contact_phone) {
+      section('Emergency Contact', `${p.emergency_contact_name || ''}   ${p.emergency_contact_phone || ''}`.trim());
+    }
+
+    // Signature lines for paper workflow
+    doc.moveDown(2);
+    doc.fillColor('#6B7280').fontSize(9);
+    const sigY = doc.y;
+    doc.text('_________________________________', 54, sigY);
+    doc.text('_________________________________', 320, sigY);
+    doc.moveDown(0.3);
+    doc.text('Client / Authorized Rep', 54, doc.y);
+    doc.text('Date', 320, doc.y - 12);
+
+    doc.moveDown(2);
+    const sigY2 = doc.y;
+    doc.text('_________________________________', 54, sigY2);
+    doc.text('_________________________________', 320, sigY2);
+    doc.moveDown(0.3);
+    doc.text('Agency Representative', 54, doc.y);
+    doc.text('Date', 320, doc.y - 12);
+
+    // Footer
+    doc.moveDown(2);
+    doc.fontSize(7).fillColor('#9CA3AF').text(
+      `Generated ${new Date().toLocaleString()} by ${req.user.email || req.user.id}. ` +
+      `This document contains Protected Health Information — handle per HIPAA.`,
+      54, 720, { width: 504, align: 'center' }
+    );
+
+    doc.end();
+  } catch (error) {
+    console.error('[care-plan PDF]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create a new care_plans row from a template. The admin gets a fully
 // pre-filled plan to edit instead of a blank form.
 router.post('/care-plans/from-template/:templateId', verifyToken, requireAdmin, async (req, res) => {

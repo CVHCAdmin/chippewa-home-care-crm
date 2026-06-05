@@ -376,6 +376,31 @@ router.get('/portal/medications', familyAuth, async (req, res) => {
   }
 });
 
+// Family-facing vitals — gated on can_view_medications since vitals are
+// part of the same clinical-data tier.
+router.get('/portal/vitals', familyAuth, async (req, res) => {
+  if (!req.familyMember.can_view_medications) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  try {
+    const result = await db.query(`
+      SELECT cv.id, cv.recorded_at,
+        cv.systolic_bp, cv.diastolic_bp, cv.pulse, cv.respirations,
+        cv.oxygen_saturation, cv.temperature_f, cv.blood_glucose,
+        cv.weight_lbs, cv.pain_scale, cv.pain_location, cv.notes,
+        u.first_name AS caregiver_first, u.last_name AS caregiver_last
+      FROM client_vitals cv
+      LEFT JOIN users u ON cv.caregiver_id = u.id
+      WHERE cv.client_id = $1
+      ORDER BY cv.recorded_at DESC
+      LIMIT 60
+    `, [req.clientId]);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get visit notes (for family)
 router.get('/portal/notes', familyAuth, async (req, res) => {
   if (!req.familyMember.can_view_care_plan) {

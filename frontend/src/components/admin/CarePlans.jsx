@@ -546,6 +546,24 @@ const CarePlans = ({ token }) => {
                                     Generate Schedule
                                   </button>
                                   <button
+                                    className="btn btn-sm btn-secondary"
+                                    title="Download a printable PDF"
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      try {
+                                        const r = await fetch(`${API_BASE_URL}/api/care-plans/${plan.id}/pdf`, { headers: { Authorization: `Bearer ${token}` } });
+                                        if (!r.ok) throw new Error('PDF download failed');
+                                        const blob = await r.blob();
+                                        const url = window.URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url; a.download = `care-plan-${plan.id.slice(0,8)}.pdf`; a.click();
+                                        window.URL.revokeObjectURL(url);
+                                      } catch (err) { setMessage('PDF failed: ' + err.message); }
+                                    }}
+                                  >
+                                    📄 PDF
+                                  </button>
+                                  <button
                                     className="btn btn-sm btn-danger"
                                     onClick={() => handleDeletePlan(plan.id)}
                                   >

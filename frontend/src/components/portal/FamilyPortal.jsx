@@ -146,6 +146,78 @@ const CarePlanView = ({ token }) => {
 };
 
 // ── Medications Tab ───────────────────────────────────────────
+const VitalsView = ({ token }) => {
+  const [vitals, setVitals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const FIELDS = [
+    { k: 'systolic_bp',       label: 'BP (sys)',  unit: '' },
+    { k: 'diastolic_bp',      label: 'BP (dia)',  unit: '' },
+    { k: 'pulse',             label: 'Pulse',     unit: 'bpm' },
+    { k: 'respirations',      label: 'Resp',      unit: '/min' },
+    { k: 'oxygen_saturation', label: 'O₂ Sat',    unit: '%' },
+    { k: 'temperature_f',     label: 'Temp',      unit: '°F' },
+    { k: 'blood_glucose',     label: 'Glucose',   unit: 'mg/dL' },
+    { k: 'weight_lbs',        label: 'Weight',    unit: 'lbs' },
+    { k: 'pain_scale',        label: 'Pain',      unit: '/10' },
+  ];
+  useEffect(() => {
+    apiCall('/api/family-portal/portal/vitals', { method: 'GET' }, token)
+      .then(data => { if (data) setVitals(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>Loading vitals...</div>;
+  if (vitals.length === 0) return <div style={{ ...CARD, textAlign: 'center', padding: '40px', color: '#888' }}>No vitals recorded yet.</div>;
+
+  const latest = vitals[0];
+
+  return (
+    <div>
+      <h3 style={{ margin: '0 0 16px', fontSize: '1.1rem' }}>Latest Vitals</h3>
+      <div style={{ ...CARD, marginBottom: 20 }}>
+        <div style={{ fontSize: '0.78rem', color: '#666', marginBottom: 8 }}>
+          Recorded {new Date(latest.recorded_at).toLocaleString()}
+          {latest.caregiver_first && ` by ${latest.caregiver_first} ${latest.caregiver_last?.[0] || ''}.`}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+          {FIELDS.map(f => latest[f.k] != null && (
+            <div key={f.k} style={{ background: '#F9FAFB', padding: '8px 10px', borderRadius: 6 }}>
+              <div style={{ fontSize: '0.7rem', color: '#6B7280', fontWeight: 700 }}>{f.label}</div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#111827' }}>
+                {latest[f.k]} <span style={{ fontSize: '0.7rem', color: '#9CA3AF', fontWeight: 400 }}>{f.unit}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        {latest.notes && (
+          <div style={{ marginTop: 12, color: '#555', fontSize: '0.85rem', fontStyle: 'italic' }}>{latest.notes}</div>
+        )}
+      </div>
+
+      <h4 style={{ margin: '20px 0 12px', fontSize: '0.95rem', color: '#666' }}>History ({vitals.length})</h4>
+      <div style={{ ...CARD, overflowX: 'auto', padding: 0 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+          <thead>
+            <tr style={{ background: '#F9FAFB' }}>
+              <th style={{ padding: '6px 8px', textAlign: 'left' }}>When</th>
+              {FIELDS.map(f => <th key={f.k} style={{ padding: '6px 8px', textAlign: 'right' }}>{f.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {vitals.map(v => (
+              <tr key={v.id} style={{ borderTop: '1px solid #F3F4F6' }}>
+                <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{new Date(v.recorded_at).toLocaleDateString()}</td>
+                {FIELDS.map(f => <td key={f.k} style={{ padding: '5px 8px', textAlign: 'right' }}>{v[f.k] != null ? v[f.k] : '—'}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 const MedicationsView = ({ token }) => {
   const [meds, setMeds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -326,6 +398,7 @@ const FamilyPortal = ({ user, token, onLogout, permissions }) => {
   if (permissions.can_view_schedule)  tabs.push({ key: 'schedule',    label: 'Schedule',    icon: '📅' });
   if (permissions.can_view_care_plan) tabs.push({ key: 'care-plan',   label: 'Care Plan',   icon: '📋' });
   if (permissions.can_view_medications) tabs.push({ key: 'medications', label: 'Medications', icon: '💊' });
+  if (permissions.can_view_medications) tabs.push({ key: 'vitals',     label: 'Vitals',      icon: '❤️' });
   if (permissions.can_message)        tabs.push({ key: 'messages',    label: 'Messages',    icon: '💬' });
 
   const userName = user?.first_name
@@ -337,6 +410,7 @@ const FamilyPortal = ({ user, token, onLogout, permissions }) => {
       case 'schedule':    return <ScheduleView token={token} />;
       case 'care-plan':   return <CarePlanView token={token} />;
       case 'medications': return <MedicationsView token={token} />;
+      case 'vitals':      return <VitalsView token={token} />;
       case 'messages':    return <MessagesView token={token} />;
       default:            return <OverviewView client={client} userName={userName} permissions={permissions} setActiveTab={setActiveTab} />;
     }

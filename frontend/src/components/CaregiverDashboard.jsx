@@ -45,6 +45,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [visitNote, setVisitNote] = useState('');
   const [showNoteModal, setShowNoteModal] = useState(false);
+  // Visit photos staged for upload on clock-out
+  const [pendingPhotos, setPendingPhotos] = useState([]); // [{ dataUri, caption, category, sizeBytes }]
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [recentVisits, setRecentVisits] = useState([]);
   const [viewingClientId, setViewingClientId] = useState(null);
   const timerRef = useRef(null);
@@ -740,16 +743,62 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         throw new Error(data.error || 'Failed');
       }
 
+      // Clock-out succeeded — upload any staged visit photos before resetting
+      if (pendingPhotos.length > 0 && activeSession?.id) {
+        setPhotoUploading(true);
+        let failed = 0;
+        for (const p of pendingPhotos) {
+          try {
+            const pr = await fetch(`${API_BASE_URL}/api/time-entries/${activeSession.id}/photos`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({ imageBase64: p.dataUri, caption: p.caption, category: p.category }),
+            });
+            if (!pr.ok) failed++;
+          } catch { failed++; }
+        }
+        setPhotoUploading(false);
+        if (failed > 0) toast(`${pendingPhotos.length - failed}/${pendingPhotos.length} photos uploaded`, 'warning');
+      }
+
       await hapticNotify('success');
       setActiveSession(null);
       setSelectedClient('');
       setVisitNote('');
+      setPendingPhotos([]);
       setShowNoteModal(false);
       loadData();
     } catch (error) {
       await hapticNotify('error');
       toast('Failed to clock out: ' + error.message, 'error');
     }
+  };
+
+  // Convert a file to a downscaled JPEG data URI to keep uploads small.
+  // Max 1600px on longest edge, ~80% JPEG quality → typically 200-600KB.
+  const handlePhotoFile = async (file, category = 'other') => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { toast('Pick an image file', 'error'); return; }
+    if (file.size > 15_000_000) { toast('Photo too large (15MB max)', 'error'); return; }
+    const img = new Image();
+    const reader = new FileReader();
+    const dataUrl = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = dataUrl; });
+    const MAX = 1600;
+    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    const compressed = canvas.toDataURL('image/jpeg', 0.82);
+    const sizeBytes = Math.floor(compressed.length * 0.75);
+    if (sizeBytes > 5_000_000) { toast('Photo too large after compression', 'error'); return; }
+    setPendingPhotos(prev => [...prev, { dataUri: compressed, caption: '', category, sizeBytes }]);
   };
 
   const handlePickupShift = async (shiftId) => {
@@ -1757,6 +1806,39 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <div className="modal-header"><h2>Visit Notes</h2><button className="close-btn" onClick={() => setShowNoteModal(false)}>×</button></div>
             <p className="text-muted">Add notes (optional)</p>
             <div className="form-group"><textarea value={visitNote} onChange={(e) => setVisitNote(e.target.value)} placeholder="How did the visit go?" rows={4} /></div>
+
+            {/* Visit photos — proof-of-care */}
+            <div className="form-group">
+              <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>
+                📷 Photos ({pendingPhotos.length}) <span style={{ fontWeight: 400, fontSize: '0.8rem', color: '#6B7280' }}>optional</span>
+              </label>
+              {/* Native file picker — on mobile, capture="environment" defaults to rear camera */}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                onChange={(e) => { Array.from(e.target.files || []).forEach(f => handlePhotoFile(f, 'task')); e.target.value = ''; }}
+                style={{ display: 'block', marginBottom: 8 }}
+              />
+              {pendingPhotos.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 6, marginBottom: 6 }}>
+                  {pendingPhotos.map((p, i) => (
+                    <div key={i} style={{ position: 'relative', border: '1px solid #E5E7EB', borderRadius: 6, overflow: 'hidden', background: '#000' }}>
+                      <img src={p.dataUri} alt={p.caption || `Photo ${i+1}`} style={{ width: '100%', height: 100, objectFit: 'cover', display: 'block' }} />
+                      <button type="button" onClick={() => setPendingPhotos(prev => prev.filter((_, idx) => idx !== i))}
+                        style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(220,38,38,0.9)', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 14, lineHeight: '20px' }}
+                        title="Remove">×</button>
+                      <input type="text" value={p.caption} onChange={(e) => setPendingPhotos(prev => prev.map((x, idx) => idx === i ? { ...x, caption: e.target.value } : x))}
+                        placeholder="Caption…"
+                        style={{ width: '100%', border: 'none', borderTop: '1px solid #E5E7EB', padding: '3px 5px', fontSize: '0.7rem' }} />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {photoUploading && <div style={{ fontSize: '0.8rem', color: '#0891B2' }}>Uploading photos…</div>}
+            </div>
+
             <div className="form-actions">
               <button className="btn btn-secondary" onClick={() => setShowNoteModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={completeClockOut}>Clock Out</button>
