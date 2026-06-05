@@ -64,13 +64,28 @@ router.get('/summary', auth, requireAdmin, async (req, res) => {
 });
 
 // ─── CREATE AUTHORIZATION (manual entry) ────────────────────────────────────
+// Accepts BOTH naming conventions:
+//   - IntegrationsHub form: { payerId, authNumber, procedureCode, unitType }
+//   - BillingDashboard form: { referralSourceId, authorizationNumber, serviceType, unitType }
+// Previously the BillingDashboard variant silently dropped fields because the
+// backend destructured only the IntegrationsHub names. Result: 39 prod
+// authorizations with NULL auth_number / payer_id / service_type.
 router.post('/', auth, requireAdmin, async (req, res) => {
   try {
-    const {
-      clientId, payerId, authNumber, midasAuthId,
-      procedureCode, modifier, authorizedUnits, unitType,
-      startDate, endDate, notes, lowUnitsThreshold
-    } = req.body;
+    const b = req.body;
+    const clientId         = b.clientId;
+    const payerId          = b.payerId || b.referralSourceId || null;
+    const authNumber       = b.authNumber || b.authorizationNumber || null;
+    const midasAuthId      = b.midasAuthId || null;
+    const procedureCode    = b.procedureCode || b.serviceCode || 'T1019';
+    const serviceType      = b.serviceType || null;
+    const modifier         = b.modifier || null;
+    const authorizedUnits  = b.authorizedUnits;
+    const unitType         = b.unitType || '15min';
+    const startDate        = b.startDate;
+    const endDate          = b.endDate;
+    const notes            = b.notes || null;
+    const lowUnitsThreshold = b.lowUnitsThreshold || 20;
 
     if (!clientId || !authorizedUnits || !startDate || !endDate) {
       return res.status(400).json({ error: 'Client, authorized units, and date range are required' });
@@ -79,19 +94,56 @@ router.post('/', auth, requireAdmin, async (req, res) => {
     const result = await db.query(`
       INSERT INTO authorizations (
         id, client_id, payer_id, auth_number, midas_auth_id,
-        procedure_code, modifier, authorized_units, unit_type,
+        procedure_code, service_type, modifier, authorized_units, unit_type,
         start_date, end_date, notes, low_units_alert_threshold, created_by
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       RETURNING *
     `, [
-      uuidv4(), clientId, payerId || null, authNumber || null, midasAuthId || null,
-      procedureCode || 'T1019', modifier || null,
-      authorizedUnits, unitType || '15min',
-      startDate, endDate, notes || null,
-      lowUnitsThreshold || 20, req.user.id
+      uuidv4(), clientId, payerId, authNumber, midasAuthId,
+      procedureCode, serviceType, modifier,
+      authorizedUnits, unitType,
+      startDate, endDate, notes,
+      lowUnitsThreshold, req.user.id
     ]);
 
     res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── UPDATE AUTHORIZATION (edit existing) ───────────────────────────────────
+// New endpoint so admins can fix the 39 rows missing auth_number/payer/etc.
+// without having to delete + re-create. Accepts the same dual naming.
+router.put('/:id', auth, requireAdmin, async (req, res) => {
+  try {
+    const b = req.body;
+    const payerId         = b.payerId !== undefined ? b.payerId : b.referralSourceId;
+    const authNumber      = b.authNumber !== undefined ? b.authNumber : b.authorizationNumber;
+    const result = await db.query(`
+      UPDATE authorizations SET
+        payer_id        = COALESCE($1, payer_id),
+        auth_number     = COALESCE($2, auth_number),
+        service_type    = COALESCE($3, service_type),
+        procedure_code  = COALESCE($4, procedure_code),
+        modifier        = COALESCE($5, modifier),
+        authorized_units = COALESCE($6, authorized_units),
+        unit_type       = COALESCE($7, unit_type),
+        start_date      = COALESCE($8, start_date),
+        end_date        = COALESCE($9, end_date),
+        notes           = COALESCE($10, notes),
+        low_units_alert_threshold = COALESCE($11, low_units_alert_threshold),
+        status          = COALESCE($12, status),
+        updated_at      = NOW()
+      WHERE id = $13
+      RETURNING *
+    `, [
+      payerId, authNumber, b.serviceType, b.procedureCode || b.serviceCode, b.modifier,
+      b.authorizedUnits, b.unitType, b.startDate, b.endDate, b.notes,
+      b.lowUnitsThreshold, b.status, req.params.id,
+    ]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Authorization not found' });
+    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
