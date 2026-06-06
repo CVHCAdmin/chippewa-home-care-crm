@@ -56,6 +56,18 @@ const BillingDashboard = ({ token }) => {
   const [referralSources, setReferralSources] = useState([]);
   const [careTypes, setCareTypes] = useState([]);
   const [rates, setRates] = useState([]);
+  const [missingRates, setMissingRates] = useState([]);
+
+  // Detect payer × care-type combos with active clients but no rate.
+  // Banner appears in the Rates tab so admins can see which combos will
+  // silently bill $0 if not configured.
+  useEffect(() => {
+    if (activeTab !== 'rates') return;
+    fetch(`${API_BASE_URL}/api/billing/missing-rates`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setMissingRates)
+      .catch(() => setMissingRates([]));
+  }, [activeTab, token]);
   const [authorizations, setAuthorizations] = useState([]);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1226,6 +1238,25 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <h3 style={{ margin: 0 }}>Payer Contract Rates</h3>
             <button className="btn btn-primary" onClick={() => setShowRateForm(!showRateForm)}>{showRateForm ? 'Cancel' : '+ Add Rate'}</button>
           </div>
+
+          {missingRates.length > 0 && (
+            <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, padding: '0.85rem 1rem', marginBottom: '1rem' }}>
+              <div style={{ fontWeight: 700, color: '#92400E', marginBottom: 6 }}>
+                ⚠️ {missingRates.length} payer × care-type combo{missingRates.length === 1 ? '' : 's'} have active clients but no configured rate
+              </div>
+              <div style={{ fontSize: '0.85rem', color: '#78350F' }}>
+                Without a rate, invoices for these combos will bill $0. Click "Add Rate" above and configure each:
+              </div>
+              <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+                {missingRates.map((m, i) => (
+                  <div key={i} style={{ fontSize: '0.85rem', color: '#1F2937', display: 'flex', justifyContent: 'space-between', padding: '4px 8px', background: '#FFFBEB', borderRadius: 4 }}>
+                    <span><strong>{m.payer_name}</strong> + <strong>{m.care_type_name}</strong></span>
+                    <span style={{ color: '#6B7280' }}>{m.affected_clients} client{m.affected_clients === '1' ? '' : 's'} affected</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {showRateForm && (
             <form onSubmit={handleAddRate} style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f9f9f9', borderRadius: '8px' }}>
               <div className="form-grid">

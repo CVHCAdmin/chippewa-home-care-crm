@@ -1182,6 +1182,34 @@ router.get('/referral-source-rates', auth, async (req, res) => {
   }
 });
 
+// GET /api/billing/missing-rates
+// Surfaces payer × care-type combos that have ACTIVE CLIENTS but no
+// configured rate — so admins know exactly which gaps will cause silent
+// $0 billing. Example: Companion Care was being used on schedules but
+// had no rate configured for either My Choice Wisconsin or Private Care.
+router.get('/missing-rates', auth, async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT rs.id AS payer_id, rs.name AS payer_name,
+             ct.id AS care_type_id, ct.name AS care_type_name,
+             COUNT(DISTINCT c.id) AS affected_clients
+        FROM clients c
+        JOIN referral_sources rs ON c.referral_source_id = rs.id
+        JOIN care_types ct ON c.care_type_id = ct.id
+       WHERE c.is_active = true
+         AND NOT EXISTS (
+           SELECT 1 FROM referral_source_rates rsr
+            WHERE rsr.referral_source_id = rs.id
+              AND (rsr.care_type_id IS NULL OR rsr.care_type_id = ct.id)
+              AND rsr.is_active = true
+         )
+       GROUP BY rs.id, rs.name, ct.id, ct.name
+       ORDER BY rs.name, ct.name
+    `);
+    res.json(r.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 router.post('/referral-source-rates', auth, async (req, res) => {
   const { referralSourceId, careTypeId, rateAmount, rateType, effectiveDate } = req.body;
   try {
