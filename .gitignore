@@ -68,5 +68,5 @@ backend/audits/lighthouse-*.json
 # Cloudflare wrangler cache
 .wrangler/
 
-# Standalone claims agent project (developed separately)
-cvhc-agent/
+# Claims/renewal agent — source is tracked, but skip its installed deps
+cvhc-agent/node_modules/
