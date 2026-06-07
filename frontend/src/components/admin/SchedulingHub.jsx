@@ -438,7 +438,7 @@ const SchedulingHub = ({ token }) => {
     if (formData.scheduleType === 'recurring' && formData.dayOfWeek === '') { showMsg('Select a day of week', 'error'); return; }
     if (formData.scheduleType === 'one-time' && !formData.date) { showMsg('Select a date', 'error'); return; }
     if ((formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') && selectedDays.length === 0) { showMsg('Select at least one day', 'error'); return; }
-    if (formData.startTime >= formData.endTime) { showMsg('End time must be after start time', 'error'); return; }
+    if (formData.startTime === formData.endTime) { showMsg('Start and end time cannot be the same', 'error'); return; }
     const today = new Date().toISOString().split('T')[0];
     const anchorBase = new Date(biWeeklyAnchorDate + 'T12:00:00');
     anchorBase.setDate(anchorBase.getDate() - anchorBase.getDay());
@@ -511,7 +511,7 @@ const SchedulingHub = ({ token }) => {
 
   const handleSaveEdit = async () => {
     if (!editModal) return;
-    if (editModal.startTime >= editModal.endTime) { showMsg('End time must be after start time', 'error'); return; }
+    if (editModal.startTime === editModal.endTime) { showMsg('Start and end time cannot be the same', 'error'); return; }
     setEditSaving(true);
     try {
       await api(`/api/schedules-all/${editModal.id}`, { method: 'PUT', body: JSON.stringify({

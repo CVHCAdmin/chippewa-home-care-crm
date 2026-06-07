@@ -298,7 +298,7 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
     const { scheduleId } = req.params;
     const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, endDate } = req.body;
     const normalize = t => String(t).split(':').map(n => n.padStart(2, '0')).join(':');
-    if (startTime && endTime && normalize(startTime) >= normalize(endTime)) return res.status(400).json({ error: 'End time must be after start time' });
+    if (startTime && endTime && normalize(startTime) === normalize(endTime)) return res.status(400).json({ error: 'Start and end time cannot be the same' });
 
     // Check if end_date column exists
     const colCheck = await db.query(

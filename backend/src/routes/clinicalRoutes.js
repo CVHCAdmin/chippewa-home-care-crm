@@ -493,9 +493,14 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
 
     // Authorization enforcement
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
-    let totalShiftHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
+    // Wrap negative spans to next-day (overnight shift)
+    const shiftHours = (s, e) => {
+      const h = (new Date(`2000-01-01T${e}`) - new Date(`2000-01-01T${s}`)) / (1000 * 60 * 60);
+      return h < 0 ? h + 24 : h;
+    };
+    let totalShiftHours = shiftHours(startTime, endTime);
     if (splitShift?.startTime && splitShift?.endTime) {
-      totalShiftHours += (new Date(`2000-01-01T${splitShift.endTime}`) - new Date(`2000-01-01T${splitShift.startTime}`)) / (1000 * 60 * 60);
+      totalShiftHours += shiftHours(splitShift.startTime, splitShift.endTime);
     }
     const authCheck = await checkAuthorizationBalance(clientId, totalShiftHours);
     if (!authCheck.allowed && req.query.force !== 'true') {

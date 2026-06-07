@@ -257,7 +257,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
   async function handleCreateShift() {
     if (!newShiftForm.clientId) return showToast('Select a client', 'error');
-    if (newShiftForm.startTime >= newShiftForm.endTime) return showToast('End time must be after start', 'error');
+    if (newShiftForm.startTime === newShiftForm.endTime) return showToast('Start and end time cannot be the same', 'error');
     if (!validateSplitTimes(newShiftForm)) return;
 
     setSaving(true);
@@ -412,7 +412,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
   async function handleSaveShift() {
     if (!editShiftForm.clientId) return showToast('Select a client', 'error');
-    if (editShiftForm.startTime >= editShiftForm.endTime) return showToast('End time must be after start', 'error');
+    if (editShiftForm.startTime === editShiftForm.endTime) return showToast('Start and end time cannot be the same', 'error');
     setSaving(true);
     try {
       const isRecurring = editShift.day_of_week !== null && editShift.day_of_week !== undefined;
