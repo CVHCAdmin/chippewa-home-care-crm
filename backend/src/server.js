@@ -72,8 +72,18 @@ app.use(cors({
 }));
 
 // Rate limiters
+//
+// Global cap (per IP) intentionally generous: an admin loading the dashboard
+// fires 20+ parallel requests, then polls a few of them every few seconds for
+// freshness. 500/15min works out to ~33/min — easy to trip during normal use
+// and the lockout is opaque (15-min IP ban). 2000/15min ≈ ~130/min, which
+// still blocks scraping but covers a real admin session.
+//
+// Always send a JSON body so the frontend can show a real message instead of
+// JSON.parse-ing plain text and rendering "Unexpected token 'T'".
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, legacyHeaders: false,
+  windowMs: 15 * 60 * 1000, max: 2000, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many requests from this device. Please wait a minute and try again.' },
   skip: (req) => req.path.includes('/api/messages/unread-count') || req.path.includes('/api/push/unread-count')
 });
 app.use(limiter);

@@ -27,6 +27,18 @@ const Login = ({ onLogin }) => {
     return params.get('token');
   };
 
+  // Safely parse a response that might not be JSON (e.g. a plain-text 429 from
+  // the rate limiter). Returns either the parsed object or { error: <text> } so
+  // callers can read data.error uniformly without JSON.parse blowing up the UI.
+  const safeParseResponse = async (response) => {
+    const raw = await response.text();
+    try { return JSON.parse(raw); }
+    catch {
+      if (response.status === 429) return { error: 'Too many requests from this device. Please wait a minute and try again.' };
+      return { error: raw || `Error ${response.status}` };
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -39,7 +51,7 @@ const Login = ({ onLogin }) => {
         body: JSON.stringify({ email: email.trim().toLowerCase(), password })
       });
 
-      const data = await response.json();
+      const data = await safeParseResponse(response);
 
       if (!response.ok) {
         throw new Error(data.error || `Error ${response.status}`);
@@ -66,7 +78,7 @@ const Login = ({ onLogin }) => {
         body: JSON.stringify({ email: email.trim().toLowerCase() })
       });
 
-      const data = await response.json();
+      const data = await safeParseResponse(response);
       if (!response.ok) throw new Error(data.error || 'Failed');
       setMessage(data.message);
     } catch (err) {
@@ -92,7 +104,7 @@ const Login = ({ onLogin }) => {
         body: JSON.stringify({ token: getResetToken(), newPassword })
       });
 
-      const data = await response.json();
+      const data = await safeParseResponse(response);
       if (!response.ok) throw new Error(data.error || 'Failed');
       setMessage(data.message);
       setTimeout(() => { setMode('login'); window.history.replaceState({}, '', '/'); }, 2000);
