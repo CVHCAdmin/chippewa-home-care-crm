@@ -275,7 +275,7 @@ router.get('/available-caregivers', auth, requireAdmin, async (req, res) => {
         ca.status as availability_status,
         -- Count their hours this week
         COALESCE((
-          SELECT SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 3600)
+          SELECT SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 3600 + CASE WHEN end_time < start_time THEN 24 ELSE 0 END)
           FROM schedules s2
           WHERE s2.caregiver_id = u.id 
             AND s2.is_active = true

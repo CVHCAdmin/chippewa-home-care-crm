@@ -16,8 +16,8 @@ const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
 
-// Helper to calculate hours from schedule time range
-const SCHEDULE_HOURS_CALC = `EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600`;
+// Helper to calculate hours from schedule time range (wraps overnight: end<start adds 24h)
+const SCHEDULE_HOURS_CALC = `(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)`;
 
 // ==================== OVERVIEW REPORT ====================
 // POST /api/reports/overview
@@ -1723,7 +1723,7 @@ router.post('/:type/export-pdf', auth, async (req, res) => {
   try {
     // Fetch the data for this report type
     let reportData = {};
-    const HOURS_CALC = `EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600`;
+    const HOURS_CALC = `(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)`;
 
     if (type === 'overview' || type === 'hours') {
       const [summary, caregivers] = await Promise.all([

@@ -50,10 +50,10 @@ router.get('/revenue', auth, async (req, res) => {
         COUNT(DISTINCT s.caregiver_id) AS caregiver_count,
         COUNT(*) AS shift_count,
         SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0
+          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
         ) AS scheduled_hours,
         SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0
+          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
         ) * 18.50 AS estimated_revenue
       FROM schedules s
       CROSS JOIN LATERAL generate_series(CURRENT_DATE, CURRENT_DATE + 27, '1 day') AS gs(dt)
@@ -113,10 +113,10 @@ router.get('/caregiver-utilization', auth, async (req, res) => {
         u.first_name || ' ' || u.last_name AS caregiver_name,
         COUNT(DISTINCT s.client_id) AS client_count,
         SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0
+          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
         ) AS weekly_hours,
         SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0
+          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
         ) * 18.50 AS weekly_revenue,
         u.employment_type
       FROM users u

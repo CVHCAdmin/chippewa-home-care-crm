@@ -100,7 +100,7 @@ router.get('/conflict-heatmap', verifyToken, requireAdmin, async (req, res) => {
       sched_hours AS (
         SELECT
           s.caregiver_id, d.d,
-          ROUND(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0)::numeric, 2) AS hours,
+          ROUND(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)::numeric, 2) AS hours,
           COUNT(*) AS shift_count
         FROM days d
         JOIN schedules s
@@ -210,7 +210,7 @@ router.get('/suggest-caregivers', verifyToken, async (req, res) => {
     const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 6);
 
     const [hoursResult, historyResult, conflictsResult] = await Promise.all([
-      db.query(`SELECT caregiver_id, SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as weekly_hours FROM schedules WHERE is_active=true AND (date>=$1 AND date<=$2 OR day_of_week IS NOT NULL) GROUP BY caregiver_id`,
+      db.query(`SELECT caregiver_id, SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as weekly_hours FROM schedules WHERE is_active=true AND (date>=$1 AND date<=$2 OR day_of_week IS NOT NULL) GROUP BY caregiver_id`,
         [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]),
       db.query(`SELECT caregiver_id, COUNT(*) as visit_count FROM time_entries WHERE client_id=$1 AND is_complete=true GROUP BY caregiver_id`, [clientId]),
       date && startTime && endTime
@@ -377,7 +377,7 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
 
     const weekStart = getWeekStart(new Date(start));
     const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+6);
-    const hoursResult = await db.query(`SELECT caregiver_id, SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as weekly_hours FROM schedules WHERE is_active=true AND (date>=$1 AND date<=$2 OR day_of_week IS NOT NULL) GROUP BY caregiver_id`, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
+    const hoursResult = await db.query(`SELECT caregiver_id, SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as weekly_hours FROM schedules WHERE is_active=true AND (date>=$1 AND date<=$2 OR day_of_week IS NOT NULL) GROUP BY caregiver_id`, [weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0]]);
     const historyResult = await db.query(`SELECT caregiver_id, client_id, COUNT(*) as visit_count FROM time_entries WHERE is_complete=true GROUP BY caregiver_id, client_id`);
 
     const hoursMap = {}; hoursResult.rows.forEach(r => hoursMap[r.caregiver_id] = parseFloat(r.weekly_hours)||0);
@@ -486,8 +486,8 @@ router.post('/check-weekly-hours', verifyToken, async (req, res) => {
     const weStr = weekEnd.toISOString().split('T')[0];
 
     const [oneTime, recurring, avail, cgName] = await Promise.all([
-      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date>=$2 AND date<=$3`, [caregiverId, wsStr, weStr]),
-      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL`, [caregiverId]),
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date>=$2 AND date<=$3`, [caregiverId, wsStr, weStr]),
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL`, [caregiverId]),
       db.query(`SELECT max_hours_per_week FROM caregiver_availability WHERE caregiver_id=$1`, [caregiverId]),
       db.query(`SELECT first_name, last_name FROM users WHERE id=$1`, [caregiverId]),
     ]);
@@ -689,8 +689,8 @@ router.get('/caregiver-hours/:caregiverId', verifyToken, async (req, res) => {
     const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+6); weekEnd.setHours(23,59,59,999);
     const wsStr = weekStart.toISOString().split('T')[0]; const weStr = weekEnd.toISOString().split('T')[0];
     const [oneTime, recurring, avail] = await Promise.all([
-      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date>=$2 AND date<=$3`, [caregiverId, wsStr, weStr]),
-      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL`, [caregiverId]),
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date>=$2 AND date<=$3`, [caregiverId, wsStr, weStr]),
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL`, [caregiverId]),
       db.query(`SELECT max_hours_per_week FROM caregiver_availability WHERE caregiver_id=$1`, [caregiverId]),
     ]);
     const oneTimeHours = parseFloat(oneTime.rows[0]?.hours)||0;
@@ -712,10 +712,10 @@ router.get('/coverage-overview', verifyToken, requireAdmin, async (req, res) => 
 
     const [caregiversResult, clientsResult] = await Promise.all([
       db.query(`SELECT u.id, u.first_name, u.last_name, COALESCE(ca.max_hours_per_week,40) as max_hours, COALESCE(ca.status,'available') as availability_status,
-        (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600),0) FROM schedules s WHERE s.caregiver_id=u.id AND s.is_active=true AND ((s.date>=$1 AND s.date<=$2) OR s.day_of_week IS NOT NULL)) as scheduled_hours
+        (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END),0) FROM schedules s WHERE s.caregiver_id=u.id AND s.is_active=true AND ((s.date>=$1 AND s.date<=$2) OR s.day_of_week IS NOT NULL)) as scheduled_hours
         FROM users u LEFT JOIN caregiver_availability ca ON u.id=ca.caregiver_id WHERE u.role='caregiver' AND u.is_active=true ORDER BY u.first_name, u.last_name`, [wsStr, weStr]),
       db.query(`SELECT c.id, c.first_name, c.last_name, c.weekly_authorized_units,
-        (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600),0) FROM schedules s WHERE s.client_id=c.id AND s.is_active=true AND ((s.date>=$1 AND s.date<=$2) OR s.day_of_week IS NOT NULL)) as scheduled_hours
+        (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END),0) FROM schedules s WHERE s.client_id=c.id AND s.is_active=true AND ((s.date>=$1 AND s.date<=$2) OR s.day_of_week IS NOT NULL)) as scheduled_hours
         FROM clients c WHERE c.is_active=true ORDER BY c.first_name, c.last_name`, [wsStr, weStr]),
     ]);
 

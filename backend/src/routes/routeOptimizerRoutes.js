@@ -6,6 +6,7 @@ const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
+const { shiftHours } = require('../helpers/shiftHours');
 
 const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -639,12 +640,12 @@ router.get('/hours-summary', verifyToken, async (req, res) => {
         u.id, u.first_name, u.last_name, u.phone,
         COALESCE(ca.max_hours_per_week, 40) as max_hours_per_week,
         COALESCE((
-          SELECT SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600)
+          SELECT SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)
           FROM schedules s WHERE s.caregiver_id = u.id AND s.is_active = true
             AND (s.date >= $1 AND s.date <= $2)
         ), 0) as scheduled_hours,
         COALESCE((
-          SELECT SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 900)
+          SELECT SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 900 + CASE WHEN s.end_time::time < s.start_time::time THEN 96 ELSE 0 END)
           FROM schedules s WHERE s.caregiver_id = u.id AND s.is_active = true
             AND (s.date >= $1 AND s.date <= $2)
         ), 0) as scheduled_units,
@@ -757,7 +758,7 @@ router.get('/daily/:date', verifyToken, async (req, res) => {
           visits: []
         };
       }
-      const serviceMinutes = (new Date(`2000-01-01T${row.end_time}`) - new Date(`2000-01-01T${row.start_time}`)) / 60000;
+      const serviceMinutes = shiftHours(row.start_time, row.end_time) * 60;
       caregiverMap[row.caregiver_id].visits.push({
         scheduleId: row.id, clientId: row.client_id,
         clientName: `${row.cl_first} ${row.cl_last}`,
@@ -1040,7 +1041,7 @@ router.get('/load-schedule/:caregiverId/:date', verifyToken, async (req, res) =>
     `, [caregiverId, date, dayOfWeek]);
 
     const stops = result.rows.map(r => {
-      const serviceMinutes = (new Date(`2000-01-01T${r.end_time}`) - new Date(`2000-01-01T${r.start_time}`)) / 60000;
+      const serviceMinutes = shiftHours(r.start_time, r.end_time) * 60;
       return {
         clientId: r.client_id,
         clientName: `${r.first_name} ${r.last_name}`,

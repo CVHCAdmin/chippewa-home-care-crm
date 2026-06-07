@@ -125,7 +125,7 @@ router.get('/:id/summary', verifyToken, requireAdmin, async (req, res) => {
         WHERE te.caregiver_id = $1 ORDER BY te.start_time DESC LIMIT 10`, [caregiverId]),
       safeQuery(`SELECT s.id, s.caregiver_id, s.client_id, s.date, s.start_time, s.end_time, s.schedule_type, s.notes, s.frequency, s.day_of_week,
         c.first_name as client_first, c.last_name as client_last, c.address as client_address, c.city as client_city,
-        ROUND(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600.0::numeric, 2) as shift_hours
+        ROUND((EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time))/3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)::numeric, 2) as shift_hours
         FROM schedules s LEFT JOIN clients c ON s.client_id = c.id
         WHERE s.caregiver_id = $1 AND s.is_active = true
           AND (s.date >= CURRENT_DATE OR s.day_of_week IS NOT NULL)
@@ -136,7 +136,7 @@ router.get('/:id/summary', verifyToken, requireAdmin, async (req, res) => {
     const now = new Date();
     const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay()); weekStart.setHours(0,0,0,0);
     const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 6); weekEnd.setHours(23,59,59,999);
-    const scheduledWeekRes = await safeQuery(`SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600.0), 0) as scheduled_hours_week
+    const scheduledWeekRes = await safeQuery(`SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600.0 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END), 0) as scheduled_hours_week
       FROM schedules WHERE caregiver_id = $1 AND is_active = true AND ((date >= $2 AND date <= $3) OR day_of_week = $4)`,
       [caregiverId, weekStart.toISOString().split('T')[0], weekEnd.toISOString().split('T')[0], now.getDay()]);
     const earnings = earningsRes.rows[0] || {};

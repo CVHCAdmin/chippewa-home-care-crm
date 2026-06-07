@@ -187,7 +187,7 @@ router.post('/run', async (req, res) => {
       // Subtract hours already booked in existing recurring schedules
       let alreadyBooked = 0;
       existingSchedules.filter(s => s.caregiver_id === cg.id).forEach(s => {
-        alreadyBooked += timeToHours(s.end_time) - timeToHours(s.start_time);
+        alreadyBooked += shiftSpan(s.start_time, s.end_time);
       });
       cgRemainingHours[cg.id] = Math.max(0, parseFloat(cg.allocatedHours) - alreadyBooked);
     });
@@ -339,7 +339,7 @@ router.post('/run', async (req, res) => {
           .reduce((sum, p) => sum + p.hoursPerVisit, 0);
         const existingHours = existingSchedules
           .filter(s => s.caregiver_id === cg.id)
-          .reduce((sum, s) => sum + (timeToHours(s.end_time) - timeToHours(s.start_time)), 0);
+          .reduce((sum, s) => sum + shiftSpan(s.start_time, s.end_time), 0);
         return {
           id: cg.id,
           name,
@@ -434,6 +434,13 @@ function timeToHours(timeStr) {
   if (!timeStr) return 0;
   const [h, m] = timeStr.split(':').map(Number);
   return h + m / 60;
+}
+
+// Hours between two HH:MM times, wrapping past midnight (overnight shift).
+function shiftSpan(startT, endT) {
+  if (!startT || !endT) return 0;
+  const h = timeToHours(endT) - timeToHours(startT);
+  return h <= 0 ? h + 24 : h;
 }
 
 function addMinutes(timeStr, minutes) {

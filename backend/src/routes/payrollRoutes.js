@@ -21,7 +21,8 @@ const SCHEDULE_EXPANSION_CTE = `
       d.dt::date AS shift_date,
       COALESCE(se.override_start_time, s.start_time) AS scheduled_start,
       COALESCE(se.override_end_time, s.end_time) AS scheduled_end,
-      ROUND(EXTRACT(EPOCH FROM (COALESCE(se.override_end_time, s.end_time) - COALESCE(se.override_start_time, s.start_time))) / 60)::int AS scheduled_minutes
+      (ROUND(EXTRACT(EPOCH FROM (COALESCE(se.override_end_time, s.end_time) - COALESCE(se.override_start_time, s.start_time))) / 60)::int
+        + CASE WHEN COALESCE(se.override_end_time, s.end_time) < COALESCE(se.override_start_time, s.start_time) THEN 1440 ELSE 0 END) AS scheduled_minutes
     FROM schedules s
     CROSS JOIN generate_series($1::date, $2::date, '1 day'::interval) AS d(dt)
     LEFT JOIN schedule_exceptions se

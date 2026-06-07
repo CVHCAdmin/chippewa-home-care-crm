@@ -26,7 +26,7 @@ router.get('/roster', async (req, res) => {
         -- Sum of hours from existing recurring schedules this week
         COALESCE((
           SELECT ROUND(SUM(
-            EXTRACT(EPOCH FROM (end_time::time - start_time::time)) / 3600
+            EXTRACT(EPOCH FROM (end_time::time - start_time::time)) / 3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END
           )::numeric, 2)
           FROM schedules
           WHERE caregiver_id = u.id
@@ -185,7 +185,7 @@ router.post('/run', async (req, res) => {
     inputCaregivers.forEach(cg => {
       const existingHrs = existingSchedules
         .filter(s => s.caregiver_id === cg.id)
-        .reduce((sum, s) => sum + (toHours(normalizeTime(s.end_time)) - toHours(normalizeTime(s.start_time))), 0);
+        .reduce((sum, s) => sum + shiftSpan(s.start_time, s.end_time), 0);
       cgRemaining[cg.id] = Math.max(0, parseFloat(cg.targetHours) - existingHrs);
     });
 
@@ -332,7 +332,7 @@ router.post('/run', async (req, res) => {
       const info = cgMap[cg.id] || {};
       const existingHrs = existingSchedules
         .filter(s => s.caregiver_id === cg.id)
-        .reduce((sum, s) => sum + (toHours(normalizeTime(s.end_time)) - toHours(normalizeTime(s.start_time))), 0);
+        .reduce((sum, s) => sum + shiftSpan(s.start_time, s.end_time), 0);
       const proposedHrs = proposals
         .filter(p => p.caregiverId === cg.id)
         .reduce((sum, p) => sum + p.hoursPerVisit, 0);
@@ -430,6 +430,12 @@ function normalizeTime(t) {
   if (!t) return '08:00';
   // Strip seconds if present e.g. "08:00:00" → "08:00"
   return String(t).slice(0, 5);
+}
+
+// Hours between two HH:MM times, wrapping past midnight (overnight shift).
+function shiftSpan(startT, endT) {
+  const h = toHours(normalizeTime(endT)) - toHours(normalizeTime(startT));
+  return h <= 0 ? h + 24 : h;
 }
 
 function toHours(t) {
