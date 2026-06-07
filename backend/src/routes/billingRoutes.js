@@ -132,7 +132,19 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     }
   }
 
+  // is_training column was added in migration_v50. Pre-migration this column
+  // doesn't exist, so we guard the filter behind a one-time existence check.
+  const trainingColCheck = await db.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name='schedules' AND column_name='is_training' LIMIT 1`
+  );
+  const hasTrainingCol = trainingColCheck.rows.length > 0;
+  const trainingScheduleFilter = hasTrainingCol ? `AND s.is_training IS NOT TRUE` : ``;
+  const trainingEntryFilter    = hasTrainingCol ? `AND (s.is_training IS NOT TRUE OR s.id IS NULL)` : ``;
+  const trainingJoin           = hasTrainingCol ? `LEFT JOIN schedules s ON te.schedule_id = s.id` : ``;
+
   // ── Pull completed time entries for the period ───────────────────────────
+  // Exclude entries linked to a training schedule — those are the trainee's
+  // shadow time and shouldn't be billed (the trainer's entry covers billing).
   const entriesResult = await db.query(`
     SELECT
       te.id as time_entry_id,
@@ -146,14 +158,18 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       te.notes
     FROM time_entries te
     JOIN users u ON te.caregiver_id = u.id
+    ${trainingJoin}
     WHERE te.client_id = $1
       AND te.start_time >= $2
       AND te.start_time < ($3::date + INTERVAL '1 day')
       AND te.is_complete = true
+      ${trainingEntryFilter}
     ORDER BY te.start_time
   `, [clientId, billingPeriodStart, billingPeriodEnd]);
 
   // ── Pull schedules that could produce occurrences in the period ──────────
+  // is_training shifts are excluded — those are shadow shifts for training a
+  // new caregiver and don't bill the client (the primary caregiver bills).
   const schedulesResult = await db.query(`
     SELECT s.*,
       u.first_name as caregiver_first_name,
@@ -162,6 +178,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     JOIN users u ON s.caregiver_id = u.id
     WHERE s.client_id = $1
       AND (s.is_active = true OR s.is_active IS NULL)
+      ${trainingScheduleFilter}
       AND (
         (s.date IS NOT NULL AND s.date BETWEEN $2 AND $3)
         OR (s.day_of_week IS NOT NULL)

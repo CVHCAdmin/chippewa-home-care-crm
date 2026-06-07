@@ -73,6 +73,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     selectedDays:[],         // for recurring: which days of week [0-6]
     startDate:'',            // when recurring pattern begins
     endDate:'',              // optional: when recurring pattern ends
+    isTraining: false,       // training shadow shift — paid but not billed
   });
   const [splitError, setSplitError]     = useState('');
 
@@ -236,6 +237,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       selectedDays:[dayIndex],
       startDate: clickedDate,
       endDate:'',
+      isTraining: false,
     });
     setSplitError('');
   }
@@ -294,6 +296,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               frequency: newShiftForm.frequency,
               effectiveDate: newShiftForm.startDate || todayStr,
               anchorDate: newShiftForm.frequency === 'biweekly' ? anchorStr : null,
+              isTraining: newShiftForm.isTraining,
             };
             if (newShiftForm.isSplit) {
               payload.splitShift = { startTime: newShiftForm.split2Start, endTime: newShiftForm.split2End };
@@ -325,6 +328,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           startTime: newShiftForm.startTime,
           endTime: newShiftForm.endTime,
           notes: newShiftForm.notes,
+          isTraining: newShiftForm.isTraining,
         };
         if (newShiftForm.isSplit) {
           payload.splitShift = { startTime: newShiftForm.split2Start, endTime: newShiftForm.split2End };
@@ -415,6 +419,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       startTime: s.start_time ? s.start_time.slice(0,5) : '09:00',
       endTime:   s.end_time   ? s.end_time.slice(0,5)   : '13:00',
       notes:     s.notes || '',
+      isTraining: !!s.is_training,
     });
   }
 
@@ -500,6 +505,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             startTime:  editShiftForm.startTime,
             endTime:    editShiftForm.endTime,
             notes:      editShiftForm.notes,
+            isTraining: editShiftForm.isTraining,
             dayOfWeek:  editShift.day_of_week,
             date:       editShift.date ? editShift.date.slice(0,10) : null,
             frequency:  editShift.frequency || 'weekly',
@@ -719,6 +725,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           <div style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontWeight:700, display:'flex', alignItems:'center', gap:3 }}>
             {client ? `${client.first_name} ${client.last_name}` : 'Unknown'}
             {isSplit && <span style={{ fontSize:8, opacity:0.8, background:'rgba(255,255,255,0.25)', borderRadius:3, padding:'1px 3px' }}>Split {s.split_segment}/2</span>}
+            {s.is_training && <span title="Training shift — not billed to client" style={{ fontSize:8, background:'#F59E0B', color:'#fff', borderRadius:3, padding:'1px 4px', fontWeight:700, letterSpacing:0.5 }}>TRAIN</span>}
             {isModified && <span style={{ fontSize:8, background:'rgba(255,255,255,0.3)', borderRadius:3, padding:'1px 3px' }}>edited</span>}
           </div>
           <div style={{ opacity:0.9, fontSize:10 }}>
@@ -1142,6 +1149,14 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             <input type="text" value={newShiftForm.notes} onChange={e => setNewShiftForm(f => ({ ...f, notes:e.target.value }))} style={inputStyle} placeholder="Any notes..." />
           </Field>
 
+          <label style={{ display:'flex', alignItems:'flex-start', gap:8, marginTop:12, padding:'10px 12px', borderRadius:8, background: newShiftForm.isTraining ? '#FEF3C7' : '#F9FAFB', border:'1px solid', borderColor: newShiftForm.isTraining ? '#F59E0B' : '#E5E7EB', cursor:'pointer' }}>
+            <input type="checkbox" checked={newShiftForm.isTraining} onChange={e => setNewShiftForm(f => ({ ...f, isTraining: e.target.checked }))} style={{ marginTop:2 }} />
+            <div>
+              <div style={{ fontWeight:600, fontSize:13, color:'#92400E' }}>Training shift (don't bill client)</div>
+              <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Use this for a trainee shadowing another caregiver. The caregiver still gets paid through payroll; the client is not double-billed.</div>
+            </div>
+          </label>
+
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:16 }}>
             <button onClick={() => setNewShift(null)} style={cancelBtn}>Cancel</button>
             <button onClick={handleCreateShift} disabled={saving || (newShiftForm.isSplit && !!splitError)} style={{
@@ -1239,6 +1254,13 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             <Field label="Notes (optional)" style={{ marginTop:10 }}>
               <input type="text" value={editShiftForm.notes} onChange={e => setEditShiftForm(f => ({ ...f, notes: e.target.value }))} style={inputStyle} placeholder="Any notes..." />
             </Field>
+            <label style={{ display:'flex', alignItems:'flex-start', gap:8, marginTop:10, padding:'10px 12px', borderRadius:8, background: editShiftForm.isTraining ? '#FEF3C7' : '#F9FAFB', border:'1px solid', borderColor: editShiftForm.isTraining ? '#F59E0B' : '#E5E7EB', cursor:'pointer' }}>
+              <input type="checkbox" checked={!!editShiftForm.isTraining} onChange={e => setEditShiftForm(f => ({ ...f, isTraining: e.target.checked }))} style={{ marginTop:2 }} />
+              <div>
+                <div style={{ fontWeight:600, fontSize:13, color:'#92400E' }}>Training shift (don't bill client)</div>
+                <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Trainee shadow shift — paid through payroll, excluded from invoices.</div>
+              </div>
+            </label>
             <div style={{ display:'flex', justifyContent:'space-between', marginTop:16 }}>
               <button onClick={() => openDeleteConfirm(editShift, editDate)} disabled={saving} style={{ ...cancelBtn, color:'#EF4444', borderColor:'#FECACA' }}>
                 {saving ? '...' : 'Delete'}

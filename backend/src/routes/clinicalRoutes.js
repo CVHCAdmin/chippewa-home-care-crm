@@ -479,7 +479,7 @@ router.delete('/performance-reviews/:id', verifyToken, requireAdmin, async (req,
 
 router.post('/schedules-enhanced', verifyToken, async (req, res) => {
   try {
-    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate: rawEffectiveDate, anchorDate, splitShift } = req.body;
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate: rawEffectiveDate, anchorDate, splitShift, isTraining } = req.body;
     if (!caregiverId || !clientId || !startTime || !endTime) return res.status(400).json({ error: 'Missing required fields' });
 
     // Recurring patterns MUST have an effective_date >= today. Anything else
@@ -492,15 +492,19 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
       effectiveDate = (effectiveDate && effectiveDate >= today) ? effectiveDate : today;
     }
 
-    // Authorization enforcement
+    // Authorization enforcement — skip for training shifts (they don't bill,
+    // so they don't consume the client's authorization balance).
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
     let totalShiftHours = shiftHours(startTime, endTime);
     if (splitShift?.startTime && splitShift?.endTime) {
       totalShiftHours += shiftHours(splitShift.startTime, splitShift.endTime);
     }
-    const authCheck = await checkAuthorizationBalance(clientId, totalShiftHours);
-    if (!authCheck.allowed && req.query.force !== 'true') {
-      return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
+    let authCheck = { allowed: true, warnings: [] };
+    if (!isTraining) {
+      authCheck = await checkAuthorizationBalance(clientId, totalShiftHours);
+      if (!authCheck.allowed && req.query.force !== 'true') {
+        return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
+      }
     }
 
     // ── Split shift handling ──
@@ -532,11 +536,11 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
         if (conflicts2.rows.length > 0) return res.status(400).json({ error: 'Caregiver has a conflicting schedule during segment 2' });
       }
 
-      const insertSQL = `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date, is_split_shift, split_shift_group_id, split_segment)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14) RETURNING *`;
+      const insertSQL = `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date, is_split_shift, split_shift_group_id, split_segment, is_training)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14,$15) RETURNING *`;
 
-      const seg1 = await db.query(insertSQL, [id1, ...baseParams.slice(0,5), startTime, endTime, ...baseParams.slice(5), splitGroupId, 1]);
-      const seg2 = await db.query(insertSQL, [id2, ...baseParams.slice(0,5), splitShift.startTime, splitShift.endTime, ...baseParams.slice(5), splitGroupId, 2]);
+      const seg1 = await db.query(insertSQL, [id1, ...baseParams.slice(0,5), startTime, endTime, ...baseParams.slice(5), splitGroupId, 1, !!isTraining]);
+      const seg2 = await db.query(insertSQL, [id2, ...baseParams.slice(0,5), splitShift.startTime, splitShift.endTime, ...baseParams.slice(5), splitGroupId, 2, !!isTraining]);
 
       // TODO: EVV integration — split shifts may need separate EVV visit records
       return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]] });
@@ -545,9 +549,9 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
     // ── Standard single shift ──
     const id = uuidv4();
     const result = await db.query(
-      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [id, caregiverId, clientId, scheduleType||'recurring', dayOfWeek!=null?dayOfWeek:null, date||null, startTime, endTime, notes||null, frequency||'weekly', effectiveDate||null, anchorDate||null]
+      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date, is_training)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [id, caregiverId, clientId, scheduleType||'recurring', dayOfWeek!=null?dayOfWeek:null, date||null, startTime, endTime, notes||null, frequency||'weekly', effectiveDate||null, anchorDate||null, !!isTraining]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }

@@ -94,14 +94,18 @@ router.get('/:caregiverId', verifyToken, async (req, res) => {
 // POST /api/schedules - Create new schedule
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, effectiveDate } = req.body;
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, effectiveDate, isTraining } = req.body;
 
-    // Authorization enforcement
+    // Authorization enforcement — skip for training shifts (not billed, so
+    // they don't consume the client's authorization balance).
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
     const hours = shiftHours(startTime, endTime);
-    const authCheck = await checkAuthorizationBalance(clientId, hours);
-    if (!authCheck.allowed && req.query.force !== 'true') {
-      return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
+    let authCheck = { allowed: true, warnings: [] };
+    if (!isTraining) {
+      authCheck = await checkAuthorizationBalance(clientId, hours);
+      if (!authCheck.allowed && req.query.force !== 'true') {
+        return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
+      }
     }
 
     // Recurring schedules MUST have an effective_date — otherwise expansion
@@ -116,10 +120,10 @@ router.post('/', verifyToken, async (req, res) => {
 
     const scheduleId = uuidv4();
     const result = await db.query(
-      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, effective_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, effective_date, is_training)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [scheduleId, caregiverId, clientId, scheduleType, isRecurring ? dayOfWeek : null, date || null, startTime, endTime, notes || null, effDate]
+      [scheduleId, caregiverId, clientId, scheduleType, isRecurring ? dayOfWeek : null, date || null, startTime, endTime, notes || null, effDate, !!isTraining]
     );
 
     await auditLog(req.user.id, 'CREATE', 'schedules', scheduleId, null, result.rows[0]);

@@ -49,7 +49,7 @@ const SchedulingHub = ({ token }) => {
   const [formData, setFormData] = useState({
     caregiverId: '', clientId: '', scheduleType: 'one-time',
     dayOfWeek: '', date: new Date().toISOString().split('T')[0],
-    startTime: '09:00', endTime: '13:00', notes: '', endDate: ''
+    startTime: '09:00', endTime: '13:00', notes: '', endDate: '', isTraining: false
   });
   const [selectedDays, setSelectedDays]             = useState([]);
   const [conflicts, setConflicts]                   = useState([]);
@@ -454,7 +454,8 @@ const SchedulingHub = ({ token }) => {
             await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
               caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'recurring',
               dayOfWeek, date: null, startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes,
-              frequency: freq, effectiveDate: formData.date || today, anchorDate: anchorStr
+              frequency: freq, effectiveDate: formData.date || today, anchorDate: anchorStr,
+              isTraining: formData.isTraining
             })});
             created++;
           } catch { failed++; }
@@ -464,17 +465,19 @@ const SchedulingHub = ({ token }) => {
         await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
           caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'recurring',
           dayOfWeek: parseInt(formData.dayOfWeek), date: null, startTime: formData.startTime, endTime: formData.endTime,
-          notes: formData.notes, frequency: 'weekly', effectiveDate: formData.date || today, anchorDate: null
+          notes: formData.notes, frequency: 'weekly', effectiveDate: formData.date || today, anchorDate: null,
+          isTraining: formData.isTraining
         })});
         showMsg('Schedule created!');
       } else {
         await api('/api/schedules', { method: 'POST', body: JSON.stringify({
           caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'one-time',
-          dayOfWeek: null, date: formData.date, startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes
+          dayOfWeek: null, date: formData.date, startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes,
+          isTraining: formData.isTraining
         })});
         showMsg('Schedule created!');
       }
-      setFormData(prev => ({ ...prev, clientId: '', scheduleType: 'one-time', dayOfWeek: '', date: new Date().toISOString().split('T')[0], startTime: '09:00', endTime: '13:00', notes: '', endDate: '' }));
+      setFormData(prev => ({ ...prev, clientId: '', scheduleType: 'one-time', dayOfWeek: '', date: new Date().toISOString().split('T')[0], startTime: '09:00', endTime: '13:00', notes: '', endDate: '', isTraining: false }));
       setSelectedDays([]);
       loadCaregiverSchedules(selectedCaregiverId);
       if (scheduleView === 'week') loadWeekView();
@@ -1596,6 +1599,13 @@ const SchedulingHub = ({ token }) => {
                   <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Notes</label>
                   <textarea value={formData.notes} onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))} placeholder='Special instructions...' rows={2} style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem', resize: 'vertical' }} />
                 </div>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '1.25rem', padding: '0.75rem', borderRadius: '8px', background: formData.isTraining ? '#FEF3C7' : '#F9FAFB', border: '1px solid', borderColor: formData.isTraining ? '#F59E0B' : '#E5E7EB', cursor: 'pointer' }}>
+                  <input type='checkbox' checked={!!formData.isTraining} onChange={(e) => setFormData(prev => ({ ...prev, isTraining: e.target.checked }))} style={{ marginTop: 3 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#92400E' }}>Training shift (don't bill client)</div>
+                    <div style={{ fontSize: '0.78rem', color: '#6B7280', marginTop: 2 }}>Use this for a trainee shadowing another caregiver. The caregiver still gets paid; the client is not double-billed.</div>
+                  </div>
+                </label>
                 <button type='submit' className='btn btn-primary' disabled={saving || ((formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') && selectedDays.length === 0)} style={{ width: '100%', padding: '0.85rem', fontSize: '1rem' }}>
                   {saving ? 'Saving...' : formData.scheduleType === 'multi-day' ? `✓ Create ${selectedDays.length} Weekly Schedule${selectedDays.length !== 1 ? 's' : ''}` : formData.scheduleType === 'bi-weekly' ? `✓ Create ${selectedDays.length} Bi-Weekly Schedule${selectedDays.length !== 1 ? 's' : ''}` : '✓ Create Schedule'}
                 </button>

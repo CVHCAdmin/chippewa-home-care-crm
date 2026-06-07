@@ -237,12 +237,20 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
     );
     const hasEndDate = endDateCheck.rows.length > 0;
 
+    // Check if is_training column exists (added by migration_v50)
+    const trainingCheck = await db.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'schedules' AND column_name = 'is_training'`
+    );
+    const hasTraining = trainingCheck.rows.length > 0;
+
     const result = await db.query(
       `SELECT s.id, s.caregiver_id, s.client_id, s.schedule_type,
               s.day_of_week, s.date, s.start_time, s.end_time,
               s.notes, s.is_active, s.status, s.created_at, s.updated_at,
               s.frequency, s.effective_date, s.anchor_date,
               ${hasEndDate ? `s.end_date,` : `NULL::date AS end_date,`}
+              ${hasTraining ? `s.is_training,` : `false AS is_training,`}
               ${hasSplitCols
                 ? `s.is_split_shift, s.split_shift_group_id, s.split_segment,`
                 : `false AS is_split_shift, NULL::uuid AS split_shift_group_id, NULL::int AS split_segment,`}
@@ -296,30 +304,48 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
 app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
   try {
     const { scheduleId } = req.params;
-    const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, endDate } = req.body;
+    const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, endDate, isTraining } = req.body;
     const normalize = t => String(t).split(':').map(n => n.padStart(2, '0')).join(':');
     if (startTime && endTime && normalize(startTime) === normalize(endTime)) return res.status(400).json({ error: 'Start and end time cannot be the same' });
 
-    // Check if end_date column exists
+    // Check optional columns exist
     const colCheck = await db.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'schedules' AND column_name = 'end_date'`
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'schedules' AND column_name IN ('end_date','is_training')`
     );
-    const hasEndDate = colCheck.rows.length > 0;
+    const cols = new Set(colCheck.rows.map(r => r.column_name));
+    const hasEndDate = cols.has('end_date');
+    const hasTraining = cols.has('is_training');
+
+    // Build column list dynamically — only update is_training if the client sent it
+    const setClauses = [
+      'client_id=COALESCE($1,client_id)',
+      'day_of_week=$2',
+      'date=$3',
+      'start_time=COALESCE($4,start_time)',
+      'end_time=COALESCE($5,end_time)',
+      'notes=$6',
+      'frequency=COALESCE($7,frequency)',
+      'effective_date=COALESCE($8,effective_date)',
+      'anchor_date=COALESCE($9,anchor_date)',
+    ];
+    const params = [
+      clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
+      notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId,
+    ];
+    if (hasEndDate) {
+      params.push(endDate || null);
+      setClauses.push(`end_date=$${params.length}`);
+    }
+    if (hasTraining && isTraining !== undefined) {
+      params.push(!!isTraining);
+      setClauses.push(`is_training=$${params.length}`);
+    }
+    setClauses.push('updated_at=NOW()');
 
     const result = await db.query(
-      `UPDATE schedules SET client_id=COALESCE($1,client_id), day_of_week=$2, date=$3,
-        start_time=COALESCE($4,start_time), end_time=COALESCE($5,end_time), notes=$6,
-        frequency=COALESCE($7,frequency), effective_date=COALESCE($8,effective_date),
-        anchor_date=COALESCE($9,anchor_date),
-        ${hasEndDate ? 'end_date=$11,' : ''}
-        updated_at=NOW()
+      `UPDATE schedules SET ${setClauses.join(', ')}
        WHERE id=$10 AND is_active=true RETURNING *`,
-      hasEndDate
-        ? [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
-           notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId,
-           endDate || null]
-        : [clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
-           notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId]
+      params
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
     res.json(result.rows[0]);
