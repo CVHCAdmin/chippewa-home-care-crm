@@ -7,7 +7,7 @@ const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
 const { requireAdmin } = require('../middleware/shared');
-const { sendInvoiceEmail, isConfigured: emailConfigured } = require('../services/emailService');
+const { sendInvoiceEmail, sendInvoiceReminder, isConfigured: emailConfigured } = require('../services/emailService');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -370,11 +370,11 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
 }
 
 /**
- * Insert line items into database
+ * Insert line items into database. Pass a pooled client to run inside a transaction.
  */
-async function insertLineItems(invoiceId, lineItems) {
+async function insertLineItems(invoiceId, lineItems, dbClient = db) {
   for (const item of lineItems) {
-    await db.query(`
+    await dbClient.query(`
       INSERT INTO invoice_line_items (
         invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount, service_date
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -516,7 +516,7 @@ router.post('/invoices/preview', auth, async (req, res) => {
   }
 });
 
-// Generate single invoice
+// Generate single invoice — atomic: invoice + line items succeed or fail together
 router.post('/invoices/generate-with-rates', auth, async (req, res) => {
   const { clientId, billingPeriodStart, billingPeriodEnd, notes } = req.body;
 
@@ -524,8 +524,9 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
     return res.status(400).json({ error: 'Client and billing period are required' });
   }
 
+  const dbClient = await db.pool.connect();
   try {
-    const clientResult = await db.query(`
+    const clientResult = await dbClient.query(`
       SELECT id, first_name, last_name, referral_source_id, care_type_id,
              is_private_pay, private_pay_rate, private_pay_rate_type
       FROM clients WHERE id = $1
@@ -537,24 +538,24 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
 
     const client = clientResult.rows[0];
 
-    const existingResult = await db.query(`
-      SELECT id, invoice_number FROM invoices 
-      WHERE client_id = $1 
-        AND billing_period_start = $2 
+    const existingResult = await dbClient.query(`
+      SELECT id, invoice_number FROM invoices
+      WHERE client_id = $1
+        AND billing_period_start = $2
         AND billing_period_end = $3
     `, [clientId, billingPeriodStart, billingPeriodEnd]);
 
     if (existingResult.rows.length > 0) {
-      return res.status(400).json({ 
-        error: `Invoice ${existingResult.rows[0].invoice_number} already exists for this period` 
+      return res.status(400).json({
+        error: `Invoice ${existingResult.rows[0].invoice_number} already exists for this period`
       });
     }
 
     const { lineItems, total } = await generateLineItems(
-      clientId, 
+      clientId,
       client.referral_source_id,
       client.care_type_id,
-      billingPeriodStart, 
+      billingPeriodStart,
       billingPeriodEnd
     );
 
@@ -568,8 +569,10 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
     dueDate.setDate(dueDate.getDate() + 30);
 
     const invoiceNumber = generateInvoiceNumber(clientId);
-    
-    const invoiceResult = await db.query(`
+
+    await dbClient.query('BEGIN');
+
+    const invoiceResult = await dbClient.query(`
       INSERT INTO invoices (
         client_id, invoice_number, billing_period_start, billing_period_end,
         subtotal, total, payment_status, payment_due_date, notes,
@@ -584,11 +587,13 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
     ]);
 
     const invoice = invoiceResult.rows[0];
-    await insertLineItems(invoice.id, lineItems);
+    await insertLineItems(invoice.id, lineItems, dbClient);
+
+    await dbClient.query('COMMIT');
 
     let referralSourceName = null;
     if (client.referral_source_id) {
-      const rsResult = await db.query(
+      const rsResult = await dbClient.query(
         'SELECT name FROM referral_sources WHERE id = $1',
         [client.referral_source_id]
       );
@@ -605,8 +610,11 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
     });
 
   } catch (error) {
+    try { await dbClient.query('ROLLBACK'); } catch {}
     console.error('Error generating invoice:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    dbClient.release();
   }
 });
 
@@ -622,9 +630,10 @@ router.post('/invoices/manual', auth, async (req, res) => {
     return res.status(400).json({ error: 'At least one line item is required' });
   }
 
+  const dbClient = await db.pool.connect();
   try {
     // Get client info
-    const clientResult = await db.query(`
+    const clientResult = await dbClient.query(`
       SELECT id, first_name, last_name, referral_source_id, care_type_id, is_private_pay,
              private_pay_rate
       FROM clients WHERE id = $1
@@ -644,7 +653,7 @@ router.post('/invoices/manual', auth, async (req, res) => {
     if (!acknowledgeRateWarning) {
       let expectedRate = null;
       if (client.referral_source_id) {
-        const r = await db.query(
+        const r = await dbClient.query(
           `SELECT rate_amount FROM referral_source_rates
              WHERE referral_source_id = $1
                AND (care_type_id = $2 OR care_type_id IS NULL)
@@ -678,16 +687,16 @@ router.post('/invoices/manual', auth, async (req, res) => {
     }
 
     // Check for existing invoice
-    const existingResult = await db.query(`
-      SELECT id, invoice_number FROM invoices 
-      WHERE client_id = $1 
-        AND billing_period_start = $2 
+    const existingResult = await dbClient.query(`
+      SELECT id, invoice_number FROM invoices
+      WHERE client_id = $1
+        AND billing_period_start = $2
         AND billing_period_end = $3
     `, [clientId, billingPeriodStart, billingPeriodEnd]);
 
     if (existingResult.rows.length > 0) {
-      return res.status(400).json({ 
-        error: `Invoice ${existingResult.rows[0].invoice_number} already exists for this period` 
+      return res.status(400).json({
+        error: `Invoice ${existingResult.rows[0].invoice_number} already exists for this period`
       });
     }
 
@@ -707,8 +716,10 @@ router.post('/invoices/manual', auth, async (req, res) => {
     const dueDate = new Date(billingPeriodEnd);
     dueDate.setDate(dueDate.getDate() + 30);
 
-    // Create invoice
-    const invoiceResult = await db.query(`
+    // Atomic insert: invoice + all line items, or nothing
+    await dbClient.query('BEGIN');
+
+    const invoiceResult = await dbClient.query(`
       INSERT INTO invoices (
         client_id, invoice_number, billing_period_start, billing_period_end,
         subtotal, total, payment_status, payment_due_date, notes,
@@ -728,7 +739,7 @@ router.post('/invoices/manual', auth, async (req, res) => {
     const insertedLineItems = [];
     for (const item of lineItems) {
       const amount = parseFloat(item.hours || 0) * parseFloat(item.rate || 0);
-      
+
       // Build description with time info if provided. Convert the 24h
       // "HH:MM" dropdown values into 12h AM/PM so the printed invoice
       // shows "1:30 PM" instead of "13:30".
@@ -743,8 +754,8 @@ router.post('/invoices/manual', auth, async (req, res) => {
       if (detailedMode && item.startTime && item.endTime) {
         description = `${description} (${to12h(item.startTime)} - ${to12h(item.endTime)})`;
       }
-      
-      await db.query(`
+
+      await dbClient.query(`
         INSERT INTO invoice_line_items (
           invoice_id, caregiver_id, description, hours, rate, amount, service_date
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -770,10 +781,12 @@ router.post('/invoices/manual', auth, async (req, res) => {
       });
     }
 
+    await dbClient.query('COMMIT');
+
     // Get referral source name
     let referralSourceName = null;
     if (client.referral_source_id) {
-      const rsResult = await db.query(
+      const rsResult = await dbClient.query(
         'SELECT name FROM referral_sources WHERE id = $1',
         [client.referral_source_id]
       );
@@ -790,8 +803,11 @@ router.post('/invoices/manual', auth, async (req, res) => {
     });
 
   } catch (error) {
+    try { await dbClient.query('ROLLBACK'); } catch {}
     console.error('Error creating manual invoice:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    dbClient.release();
   }
 });
 
@@ -840,9 +856,9 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
 
     for (const client of clientsResult.rows) {
       const existingResult = await db.query(`
-        SELECT id, invoice_number FROM invoices 
-        WHERE client_id = $1 
-          AND billing_period_start = $2 
+        SELECT id, invoice_number FROM invoices
+        WHERE client_id = $1
+          AND billing_period_start = $2
           AND billing_period_end = $3
       `, [client.id, billingPeriodStart, billingPeriodEnd]);
 
@@ -877,35 +893,49 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
 
       const invoiceNumber = generateInvoiceNumber(client.id);
 
-      const invoiceResult = await db.query(`
-        INSERT INTO invoices (
-          client_id, invoice_number, billing_period_start, billing_period_end,
-          subtotal, total, payment_status, payment_due_date,
-          referral_source_id, invoice_type
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
-        RETURNING *
-      `, [
-        client.id, invoiceNumber, billingPeriodStart, billingPeriodEnd,
-        total, total, dueDate,
-        client.referral_source_id,
-        client.is_private_pay ? 'private_pay' : 'insurance'
-      ]);
+      // Per-client transaction: if line-item insert fails, this one rolls back
+      // and we skip it without aborting the whole batch.
+      const dbClient = await db.pool.connect();
+      try {
+        await dbClient.query('BEGIN');
+        const invoiceResult = await dbClient.query(`
+          INSERT INTO invoices (
+            client_id, invoice_number, billing_period_start, billing_period_end,
+            subtotal, total, payment_status, payment_due_date,
+            referral_source_id, invoice_type
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
+          RETURNING *
+        `, [
+          client.id, invoiceNumber, billingPeriodStart, billingPeriodEnd,
+          total, total, dueDate,
+          client.referral_source_id,
+          client.is_private_pay ? 'private_pay' : 'insurance'
+        ]);
 
-      const invoice = invoiceResult.rows[0];
-      await insertLineItems(invoice.id, lineItems);
+        const invoice = invoiceResult.rows[0];
+        await insertLineItems(invoice.id, lineItems, dbClient);
+        await dbClient.query('COMMIT');
 
-      const hours = lineItems.reduce((sum, item) => sum + parseFloat(item.hours), 0);
-
-      generatedCount++;
-      totalAmount += total;
-      totalHours += hours;
-
-      generatedInvoices.push({
-        invoiceNumber,
-        clientName: `${client.first_name} ${client.last_name}`,
-        total,
-        hours
-      });
+        const hours = lineItems.reduce((sum, item) => sum + parseFloat(item.hours), 0);
+        generatedCount++;
+        totalAmount += total;
+        totalHours += hours;
+        generatedInvoices.push({
+          invoiceNumber,
+          clientName: `${client.first_name} ${client.last_name}`,
+          total,
+          hours
+        });
+      } catch (perClientErr) {
+        try { await dbClient.query('ROLLBACK'); } catch {}
+        skippedCount++;
+        skippedClients.push({
+          name: `${client.first_name} ${client.last_name}`,
+          reason: `Failed: ${perClientErr.message}`
+        });
+      } finally {
+        dbClient.release();
+      }
     }
 
     res.json({
@@ -1058,6 +1088,74 @@ router.post('/invoices/:id/send-email', auth, async (req, res) => {
     res.json({ success: true, sentTo: recipientEmail });
   } catch (error) {
     console.error('Error sending invoice email:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/billing/invoices/:id/send-reminder
+// Sends a "your payment is due/overdue" email to the client. Refuses on paid
+// invoices so reminders can't go out for already-settled bills.
+router.post('/invoices/:id/send-reminder', auth, async (req, res) => {
+  try {
+    const invoiceResult = await db.query(`
+      SELECT i.*, c.first_name, c.last_name, c.email as client_email
+      FROM invoices i
+      JOIN clients c ON i.client_id = c.id
+      WHERE i.id = $1
+    `, [req.params.id]);
+
+    if (invoiceResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const invoice = invoiceResult.rows[0];
+    if (invoice.payment_status === 'paid') {
+      return res.status(400).json({ error: 'This invoice is already paid — no reminder needed.' });
+    }
+
+    const recipientEmail = req.body.email || invoice.client_email;
+    if (!recipientEmail) {
+      return res.status(400).json({ error: 'No email address found for this client. Please provide an email.' });
+    }
+
+    if (!emailConfigured) {
+      return res.status(503).json({ error: 'Email service not configured. Set AWS SES credentials in environment.' });
+    }
+
+    const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0) - parseFloat(invoice.amount_adjusted || 0);
+    if (amountDue <= 0) {
+      return res.status(400).json({ error: 'No balance due on this invoice.' });
+    }
+
+    const dueDate = invoice.payment_due_date;
+    const daysOverdue = Math.floor((Date.now() - new Date(dueDate).getTime()) / (1000 * 60 * 60 * 24));
+
+    try {
+      await sendInvoiceReminder({
+        to: recipientEmail,
+        clientName: `${invoice.first_name} ${invoice.last_name}`,
+        invoiceNumber: invoice.invoice_number,
+        invoiceId: invoice.id,
+        amountDue,
+        dueDate,
+        daysOverdue,
+      });
+    } catch (sendErr) {
+      return res.status(502).json({ error: `Email send failed: ${sendErr.message}` });
+    }
+
+    // Append to notes so the timeline is visible in the invoice view.
+    const stamp = new Date().toLocaleDateString();
+    const label = daysOverdue > 0 ? `${daysOverdue}d overdue` : 'pre-due';
+    await db.query(`
+      UPDATE invoices
+      SET notes = COALESCE(notes, '') || $1, updated_at = NOW()
+      WHERE id = $2
+    `, [`\nReminder sent to ${recipientEmail} on ${stamp} (${label})`, req.params.id]);
+
+    res.json({ success: true, sentTo: recipientEmail, daysOverdue });
+  } catch (error) {
+    console.error('Error sending invoice reminder:', error);
     res.status(500).json({ error: error.message });
   }
 });

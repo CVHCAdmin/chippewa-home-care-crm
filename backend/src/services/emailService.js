@@ -327,6 +327,55 @@ const sendInvoiceEmail = async ({ to, clientName, invoiceNumber, invoiceId, tota
   }, { throwOnError: true });
 };
 
+// ── Invoice Payment Reminder ─────────────────────────────────
+// For nudging unpaid invoices. Same Pay Now button as the first send, but the
+// subject and copy make it clear this is a reminder. daysOverdue is positive
+// when past due, negative when still in the upcoming-due window.
+const sendInvoiceReminder = async ({ to, clientName, invoiceNumber, invoiceId, amountDue, dueDate, daysOverdue }) => {
+  const payUrl = `${FRONTEND_URL}/pay/${invoiceId}`;
+  const dueDateStr = new Date(dueDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const dueStr = Number(parseFloat(amountDue)).toFixed(2);
+
+  const overdueDays = Math.round(daysOverdue || 0);
+  const isOverdue = overdueDays > 0;
+  const headline = isOverdue
+    ? `Your payment is ${overdueDays} day${overdueDays === 1 ? '' : 's'} past due`
+    : `Friendly reminder: your invoice is due soon`;
+  const subject = isOverdue
+    ? `Payment Reminder — Invoice #${invoiceNumber} ($${dueStr} past due)`
+    : `Payment Reminder — Invoice #${invoiceNumber} ($${dueStr} due ${dueDateStr})`;
+  const bannerColor = isOverdue ? '#B91C1C' : '#B45309';
+
+  return sendEmail({
+    to,
+    subject,
+    html: wrap(`
+      <p style="color: #333; font-size: 1rem;">Hello ${clientName},</p>
+
+      <div style="background: #FEF2F2; border-left: 4px solid ${bannerColor}; padding: 14px 18px; margin: 16px 0; border-radius: 6px;">
+        <p style="margin: 0; color: ${bannerColor}; font-weight: 700; font-size: 1rem;">${headline}</p>
+      </div>
+
+      <p style="color: #555; font-size: 0.95rem;">
+        This is a reminder that invoice <strong>#${invoiceNumber}</strong> for
+        <strong>$${dueStr}</strong> is ${isOverdue ? 'past due' : `due on ${dueDateStr}`}.
+      </p>
+
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${payUrl}" style="background: #27ae60; color: #fff; padding: 14px 40px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 1.1rem; display: inline-block;">
+          Pay Now — $${dueStr}
+        </a>
+      </div>
+
+      <p style="color: #555; font-size: 0.9rem; margin-top: 24px;">
+        If you've already paid, thank you — please disregard this notice. Otherwise,
+        contact us at <strong>support@chippewavalleyhomecare.com</strong> or call our
+        office if you have any questions or need to set up a payment plan.
+      </p>
+    `),
+  }, { throwOnError: true });
+};
+
 // ── Caregiver Welcome ─────────────────────────────────────────
 const sendCaregiverWelcome = async ({ to, firstName, tempPassword }) => {
   const loginUrl = 'https://app.chippewavalleyhomecare.com';
@@ -447,6 +496,7 @@ module.exports = {
   sendFamilyPasswordReset,
   sendPasswordReset,
   sendInvoiceEmail,
+  sendInvoiceReminder,
   sendCaregiverWelcome,
   sendOnboardingPacketInvite,
   sendAdminBgcResult,

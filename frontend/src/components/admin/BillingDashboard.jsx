@@ -526,6 +526,38 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     }
   };
 
+  const handleSendInvoiceReminder = async (invoice) => {
+    if (!invoice?.id) return;
+    if (invoice.payment_status === 'paid') {
+      toast('Invoice is already paid — no reminder needed.', 'info');
+      return;
+    }
+    const clientEmail = invoice.email || invoice.client_email;
+    const emailTo = clientEmail || prompt('No email on file. Enter email address:');
+    if (!emailTo) return;
+
+    const ok = await confirm(`Send a payment reminder for invoice #${invoice.invoice_number} to ${emailTo}?`);
+    if (!ok) return;
+
+    setSendingInvoiceEmail(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoice.id}/send-reminder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ email: emailTo })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to send reminder');
+      const overdueLabel = data.daysOverdue > 0 ? ` (${data.daysOverdue}d overdue)` : '';
+      toast(`Reminder sent to ${data.sentTo}${overdueLabel}`, 'success');
+      loadData();
+    } catch (error) {
+      toast('Failed to send reminder: ' + error.message, 'error');
+    } finally {
+      setSendingInvoiceEmail(false);
+    }
+  };
+
   const handleRecordPayment = async (e) => {
     e.preventDefault();
     try {
@@ -1877,6 +1909,11 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               <button className="btn btn-info" onClick={() => handleSendInvoiceEmail(selectedInvoice)} disabled={sendingInvoiceEmail}>
                 {sendingInvoiceEmail ? '📧 Sending...' : '📧 Send Invoice'}
               </button>
+              {selectedInvoice.payment_status !== 'paid' && (
+                <button className="btn btn-warning" onClick={() => handleSendInvoiceReminder(selectedInvoice)} disabled={sendingInvoiceEmail}>
+                  {sendingInvoiceEmail ? '⏰ Sending...' : '⏰ Send Reminder'}
+                </button>
+              )}
               <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Print Invoice</button>
               <button className="btn btn-secondary" onClick={() => setShowInvoiceModal(false)}>Close</button>
             </div>
