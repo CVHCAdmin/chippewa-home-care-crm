@@ -1463,7 +1463,7 @@ const SchedulingHub = ({ token }) => {
                 {formData.scheduleType === 'one-time' && (
                   <div style={{ marginBottom: '1rem' }}>
                     <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Date *</label>
-                    <input type='date' value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))} min={new Date().toISOString().split('T')[0]} required style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }} />
+                    <input type='date' value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))} required style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }} />
                   </div>
                 )}
 
