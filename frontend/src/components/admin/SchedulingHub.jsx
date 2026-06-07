@@ -177,7 +177,8 @@ const SchedulingHub = ({ token }) => {
   // Scheduling warnings: auth balance, OT, travel time
   useEffect(() => {
     if (!formData.clientId || !showForm) { setAuthBalance(null); return; }
-    const hours = (new Date(`2000-01-01T${formData.endTime}`) - new Date(`2000-01-01T${formData.startTime}`)) / (1000*60*60);
+    const rawHours = (new Date(`2000-01-01T${formData.endTime}`) - new Date(`2000-01-01T${formData.startTime}`)) / (1000*60*60);
+    const hours = rawHours <= 0 ? rawHours + 24 : rawHours;
     if (hours <= 0) return;
     fetch(`${API_BASE_URL}/api/authorizations/check/${formData.clientId}?hours=${hours}`, {
       headers: { 'Authorization': `Bearer ${token}` }

@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
+const { shiftHours } = require('../helpers/shiftHours');
 
 // Auth middleware (same as in server.js)
 const jwt = require('jsonwebtoken');
@@ -97,8 +98,8 @@ router.post('/', verifyToken, async (req, res) => {
 
     // Authorization enforcement
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
-    const shiftHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
-    const authCheck = await checkAuthorizationBalance(clientId, shiftHours);
+    const hours = shiftHours(startTime, endTime);
+    const authCheck = await checkAuthorizationBalance(clientId, hours);
     if (!authCheck.allowed && req.query.force !== 'true') {
       return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
     }

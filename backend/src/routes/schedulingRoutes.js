@@ -5,6 +5,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin } = require('../middleware/shared');
+const { shiftHours: hoursOf } = require('../helpers/shiftHours');
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -170,8 +171,7 @@ router.get('/suggest-caregivers', verifyToken, async (req, res) => {
 
     const clientData = client.rows[0];
     const requiredCerts = clientData.required_certifications || [];
-    const shiftHours = startTime && endTime
-      ? (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60) : 4;
+    const shiftHours = startTime && endTime ? hoursOf(startTime, endTime) : 4;
 
     // Day-of-week + time-of-day availability check uses caregiver_availability
     // {monday|...|sunday}_{available|start_time|end_time}
@@ -387,7 +387,7 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
     let filled = 0, failed = 0;
 
     for (const shift of openShifts.rows) {
-      const shiftHours = (new Date(`2000-01-01T${shift.end_time}`) - new Date(`2000-01-01T${shift.start_time}`)) / (1000*60*60);
+      const shiftHours = hoursOf(shift.start_time, shift.end_time);
       const requiredCerts = shift.required_certifications || [];
       const clientHistory = historyMap[shift.client_id] || {};
       // Conflict check must include recurring patterns that fall on this
@@ -415,7 +415,7 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
         const weeklyHours = hoursMap[cg.id] || 0;
         const maxHours = cg.max_hours_per_week || 40;
         const visitCount = clientHistory[cg.id] || 0;
-        const additionalHours = newAssignments.filter(a => a.caregiverId===cg.id).reduce((s,a) => s + (new Date(`2000-01-01T${a.endTime}`) - new Date(`2000-01-01T${a.startTime}`))/(1000*60*60), 0);
+        const additionalHours = newAssignments.filter(a => a.caregiverId===cg.id).reduce((s,a) => s + hoursOf(a.startTime, a.endTime), 0);
         const projectedHours = weeklyHours + additionalHours;
         const hasConflict = conflictingIds.includes(cg.id) || newAssignments.some(a => a.caregiverId===cg.id && a.date===shift.shift_date && timesOverlap(a.startTime, a.endTime, shift.start_time, shift.end_time));
         const wouldExceedHours = (projectedHours + shiftHours) > maxHours;
@@ -493,7 +493,7 @@ router.post('/check-weekly-hours', verifyToken, async (req, res) => {
     ]);
 
     const currentHours = (parseFloat(oneTime.rows[0]?.hours) || 0) + (parseFloat(recurring.rows[0]?.hours) || 0);
-    const proposedHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
+    const proposedHours = hoursOf(startTime, endTime);
     const projectedHours = currentHours + proposedHours;
     const maxHours = avail.rows[0]?.max_hours_per_week || 40;
     const overtimeHours = Math.max(0, projectedHours - 40);
@@ -654,9 +654,7 @@ router.post('/bulk-create', verifyToken, requireAdmin, async (req, res) => {
 
     // Authorization check for total weekly hours
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
-    const weeklyHours = template.reduce((sum, slot) => {
-      return sum + (new Date(`2000-01-01T${slot.endTime}`) - new Date(`2000-01-01T${slot.startTime}`)) / (1000*60*60);
-    }, 0);
+    const weeklyHours = template.reduce((sum, slot) => sum + hoursOf(slot.startTime, slot.endTime), 0);
     const authCheck = await checkAuthorizationBalance(clientId, weeklyHours);
     if (!authCheck.allowed && req.query.force !== 'true') {
       return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });

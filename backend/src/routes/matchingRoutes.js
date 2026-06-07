@@ -6,6 +6,7 @@ const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('../middleware/auth');
+const { shiftHours } = require('../helpers/shiftHours');
 
 // ════════════════════════════════════════════════════════════
 // SERVICE CAPABILITIES (Master list)
@@ -534,8 +535,7 @@ router.post('/optimize', auth, async (req, res) => {
     if (mode === 'optimize_existing') {
       existingRes.rows.forEach(s => {
         if (s.start_time && s.end_time) {
-          const mins = (new Date(`2000-01-01T${s.end_time}`) - new Date(`2000-01-01T${s.start_time}`)) / 60000;
-          const hrs = mins / 60;
+          const hrs = shiftHours(s.start_time, s.end_time);
           const dateStr = s.date?.toISOString?.()?.split('T')[0] || s.date;
           const dayKey = `${s.caregiver_id}-${dateStr}`;
           cgDayHours[dayKey] = (cgDayHours[dayKey] || 0) + hrs;

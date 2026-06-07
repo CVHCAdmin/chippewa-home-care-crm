@@ -20,6 +20,14 @@ function timeToMinutes(t) {
   return h * 60 + m;
 }
 
+// Hours between two HH:MM times, wrapping past midnight (e.g. 13:00→12:00 = 23h).
+function shiftHours(start, end) {
+  if (!start || !end) return 0;
+  let mins = timeToMinutes(end) - timeToMinutes(start);
+  if (mins <= 0) mins += 24 * 60;
+  return mins / 60;
+}
+
 function formatTime(t) {
   if (!t) return '';
   const [h, m] = t.split(':').map(Number);
@@ -203,7 +211,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     let total = 0;
     for (let d = 0; d < 7; d++) {
       getShiftsForCell(caregiverId, d).forEach(s => {
-        total += (timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60;
+        total += shiftHours(s.start_time, s.end_time);
       });
     }
     return total;
@@ -677,7 +685,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   function renderShiftBlock(s, dayIndex, cellShifts) {
     const client = clientMap[s.client_id];
     const color  = clientColor(s.client_id, clientMap);
-    const durH   = Number(parseFloat((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60 || 0)).toFixed(2);
+    const durH   = shiftHours(s.start_time, s.end_time).toFixed(2);
     const isSplit = s.is_split_shift && s.split_segment;
     const partner = isSplit ? getSplitPartner(s, cellShifts) : null;
     const showConnector = isSplit && s.split_segment === 2 && partner;
@@ -848,7 +856,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                   shifts.map(s => {
                     const cl = clientMap[s.client_id];
                     const color = clientColor(s.client_id, clientMap);
-                    const durH = Number(parseFloat((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60 || 0)).toFixed(2);
+                    const durH = shiftHours(s.start_time, s.end_time).toFixed(2);
                     const isSplit = s.is_split_shift && s.split_segment;
                     return (
                       <div key={s.id} onClick={() => openEditShift(s, weekDateStrs[mobileDay])} style={{
@@ -1151,9 +1159,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
       {/* ═══════ EDIT SHIFT MODAL ═══════ */}
       {editShift && (() => {
-        const durH  = editShiftForm.startTime && editShiftForm.endTime
-          ? Number(parseFloat((timeToMinutes(editShiftForm.endTime) - timeToMinutes(editShiftForm.startTime)) / 60 || 0)).toFixed(2)
-          : '0';
+        const durH  = shiftHours(editShiftForm.startTime, editShiftForm.endTime).toFixed(2);
         const isRecurring = editShift.day_of_week !== null && editShift.day_of_week !== undefined;
         const isSplit = editShift.is_split_shift;
         const dateLabel = editDate ? new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '';

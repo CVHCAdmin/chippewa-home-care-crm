@@ -5,6 +5,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+const { shiftHours } = require('../helpers/shiftHours');
 // ─── COMPLIANCE ───────────────────────────────────────────────────────────────
 
 router.get('/compliance/summary', verifyToken, requireAdmin, async (req, res) => {
@@ -319,8 +320,8 @@ router.post('/care-plans/:id/generate-schedule', verifyToken, requireAdmin, asyn
     // silently created out-of-auth recurring shifts. Pass ?force=true to
     // override (rare; admin needs to be explicit).
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
-    const shiftHours = (new Date(`2000-01-01T${endTime}`) - new Date(`2000-01-01T${startTime}`)) / (1000 * 60 * 60);
-    const weeklyHours = shiftHours * daysOfWeek.length;
+    const perShiftHours = shiftHours(startTime, endTime);
+    const weeklyHours = perShiftHours * daysOfWeek.length;
     const authCheck = await checkAuthorizationBalance(plan.client_id, weeklyHours);
     const warnings = [...(authCheck.warnings || [])];
     if (!authCheck.allowed && req.query.force !== 'true') {
@@ -493,11 +494,6 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
 
     // Authorization enforcement
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
-    // Wrap negative spans to next-day (overnight shift)
-    const shiftHours = (s, e) => {
-      const h = (new Date(`2000-01-01T${e}`) - new Date(`2000-01-01T${s}`)) / (1000 * 60 * 60);
-      return h < 0 ? h + 24 : h;
-    };
     let totalShiftHours = shiftHours(startTime, endTime);
     if (splitShift?.startTime && splitShift?.endTime) {
       totalShiftHours += shiftHours(splitShift.startTime, splitShift.endTime);
