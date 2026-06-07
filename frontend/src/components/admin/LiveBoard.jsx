@@ -1,7 +1,8 @@
 // src/components/admin/LiveBoard.jsx
 // Real-time shift status board — shows all today's shifts with live EVV status
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { API_BASE_URL } from '../../config';
+import { usePolling } from '../../hooks/usePolling';
 import VisitGpsMap from './VisitGpsMap';
 
 const LiveBoard = ({ token }) => {
@@ -10,7 +11,6 @@ const LiveBoard = ({ token }) => {
   const [filter, setFilter] = useState('all');
   const [selectedShift, setSelectedShift] = useState(null);
   const [mapShift, setMapShift] = useState(null);
-  const intervalRef = useRef(null);
 
   const loadBoard = async () => {
     try {
@@ -25,11 +25,8 @@ const LiveBoard = ({ token }) => {
     }
   };
 
-  useEffect(() => {
-    loadBoard();
-    intervalRef.current = setInterval(loadBoard, 30000); // Refresh every 30 seconds
-    return () => clearInterval(intervalRef.current);
-  }, []);
+  // Refresh every 60s, paused when tab is hidden (refreshes on re-show)
+  usePolling(loadBoard, 60000);
 
   const filteredShifts = data.shifts.filter(s => filter === 'all' || s.shift_status === filter);
 

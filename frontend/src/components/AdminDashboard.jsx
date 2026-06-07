@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { API_BASE_URL } from '../config';
 import { getDashboardSummary } from '../config';
+import { usePolling } from '../hooks/usePolling';
 import { toast } from './Toast';
 import HelpPanel from './HelpPanel';
 import ImpersonationModal from './ImpersonationModal';
@@ -171,7 +172,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
   const [liveStats, setLiveStats] = useState({ activeCaregivers: 0, todayShifts: 0 });
   const searchRef = useRef(null);
 
-  useEffect(() => { loadDashboard(); loadUnreadCount(); }, []);
+  useEffect(() => { loadDashboard(); }, []);
 
   useEffect(() => {
     const handleResize = () => setSidebarOpen(window.innerWidth > 768);
@@ -205,11 +206,9 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  // Poll unread count every 30s
-  useEffect(() => {
-    const interval = setInterval(loadUnreadCount, 90000);
-    return () => clearInterval(interval);
-  }, []);
+  // Poll unread count every 90s (paused when tab is hidden, refreshes on re-show).
+  // Arrow wrapper so the const declared below isn't read at TDZ time.
+  usePolling(() => loadUnreadCount(), 90000);
 
   const loadDashboard = async () => {
     try {

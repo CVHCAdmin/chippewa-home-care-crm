@@ -2,6 +2,7 @@
 // Company message board — send individual, group, or broadcast messages
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
+import { usePolling } from '../../hooks/usePolling';
 import { toast } from '../Toast';
 
 const MessageBoard = ({ token }) => {
@@ -17,7 +18,6 @@ const MessageBoard = ({ token }) => {
   const [broadcastMode, setBroadcastMode] = useState(false);
   const [userSearch, setUserSearch] = useState('');
   const messagesEndRef = useRef(null);
-  const pollRef = useRef(null);
 
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
@@ -36,12 +36,10 @@ const MessageBoard = ({ token }) => {
     } catch (e) { /* silent */ }
   }, [token]);
 
-  useEffect(() => {
-    loadInbox();
-    loadUsers();
-    pollRef.current = setInterval(loadInbox, 15000);
-    return () => clearInterval(pollRef.current);
-  }, [loadInbox, loadUsers]);
+  // Users list only loads on mount (rarely changes during a session)
+  useEffect(() => { loadUsers(); }, [loadUsers]);
+  // Inbox polls every 15s, paused when tab is hidden, refreshes on re-show
+  usePolling(loadInbox, 15000);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

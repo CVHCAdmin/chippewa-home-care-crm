@@ -1,6 +1,7 @@
 // src/components/admin/DashboardOverview.jsx
 import React, { useState, useEffect } from 'react';
 import { getDashboardReferrals, getDashboardHours, API_BASE_URL } from '../../config';
+import { usePolling } from '../../hooks/usePolling';
 
 const DashboardOverview = ({ summary, token, onNavigate }) => {
   const [referrals, setReferrals] = useState([]);
@@ -10,14 +11,15 @@ const DashboardOverview = ({ summary, token, onNavigate }) => {
   const [gpsFailures, setGpsFailures] = useState({ count: 0, failures: [] });
   const [actionItems, setActionItems] = useState({ items: [], totalCount: 0 });
 
+  // Mount-only fetches (no polling)
   useEffect(() => {
     loadAnalytics();
     loadNoShowStats();
-    loadGpsFailures();
     loadActionItems();
-    const t = setInterval(loadGpsFailures, 30000); // poll every 30s
-    return () => clearInterval(t);
   }, []);
+  // gps-failures polls every 60s, paused when tab is hidden, refresh on re-show.
+  // Arrow wrapper so the const declared below isn't read at TDZ time.
+  usePolling(() => loadGpsFailures(), 60000);
 
   const loadActionItems = async () => {
     try {
