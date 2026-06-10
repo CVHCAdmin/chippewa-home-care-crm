@@ -62,6 +62,15 @@ const PortalApp = () => {
     setSessionExpiredCallback(handleLogout);
   }, [handleLogout]);
 
+  // Cross-tab logout — when another tab removes the token, log this tab out too
+  useEffect(() => {
+    const onStorage = (e) => {
+      if ((e.key === 'portal_token' || e.key === null) && !localStorage.getItem('portal_token')) handleLogout();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [handleLogout]);
+
   useEffect(() => {
     if (token) {
       try {
@@ -123,6 +132,15 @@ const FamilyApp = () => {
 
   useEffect(() => {
     setSessionExpiredCallback(handleLogout);
+  }, [handleLogout]);
+
+  // Cross-tab logout — when another tab removes the token, log this tab out too
+  useEffect(() => {
+    const onStorage = (e) => {
+      if ((e.key === 'family_token' || e.key === null) && !localStorage.getItem('family_token')) handleLogout();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, [handleLogout]);
 
   useEffect(() => {
@@ -202,17 +220,27 @@ const MainApp = () => {
   const [impersonationToken, setImpersonationToken] = useState(null);
   const [impersonationUser, setImpersonationUser]   = useState(null);
 
-  const handleLogout = useCallback((expired = false) => {
+  const handleLogout = useCallback((expired) => {
     localStorage.removeItem('token');
     setToken(null);
     setUser(null);
     setImpersonationToken(null);
     setImpersonationUser(null);
-    if (expired) toast('Your session has expired. Please log in again.', 'warning');
+    // Strict check: buttons pass the click event here, which is truthy
+    if (expired === true) toast('Your session has expired. Please log in again.', 'warning');
   }, []);
 
   useEffect(() => {
     setSessionExpiredCallback(() => handleLogout(true));
+  }, [handleLogout]);
+
+  // Cross-tab logout — when another tab removes the token, log this tab out too
+  useEffect(() => {
+    const onStorage = (e) => {
+      if ((e.key === 'token' || e.key === null) && !localStorage.getItem('token')) handleLogout();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, [handleLogout]);
 
   useEffect(() => {
