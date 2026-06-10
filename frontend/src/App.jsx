@@ -13,7 +13,7 @@ import FamilyPortal from './components/portal/FamilyPortal';
 import OnboardingPacketPage from './components/OnboardingPacketPage';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
-import { setSessionExpiredCallback } from './config'; // also installs global 401 fetch interceptor
+import { API_BASE_URL, setSessionExpiredCallback } from './config'; // also installs global 401 fetch interceptor
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 const App = () => {
@@ -221,6 +221,16 @@ const MainApp = () => {
   const [impersonationUser, setImpersonationUser]   = useState(null);
 
   const handleLogout = useCallback((expired) => {
+    // Revoke all of this user's tokens server-side (every device/tab).
+    // Fire-and-forget: local logout must never depend on the network.
+    const t = localStorage.getItem('token');
+    if (t && expired !== true) {
+      fetch(`${API_BASE_URL}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${t}` },
+        keepalive: true,
+      }).catch(() => {});
+    }
     localStorage.removeItem('token');
     setToken(null);
     setUser(null);

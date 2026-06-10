@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+const { markUserLoggedOut } = require('../services/tokenRevocation');
 
 // Helper: log a login attempt (fire-and-forget, never blocks the response)
 async function logLoginAttempt({ email, userId, success, failReason, req }) {
@@ -59,6 +60,23 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// POST /api/auth/logout
+// Server-side revocation: stamps users.last_logout_at, so every token
+// issued before now stops working on the next request — all devices.
+router.post('/logout', verifyToken, async (req, res) => {
+  try {
+    // Impersonation sessions end client-side; don't kill the target user's real sessions
+    if (!req.user.impersonation) {
+      await markUserLoggedOut(req.user.id);
+      auditLog(req.user.id, 'LOGOUT', 'users', req.user.id, null, { action: 'logout_all_sessions' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ error: 'Logout failed' });
   }
 });
 

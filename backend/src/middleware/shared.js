@@ -3,20 +3,24 @@
 
 const jwt = require('jsonwebtoken');
 const db = require('../db');
+const { isStaffTokenRevoked } = require('../services/tokenRevocation');
 
-const verifyToken = (req, res, next) => {
+const verifyToken = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   if (!process.env.JWT_SECRET) {
     console.error('FATAL: JWT_SECRET not set');
     return res.status(500).json({ error: 'Server configuration error' });
   }
+  let decoded;
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
+  if (await isStaffTokenRevoked(decoded)) return res.status(401).json({ error: 'Invalid token' });
+  req.user = decoded;
+  next();
 };
 
 const requireAdmin = (req, res, next) => {

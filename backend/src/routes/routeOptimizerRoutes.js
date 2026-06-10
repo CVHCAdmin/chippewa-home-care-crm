@@ -5,25 +5,14 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
-const jwt = require('jsonwebtoken');
 const { shiftHours } = require('../helpers/shiftHours');
 
 const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 // ============================================================
-// Auth Middleware
+// Auth Middleware — shared, includes server-side logout (token revocation)
 // ============================================================
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token provided' });
-  try {
-    if (!process.env.JWT_SECRET) return res.status(500).json({ error: 'Server configuration error' });
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-};
+const { verifyToken } = require('../middleware/shared');
 
 const requireAdmin = (req, res, next) => {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
