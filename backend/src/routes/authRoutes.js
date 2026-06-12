@@ -32,6 +32,21 @@ router.post('/login', async (req, res) => {
 
     if (!user) {
       logLoginAttempt({ email, userId: null, success: false, failReason: 'user_not_found', req });
+      // Clients aren't in users — they live in client_portal_accounts. The
+      // most common support call is a client typing portal credentials into
+      // this staff page, so point them at the right door.
+      try {
+        const portal = await db.query(
+          'SELECT 1 FROM client_portal_accounts WHERE LOWER(email) = LOWER($1)',
+          [email]
+        );
+        if (portal.rows.length > 0) {
+          return res.status(401).json({
+            error: 'This email is registered for the Client Portal, not the staff system.',
+            portalHint: 'client',
+          });
+        }
+      } catch (e) { /* fall through to the generic error */ }
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 

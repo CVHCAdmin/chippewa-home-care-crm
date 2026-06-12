@@ -34,6 +34,24 @@ const SENSITIVE_ACTIONS = [
   'role'
 ];
 
+// Strip credentials/identifiers from request bodies before they hit
+// audit_logs — login bodies were being stored with plaintext passwords.
+const redactSensitiveValues = (value) => {
+  if (Array.isArray(value)) return value.map(redactSensitiveValues);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const key = k.toLowerCase();
+      const isSecret =
+        key.includes('password') || key.includes('secret') ||
+        key === 'ssn' || key === 'token' || key.includes('signature');
+      out[k] = isSecret && v != null ? '[REDACTED]' : redactSensitiveValues(v);
+    }
+    return out;
+  }
+  return value;
+};
+
 const auditLogger = (pool) => {
 
   // Check if operation involves PHI or sensitive data
@@ -181,8 +199,8 @@ const auditLogger = (pool) => {
           action,
           table_name,
           record_id,
-          old_data ? JSON.stringify(old_data) : null,
-          new_data ? JSON.stringify(new_data) : null,
+          old_data ? JSON.stringify(redactSensitiveValues(old_data)) : null,
+          new_data ? JSON.stringify(redactSensitiveValues(new_data)) : null,
           ip_address,
           is_sensitive
         ]

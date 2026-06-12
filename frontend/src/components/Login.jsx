@@ -10,6 +10,7 @@ const Login = ({ onLogin }) => {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('login'); // 'login' | 'forgot' | 'reset'
   const [message, setMessage] = useState('');
+  const [portalHint, setPortalHint] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
@@ -42,6 +43,7 @@ const Login = ({ onLogin }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setPortalHint(false);
     setLoading(true);
 
     try {
@@ -54,6 +56,7 @@ const Login = ({ onLogin }) => {
       const data = await safeParseResponse(response);
 
       if (!response.ok) {
+        if (data.portalHint === 'client') setPortalHint(true);
         throw new Error(data.error || `Error ${response.status}`);
       }
 
@@ -122,6 +125,19 @@ const Login = ({ onLogin }) => {
         <p>Home Care CRM</p>
 
         {error && <div className="alert alert-error">{error}</div>}
+        {portalHint && (
+          <a
+            href="/portal"
+            style={{
+              display: 'block', textAlign: 'center', marginBottom: '1rem',
+              background: '#1a5276', color: '#fff', padding: '12px 16px',
+              borderRadius: '8px', textDecoration: 'none', fontWeight: 700,
+              fontSize: '1rem',
+            }}
+          >
+            Take me to the Client Portal →
+          </a>
+        )}
         {message && <div className="alert alert-success">{message}</div>}
 
         {/* ── LOGIN FORM ── */}
@@ -274,6 +290,16 @@ const Login = ({ onLogin }) => {
             </div>
           </form>
         )}
+
+        <div style={{
+          marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid #e8ecf0',
+          textAlign: 'center', fontSize: '0.9rem', color: '#555',
+        }}>
+          Client or family member?{' '}
+          <a href="/portal" style={{ color: '#1a5276', fontWeight: 600 }}>Client Portal</a>
+          {' · '}
+          <a href="/family" style={{ color: '#1a5276', fontWeight: 600 }}>Family Portal</a>
+        </div>
 
         <p className="login-footer">
           HIPAA-compliant system. Authorized personnel only.
