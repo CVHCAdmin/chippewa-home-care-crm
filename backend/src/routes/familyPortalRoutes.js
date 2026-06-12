@@ -342,6 +342,75 @@ router.get('/portal/schedule', familyAuth, async (req, res) => {
   }
 });
 
+// Get assigned caregivers (for family) — same merged sources as the client
+// portal: active assignments OR active schedules. Gated on can_view_schedule
+// since caregiver info is part of the schedule tier.
+router.get('/portal/caregivers', familyAuth, async (req, res) => {
+  if (!req.familyMember.can_view_schedule) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  try {
+    const result = await db.query(`
+      SELECT DISTINCT ON (u.id)
+        COALESCE(ca.id, s.id) as assignment_id,
+        u.id as caregiver_id,
+        u.first_name, u.last_name,
+        u.certifications
+      FROM users u
+      LEFT JOIN client_assignments ca
+        ON ca.caregiver_id = u.id AND ca.client_id = $1 AND ca.status = 'active'
+      LEFT JOIN schedules s
+        ON s.caregiver_id = u.id AND s.client_id = $1 AND s.is_active = true
+        AND (s.status IS NULL OR s.status = 'active')
+      WHERE (ca.id IS NOT NULL OR s.id IS NOT NULL)
+      ORDER BY u.id
+    `, [req.clientId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get a caregiver's background check summary (for family) — only for
+// caregivers serving this family's client. Summary fields only.
+router.get('/portal/caregivers/:caregiverId/background-checks', familyAuth, async (req, res) => {
+  if (!req.familyMember.can_view_schedule) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  const { caregiverId } = req.params;
+
+  try {
+    const linked = await db.query(`
+      SELECT 1 FROM client_assignments
+      WHERE caregiver_id = $1 AND client_id = $2 AND status = 'active'
+      UNION
+      SELECT 1 FROM schedules
+      WHERE caregiver_id = $1 AND client_id = $2 AND is_active = true
+        AND (status IS NULL OR status = 'active')
+      LIMIT 1
+    `, [caregiverId, req.clientId]);
+
+    if (linked.rows.length === 0) {
+      return res.status(403).json({ error: 'This caregiver is not assigned to your loved one' });
+    }
+
+    const result = await db.query(`
+      SELECT id, check_type, provider, status, result,
+             initiated_date, completed_date, expiration_date
+      FROM background_checks
+      WHERE caregiver_id = $1
+      ORDER BY completed_date DESC NULLS LAST, initiated_date DESC NULLS LAST
+    `, [caregiverId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get care plan (for family)
 router.get('/portal/care-plan', familyAuth, async (req, res) => {
   if (!req.familyMember.can_view_care_plan) {

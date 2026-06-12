@@ -9,7 +9,16 @@ const auth    = require('../middleware/auth');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const crypto  = require('crypto');
-const { sendClientPortalInvite } = require('../services/emailService');
+const rateLimit = require('express-rate-limit');
+const { sendClientPortalInvite, sendClientPortalPasswordReset } = require('../services/emailService');
+
+// Rate limiter for the public forgot-password endpoint
+const forgotLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT PORTAL AUTH MIDDLEWARE
@@ -175,6 +184,63 @@ router.post('/set-password', async (req, res) => {
     res.json({ success: true, message: 'Password set. You can now log in.' });
   } catch (error) {
     console.error('[ClientPortal] set-password error:', error.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC: FORGOT PASSWORD (self-service)
+// POST /api/client-portal/forgot-password
+// Body: { email }
+//
+// Reuses the invite token + /portal/setup + /set-password flow with a 1-hour
+// expiry. Always responds with the same message so account existence can't be
+// probed.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/forgot-password', forgotLimiter, async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  const genericResponse = {
+    success: true,
+    message: 'If an account exists with that email, a password reset link has been sent. Please check your inbox.',
+  };
+
+  try {
+    const result = await db.query(`
+      SELECT cpa.client_id, cpa.email, c.first_name, c.last_name
+      FROM client_portal_accounts cpa
+      JOIN clients c ON cpa.client_id = c.id
+      WHERE LOWER(cpa.email) = LOWER($1) AND cpa.portal_enabled = true AND c.is_active = true
+    `, [email]);
+
+    if (result.rows.length === 0) return res.json(genericResponse);
+
+    const account = result.rows[0];
+    const resetToken   = crypto.randomBytes(32).toString('hex');
+    const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await db.query(`
+      UPDATE client_portal_accounts
+      SET invite_token = $1, invite_expires_at = $2, updated_at = NOW()
+      WHERE client_id = $3
+    `, [resetToken, resetExpires, account.client_id]);
+
+    const resetUrl = `${process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com'}/portal/setup?token=${resetToken}`;
+
+    try {
+      await sendClientPortalPasswordReset({
+        to: account.email,
+        clientName: `${account.first_name} ${account.last_name}`,
+        resetUrl,
+      });
+    } catch (emailErr) {
+      console.error('[ClientPortal] forgot-password email failed:', emailErr.message);
+    }
+
+    res.json(genericResponse);
+  } catch (error) {
+    console.error('[ClientPortal] forgot-password error:', error.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -409,6 +475,48 @@ router.get('/portal/caregivers', clientAuth, async (req, res) => {
       WHERE (ca.id IS NOT NULL OR s.id IS NOT NULL)
       ORDER BY u.id, ca.assignment_date DESC NULLS LAST
     `, [req.clientId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL: GET A CAREGIVER'S BACKGROUND CHECK SUMMARY
+// GET /api/client-portal/portal/caregivers/:caregiverId/background-checks
+//
+// Clients may only view checks for caregivers actively assigned or scheduled
+// with them. Returns summary fields only — never findings, notes, cost,
+// reference numbers, or identifiers.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/portal/caregivers/:caregiverId/background-checks', clientAuth, async (req, res) => {
+  const { caregiverId } = req.params;
+
+  try {
+    // Verify this caregiver actually serves this client (same sources as the
+    // /portal/caregivers list: active assignments OR active schedules)
+    const linked = await db.query(`
+      SELECT 1 FROM client_assignments
+      WHERE caregiver_id = $1 AND client_id = $2 AND status = 'active'
+      UNION
+      SELECT 1 FROM schedules
+      WHERE caregiver_id = $1 AND client_id = $2 AND is_active = true
+        AND (status IS NULL OR status = 'active')
+      LIMIT 1
+    `, [caregiverId, req.clientId]);
+
+    if (linked.rows.length === 0) {
+      return res.status(403).json({ error: 'This caregiver is not assigned to you' });
+    }
+
+    const result = await db.query(`
+      SELECT id, check_type, provider, status, result,
+             initiated_date, completed_date, expiration_date
+      FROM background_checks
+      WHERE caregiver_id = $1
+      ORDER BY completed_date DESC NULLS LAST, initiated_date DESC NULLS LAST
+    `, [caregiverId]);
 
     res.json(result.rows);
   } catch (error) {

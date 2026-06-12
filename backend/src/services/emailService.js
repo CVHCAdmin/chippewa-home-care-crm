@@ -145,6 +145,32 @@ const sendClientPortalInvite = async ({ to, clientName, inviteUrl }) => {
   }, { throwOnError: true });
 };
 
+// ── Client Portal Password Reset ──────────────────────────────
+// Reuses the invite-token + /portal/setup flow, so the link works exactly
+// like an invite but with reset wording.
+const sendClientPortalPasswordReset = async ({ to, clientName, resetUrl }) => {
+  return sendEmail({
+    to,
+    subject: `Reset your ${AGENCY_NAME} Client Portal password`,
+    html: wrap(`
+      <p style="color: #333; font-size: 1rem;">Hello ${clientName},</p>
+      <p style="color: #555; font-size: 0.95rem;">
+        We received a request to reset your Client Portal password. Click the
+        button below to choose a new password:
+      </p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${resetUrl}" style="background: #1a5276; color: #fff; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 1rem; display: inline-block;">
+          Reset My Password
+        </a>
+      </div>
+      <p style="color: #888; font-size: 0.85rem;">
+        This link expires in 1 hour. If you didn't request a password reset,
+        you can safely ignore this email — your current password still works.
+      </p>
+    `),
+  }, { throwOnError: true });
+};
+
 // ── Family Portal Welcome ─────────────────────────────────────
 const sendFamilyPortalWelcome = async ({ to, familyName, clientName, tempPassword }) => {
   const loginUrl = `${FRONTEND_URL}/family`;
@@ -492,6 +518,7 @@ module.exports = {
   sendEmail,
   sendCriticalNotification,
   sendClientPortalInvite,
+  sendClientPortalPasswordReset,
   sendFamilyPortalWelcome,
   sendFamilyPasswordReset,
   sendPasswordReset,

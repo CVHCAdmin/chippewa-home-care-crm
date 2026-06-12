@@ -2,6 +2,7 @@
 // Show the client's active assigned caregivers
 import React, { useState, useEffect } from 'react';
 import { apiCall } from '../../config';
+import CaregiverBackgroundChecks from './CaregiverBackgroundChecks';
 
 const PortalCaregivers = ({ token }) => {
   const [caregivers, setCaregivers] = useState([]);
@@ -77,6 +78,12 @@ const PortalCaregivers = ({ token }) => {
                     ))}
                   </div>
                 )}
+
+                <CaregiverBackgroundChecks
+                  token={token}
+                  caregiverId={cg.caregiver_id}
+                  apiBase="/api/client-portal"
+                />
               </div>
 
               {cg.phone && (

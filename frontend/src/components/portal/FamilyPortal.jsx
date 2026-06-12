@@ -2,6 +2,7 @@
 // Family member portal dashboard — view client info based on permissions
 import React, { useState, useEffect } from 'react';
 import { apiCall } from '../../config';
+import CaregiverBackgroundChecks from './CaregiverBackgroundChecks';
 
 const CARD = {
   background: '#fff',
@@ -71,6 +72,66 @@ const ScheduleView = ({ token }) => {
           </div>
         );
       })}
+    </div>
+  );
+};
+
+// ── Caregivers Tab ────────────────────────────────────────────
+const CaregiversView = ({ token }) => {
+  const [caregivers, setCaregivers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiCall('/api/family-portal/portal/caregivers', { method: 'GET' }, token)
+      .then(data => { if (data) setCaregivers(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>Loading caregivers...</div>;
+
+  if (caregivers.length === 0) {
+    return (
+      <div style={{ ...CARD, textAlign: 'center', padding: '40px', color: '#888' }}>
+        No caregivers currently assigned.
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h3 style={{ margin: '0 0 16px', fontSize: '1.1rem' }}>Assigned Caregivers</h3>
+      {caregivers.map(cg => (
+        <div key={cg.caregiver_id} style={CARD}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '44px', height: '44px', borderRadius: '50%',
+              background: 'linear-gradient(135deg, #2d5016, #4a8c1c)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontWeight: 700, flexShrink: 0,
+            }}>
+              {cg.first_name?.[0]}{cg.last_name?.[0]}
+            </div>
+            <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+              {cg.first_name} {cg.last_name}
+            </div>
+          </div>
+
+          {cg.certifications?.length > 0 && (
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+              {cg.certifications.map((cert, i) => (
+                <span key={i} style={BADGE('blue')}>{cert}</span>
+              ))}
+            </div>
+          )}
+
+          <CaregiverBackgroundChecks
+            token={token}
+            caregiverId={cg.caregiver_id}
+            apiBase="/api/family-portal"
+          />
+        </div>
+      ))}
     </div>
   );
 };
@@ -396,6 +457,7 @@ const FamilyPortal = ({ user, token, onLogout, permissions }) => {
     { key: 'overview', label: 'Overview', icon: '🏠' },
   ];
   if (permissions.can_view_schedule)  tabs.push({ key: 'schedule',    label: 'Schedule',    icon: '📅' });
+  if (permissions.can_view_schedule)  tabs.push({ key: 'caregivers',  label: 'Caregivers',  icon: '👤' });
   if (permissions.can_view_care_plan) tabs.push({ key: 'care-plan',   label: 'Care Plan',   icon: '📋' });
   if (permissions.can_view_medications) tabs.push({ key: 'medications', label: 'Medications', icon: '💊' });
   if (permissions.can_view_medications) tabs.push({ key: 'vitals',     label: 'Vitals',      icon: '❤️' });
@@ -408,6 +470,7 @@ const FamilyPortal = ({ user, token, onLogout, permissions }) => {
   const renderView = () => {
     switch (activeTab) {
       case 'schedule':    return <ScheduleView token={token} />;
+      case 'caregivers':  return <CaregiversView token={token} />;
       case 'care-plan':   return <CarePlanView token={token} />;
       case 'medications': return <MedicationsView token={token} />;
       case 'vitals':      return <VitalsView token={token} />;
