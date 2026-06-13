@@ -1248,14 +1248,14 @@ router.post('/invoice-payments', auth, async (req, res) => {
 
     await client.query(`
       UPDATE invoices
-      SET amount_paid = $1,
+      SET amount_paid = $1::numeric,
           payment_status = CASE
-            WHEN $1 + $2 >= total THEN 'paid'
-            WHEN $1 > 0 THEN 'partial'
+            WHEN $1::numeric + $2::numeric >= total THEN 'paid'
+            WHEN $1::numeric > 0 THEN 'partial'
             ELSE 'pending'
           END,
-          payment_date = CASE WHEN $1 + $2 >= total THEN $3 ELSE payment_date END,
-          paid_at = CASE WHEN $1 + $2 >= total THEN NOW() ELSE paid_at END,
+          payment_date = CASE WHEN $1::numeric + $2::numeric >= total THEN $3 ELSE payment_date END,
+          paid_at = CASE WHEN $1::numeric + $2::numeric >= total THEN NOW() ELSE paid_at END,
           updated_at = NOW()
       WHERE id = $4
     `, [newPaid, adjusted, paymentDate, invoiceId]);
