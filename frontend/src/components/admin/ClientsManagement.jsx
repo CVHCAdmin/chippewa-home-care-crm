@@ -699,6 +699,7 @@ const ClientsManagement = ({ token }) => {
                 </th>
                 <th>Name</th>
                 <th>Phone</th>
+                <th>Email</th>
                 <th>Address</th>
                 <th>Referral Source</th>
                 <th>Care Type</th>
@@ -719,6 +720,7 @@ const ClientsManagement = ({ token }) => {
                     {client.date_of_birth && (<small style={{ display: 'block', color: '#666' }}>DOB: {new Date(client.date_of_birth).toLocaleDateString()}</small>)}
                   </td>
                   <td><a href={`tel:${client.phone}`}>{client.phone || 'N/A'}</a></td>
+                  <td>{client.email ? (<a href={`mailto:${client.email}`}>{client.email}</a>) : (<span className="text-muted">-</span>)}</td>
                   <td><AddressLink address={client.address} city={client.city} state={client.state} zip={client.zip} /></td>
                   <td>{client.is_private_pay ? (<span className="text-muted">-</span>) : (getReferralSourceName(client.referral_source_id))}</td>
                   <td>{getCareTypeName(client.care_type_id)}</td>

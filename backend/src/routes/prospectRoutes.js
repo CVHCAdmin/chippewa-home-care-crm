@@ -51,9 +51,11 @@ router.post('/prospects/:id/convert', verifyToken, requireAdmin, async (req, res
     const prospect = await db.query(`SELECT * FROM prospects WHERE id=$1`, [req.params.id]);
     if (prospect.rows.length === 0) return res.status(404).json({ error: 'Prospect not found' });
     const p = prospect.rows[0];
+    // Fold the lead source into notes since clients has no source column — otherwise it's lost on conversion.
+    const notes = [p.source ? `Lead source: ${p.source}` : null, p.notes].filter(Boolean).join('\n\n') || null;
     const clientResult = await db.query(
-      `INSERT INTO clients (first_name, last_name, phone, email, address, city, state, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,true) RETURNING *`,
-      [p.first_name, p.last_name, p.phone, p.email, p.address, p.city, p.state]
+      `INSERT INTO clients (first_name, last_name, phone, email, address, city, state, notes, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true) RETURNING *`,
+      [p.first_name, p.last_name, p.phone, p.email, p.address, p.city, p.state, notes]
     );
     await db.query(`UPDATE prospects SET status='converted', converted_client_id=$1, updated_at=NOW() WHERE id=$2`, [clientResult.rows[0].id, req.params.id]);
     res.json({ client: clientResult.rows[0], message: 'Prospect converted to client' });
