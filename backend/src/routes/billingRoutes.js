@@ -1197,31 +1197,77 @@ router.get('/invoice-payments', auth, async (req, res) => {
 });
 
 router.post('/invoice-payments', auth, async (req, res) => {
-  const { invoiceId, amount, paymentDate, paymentMethod, referenceNumber, notes } = req.body;
+  const { invoiceId, amount, paymentDate, paymentMethod, referenceNumber, notes, allowOverpayment } = req.body;
+
+  const amt = Number(amount);
+  if (!invoiceId) return res.status(400).json({ error: 'invoiceId is required' });
+  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'Payment amount must be a positive number' });
+
+  // Whole thing runs in one transaction with the invoice row locked, so the
+  // payment row and the recomputed amount_paid can never diverge, and two
+  // concurrent payments can't race past the balance check.
+  const client = await db.pool.connect();
   try {
-    const paymentResult = await db.query(`
+    await client.query('BEGIN');
+
+    const invRes = await client.query(
+      'SELECT total, COALESCE(amount_paid, 0) AS amount_paid, COALESCE(amount_adjusted, 0) AS amount_adjusted FROM invoices WHERE id = $1 FOR UPDATE',
+      [invoiceId]
+    );
+    if (invRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const inv = invRes.rows[0];
+    const total = parseFloat(inv.total);
+    const alreadyPaid = parseFloat(inv.amount_paid);
+    const adjusted = parseFloat(inv.amount_adjusted);
+    const balanceDue = +(total - alreadyPaid - adjusted).toFixed(2);
+    const newPaid = +(alreadyPaid + amt).toFixed(2);
+
+    // Block payments that push the invoice past its total. This is what
+    // doubled INV-MPH8VCCT-BBD6 to $824 when a check was entered twice.
+    // 1¢ epsilon so floating-point dust doesn't trip a legit exact payment.
+    if (!allowOverpayment && newPaid > total - adjusted + 0.01) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: `Payment of $${amt.toFixed(2)} exceeds the $${balanceDue.toFixed(2)} balance due on this invoice. ` +
+               `It may already be recorded. To record an intentional overpayment, resubmit with allowOverpayment: true.`,
+        balanceDue,
+        alreadyPaid,
+        total,
+      });
+    }
+
+    const paymentResult = await client.query(`
       INSERT INTO invoice_payments (invoice_id, amount, payment_date, payment_method, reference_number, notes)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *
-    `, [invoiceId, amount, paymentDate, paymentMethod, referenceNumber, notes]);
+    `, [invoiceId, amt, paymentDate, paymentMethod, referenceNumber, notes]);
 
-    await db.query(`
-      UPDATE invoices 
-      SET amount_paid = COALESCE(amount_paid, 0) + $1,
-          payment_status = CASE 
-            WHEN COALESCE(amount_paid, 0) + $1 >= total THEN 'paid'
-            WHEN COALESCE(amount_paid, 0) + $1 > 0 THEN 'partial'
+    await client.query(`
+      UPDATE invoices
+      SET amount_paid = $1,
+          payment_status = CASE
+            WHEN $1 + $2 >= total THEN 'paid'
+            WHEN $1 > 0 THEN 'partial'
             ELSE 'pending'
           END,
-          payment_date = CASE WHEN COALESCE(amount_paid, 0) + $1 >= total THEN $2 ELSE payment_date END,
-          paid_at = CASE WHEN COALESCE(amount_paid, 0) + $1 >= total THEN NOW() ELSE paid_at END
-      WHERE id = $3
-    `, [amount, paymentDate, invoiceId]);
+          payment_date = CASE WHEN $1 + $2 >= total THEN $3 ELSE payment_date END,
+          paid_at = CASE WHEN $1 + $2 >= total THEN NOW() ELSE paid_at END,
+          updated_at = NOW()
+      WHERE id = $4
+    `, [newPaid, adjusted, paymentDate, invoiceId]);
 
+    await client.query('COMMIT');
     res.json(paymentResult.rows[0]);
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Error recording payment:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 });
 

@@ -320,11 +320,13 @@ router.post('/webhook', express.raw({ type: 'application/json' }), requireStripe
       if (invoiceId) {
         const amountPaid = session.amount_total / 100; // Convert from cents
 
-        // Update invoice
+        // Update invoice. Cap amount_paid at total so a Stripe payment can't
+        // push it past the invoice amount (mirrors the guard on the manual
+        // /invoice-payments endpoint). LEAST() clamps the running total.
         await db.query(`
           UPDATE invoices
           SET
-            amount_paid = COALESCE(amount_paid, 0) + $1,
+            amount_paid = LEAST(total, COALESCE(amount_paid, 0) + $1),
             payment_status = CASE
               WHEN COALESCE(amount_paid, 0) + $1 >= total THEN 'paid'
               ELSE 'partial'
