@@ -288,7 +288,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     const result = await db.query(
       `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, clock_in_location, schedule_id, allotted_minutes)
        VALUES ($1,$2,$3,NOW(),$4,$5,$6) RETURNING *`,
-      [entryId, req.user.id, clientId, JSON.stringify({ lat: latitude, lng: longitude }), linkedScheduleId, allottedMinutes]
+      [entryId, req.user.id, clientId, latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, linkedScheduleId, allottedMinutes]
     );
     await auditLog(req.user.id, 'CREATE', 'time_entries', entryId, null, result.rows[0]);
     try {

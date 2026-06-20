@@ -15,6 +15,39 @@ const getBgGeo       = () => import('@capacitor-community/background-geolocation
 export const isNative = Capacitor.isNativePlatform();
 export const platform = Capacitor.getPlatform(); // 'ios' | 'android' | 'web'
 
+// ── getCurrentPositionOnce ──────────────────────────────────────────────────────
+// One-shot position grab that works on native (Capacitor) AND web, and — crucially
+// — honors `maximumAge` so the OS can return a recent cached fix instead of forcing
+// a cold high-accuracy satellite lock (which never locks indoors and is the long-
+// standing "GPS is taking too long" clock-in failure). A coarse fix (~20-65m) is
+// well inside the ~300ft EVV geofence, so clock-in/out prefer it.
+// Resolves { latitude, longitude, accuracy, timestamp }; rejects with an error whose
+// .code matches W3C PositionError codes (1=denied, 2=unavailable, 3=timeout).
+export async function getCurrentPositionOnce({ highAccuracy = false, timeout = 8000, maximumAge = 120000 } = {}) {
+  const Geolocation = await getGeolocation();
+  if (Geolocation && isNative) {
+    const perm = await Geolocation.checkPermissions().catch(() => null);
+    const granted = (p) => p && (p.location === 'granted' || p.coarseLocation === 'granted');
+    if (!granted(perm)) {
+      const req = await Geolocation.requestPermissions().catch(() => null);
+      if (!granted(req)) { const e = new Error('Location permission denied'); e.code = 1; throw e; }
+    }
+    const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: highAccuracy, timeout, maximumAge });
+    return { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy, timestamp: pos.timestamp };
+  }
+  // Web (also the path used by the current PWA build)
+  return await new Promise((resolve, reject) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      const e = new Error('Geolocation unavailable'); e.code = 2; return reject(e);
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy, timestamp: pos.timestamp }),
+      err => { const e = new Error(err.message || 'Location error'); e.code = err.code; reject(e); },
+      { enableHighAccuracy: highAccuracy, timeout, maximumAge }
+    );
+  });
+}
+
 // ── useNetwork ────────────────────────────────────────────────────────────────
 // Returns { online, connectionType } and listens for changes
 export function useNetwork() {
