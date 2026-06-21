@@ -389,6 +389,23 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
 /**
  * Insert line items into database. Pass a pooled client to run inside a transaction.
  */
+// invoice_line_items.description is VARCHAR(255), but descriptions are built
+// from time-entry/visit notes (TEXT, arbitrary length) plus a time-range
+// suffix. A long note used to overflow 255 and blow up invoice generation with
+// "value too long for type character varying(255)". Clamp to fit, preserving
+// the trailing "(time range)" suffix since that's billing-relevant.
+const MAX_LINE_ITEM_DESC = 255;
+function clampLineItemDescription(desc) {
+  const s = String(desc ?? '');
+  if (s.length <= MAX_LINE_ITEM_DESC) return s;
+  const m = s.match(/\s*(\([^()]*\))\s*$/);
+  const suffix = m ? ' ' + m[1] : '';
+  const room = MAX_LINE_ITEM_DESC - suffix.length;
+  if (room <= 1) return s.slice(0, MAX_LINE_ITEM_DESC);
+  const base = (m ? s.slice(0, s.length - m[0].length) : s);
+  return base.slice(0, room - 1).trimEnd() + '…' + suffix;
+}
+
 async function insertLineItems(invoiceId, lineItems, dbClient = db) {
   for (const item of lineItems) {
     await dbClient.query(`
@@ -399,7 +416,7 @@ async function insertLineItems(invoiceId, lineItems, dbClient = db) {
       invoiceId,
       item.time_entry_id,
       item.caregiver_id,
-      item.description,
+      clampLineItemDescription(item.description),
       item.hours,
       item.rate,
       item.amount,
@@ -779,7 +796,7 @@ router.post('/invoices/manual', auth, async (req, res) => {
       `, [
         invoice.id,
         item.caregiverId || null,
-        description,
+        clampLineItemDescription(description),
         item.hours,
         item.rate,
         amount,
