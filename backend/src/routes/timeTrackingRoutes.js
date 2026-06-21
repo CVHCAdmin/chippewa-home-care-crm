@@ -5,6 +5,30 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 
+// A single shift longer than this is almost certainly a missed clock-out, not
+// real worked time. Past this ceiling we refuse to silently auto-bill the full
+// duration: the entry is flagged for admin review and its billable time is
+// capped (to the scheduled allotment when known, otherwise to the ceiling).
+// This matters most for private-pay clients, which otherwise bill actual
+// duration with no cap and no approval gate — the failure mode that let one
+// caregiver's forgotten clock-outs accrue 200+ phantom billable hours.
+const MAX_SHIFT_MINUTES = 16 * 60; // 16h
+
+// Apply the excessive-duration guard to a computed billing decision. Mutates
+// nothing; returns the (possibly adjusted) values. `base` is whatever the
+// payer-specific rules already decided.
+function applyExcessiveDurationGuard({ durationMinutes, allottedMinutes, billableMinutes, needsApproval, approvalReason }) {
+  if (durationMinutes <= MAX_SHIFT_MINUTES) {
+    return { billableMinutes, needsApproval, approvalReason };
+  }
+  const cap = allottedMinutes != null ? allottedMinutes : MAX_SHIFT_MINUTES;
+  return {
+    billableMinutes: Math.min(billableMinutes, cap),
+    needsApproval: true,
+    approvalReason: approvalReason ? `${approvalReason},excessive_duration` : 'excessive_duration',
+  };
+}
+
 // Lazy-load sendPushToUser to avoid circular require with pushNotificationRoutes.
 // Gracefully no-ops when VAPID keys aren't configured in env.
 let _sendPush = null;
@@ -250,6 +274,13 @@ router.post('/clock-in', verifyToken, async (req, res) => {
           approvalReason = 'time_variance';
         }
       }
+
+      // Auto-close happens when the caregiver forgot to clock out, so this is
+      // the most likely path to an inflated duration — guard it.
+      ({ billableMinutes, needsApproval, approvalReason } = applyExcessiveDurationGuard({
+        durationMinutes, allottedMinutes, billableMinutes, needsApproval, approvalReason,
+      }));
+
       const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
 
       await db.query(
@@ -363,6 +394,12 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
         approvalReason = 'time_variance';
       }
     }
+
+    // Backstop: an implausibly long shift (missed clock-out) must not silently
+    // auto-bill its full duration — flag it and cap the billable time.
+    ({ billableMinutes, needsApproval, approvalReason } = applyExcessiveDurationGuard({
+      durationMinutes, allottedMinutes, billableMinutes, needsApproval, approvalReason,
+    }));
 
     const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
 
