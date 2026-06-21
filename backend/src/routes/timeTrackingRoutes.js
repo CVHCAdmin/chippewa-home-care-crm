@@ -823,3 +823,6 @@ router.delete('/photo/:photoId', verifyToken, requireAdmin, async (req, res) => 
 });
 
 module.exports = router;
+// Exposed for unit tests; not part of the HTTP surface.
+module.exports.applyExcessiveDurationGuard = applyExcessiveDurationGuard;
+module.exports.MAX_SHIFT_MINUTES = MAX_SHIFT_MINUTES;

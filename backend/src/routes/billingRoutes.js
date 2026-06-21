@@ -1756,3 +1756,6 @@ router.post('/import-csv', auth, requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
+// Exposed for unit tests; not part of the HTTP surface.
+module.exports.clampLineItemDescription = clampLineItemDescription;
+module.exports.MAX_LINE_ITEM_DESC = MAX_LINE_ITEM_DESC;
