@@ -534,7 +534,17 @@ router.get('/portal/invoices', clientAuth, async (req, res) => {
       SELECT
         i.id, i.invoice_number, i.billing_period_start, i.billing_period_end,
         i.subtotal, i.tax, i.total, i.payment_status,
-        i.payment_due_date, i.payment_date, i.created_at
+        i.payment_due_date, i.payment_date, i.created_at,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'service_date', ili.service_date,
+            'description', ili.description,
+            'hours', ili.hours,
+            'amount', ili.amount
+          ) ORDER BY ili.service_date NULLS LAST, ili.created_at)
+          FROM invoice_line_items ili
+          WHERE ili.invoice_id = i.id
+        ), '[]'::json) AS line_items
       FROM invoices i
       WHERE i.client_id = $1
       ORDER BY i.created_at DESC

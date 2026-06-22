@@ -38,6 +38,8 @@ const PortalInvoices = ({ token }) => {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState('');
+  const [expanded, setExpanded] = useState({}); // invoiceId -> show daily breakdown
+  const toggleExpanded = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
   useEffect(() => {
     apiCall('/api/client-portal/portal/invoices', { method: 'GET' }, token)
@@ -108,6 +110,44 @@ const PortalInvoices = ({ token }) => {
                   {statusBadge(inv.payment_status)}
                 </div>
               </div>
+
+              {Array.isArray(inv.line_items) && inv.line_items.length > 0 && (
+                <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f0f0f0' }}>
+                  <button
+                    onClick={() => toggleExpanded(inv.id)}
+                    style={{ background: 'none', border: 'none', color: '#1a5276', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}
+                  >
+                    {expanded[inv.id] ? '▾ Hide hours & days' : '▸ Show hours & days'}
+                  </button>
+                  {expanded[inv.id] && (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', color: '#999', fontSize: '0.72rem' }}>
+                          <th style={{ padding: '4px 6px', borderBottom: '1px solid #eee' }}>Date</th>
+                          <th style={{ padding: '4px 6px', borderBottom: '1px solid #eee' }}>Service</th>
+                          <th style={{ padding: '4px 6px', borderBottom: '1px solid #eee', textAlign: 'right' }}>Hours</th>
+                          <th style={{ padding: '4px 6px', borderBottom: '1px solid #eee', textAlign: 'right' }}>Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {inv.line_items.map((li, i) => (
+                          <tr key={i} style={{ fontSize: '0.8rem', color: '#555' }}>
+                            <td style={{ padding: '4px 6px', borderBottom: '1px solid #f5f5f5' }}>{li.service_date ? formatDate(String(li.service_date).slice(0, 10)) : '—'}</td>
+                            <td style={{ padding: '4px 6px', borderBottom: '1px solid #f5f5f5' }}>{li.description || 'Home Care Services'}</td>
+                            <td style={{ padding: '4px 6px', borderBottom: '1px solid #f5f5f5', textAlign: 'right' }}>{Number(parseFloat(li.hours || 0)).toFixed(2)}</td>
+                            <td style={{ padding: '4px 6px', borderBottom: '1px solid #f5f5f5', textAlign: 'right' }}>{formatMoney(li.amount)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ fontSize: '0.8rem', fontWeight: 700, color: '#333' }}>
+                          <td style={{ padding: '6px 6px' }} colSpan={2}>Total</td>
+                          <td style={{ padding: '6px 6px', textAlign: 'right' }}>{Number(inv.line_items.reduce((s, li) => s + parseFloat(li.hours || 0), 0)).toFixed(2)}</td>
+                          <td style={{ padding: '6px 6px', textAlign: 'right' }}>{formatMoney(inv.total)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
 
               {(inv.payment_due_date || inv.payment_date) && (
                 <div style={{
