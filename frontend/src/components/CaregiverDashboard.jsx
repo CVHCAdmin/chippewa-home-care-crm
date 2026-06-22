@@ -496,7 +496,28 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           // Reset outside-geofence counter whenever we're inside
           geofenceOutsideCountRef.current.delete(clientId);
         }
-        if (data.withinGeofence && data.autoClockIn && !currentSession && !alreadyTriggered) {
+        // Proximity alone must NOT auto-clock-in: a caregiver near a client's home
+        // when they aren't scheduled (driving by, working a different job nearby,
+        // off the clock) was getting clocked in falsely. Require a real shift for
+        // THIS client to be active now (15 min before start through end_time).
+        const nowMin = now.getHours() * 60 + now.getMinutes();
+        const hasScheduledShiftNow = (currentSchedules || []).some(s => {
+          if (s.client_id !== clientId || !s.start_time) return false;
+          const onToday = s.date
+            ? new Date(s.date).toDateString() === now.toDateString()
+            : (s.day_of_week === todayDay && isScheduleActiveForDate(s, todayDate));
+          if (!onToday) return false;
+          const [sh, sm] = s.start_time.split(':').map(Number);
+          const startMin = sh * 60 + sm;
+          let endMin = startMin + 8 * 60; // fallback when no end_time recorded
+          if (s.end_time) {
+            const [eh, em] = s.end_time.split(':').map(Number);
+            endMin = eh * 60 + em;
+            if (endMin <= startMin) endMin += 24 * 60; // overnight shift
+          }
+          return nowMin >= startMin - 15 && nowMin <= endMin;
+        });
+        if (data.withinGeofence && data.autoClockIn && !currentSession && !alreadyTriggered && hasScheduledShiftNow) {
           geofenceTriggeredRef.current.add(clientId);
           // Auto clock in
           const clockRes = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
@@ -631,7 +652,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // A coarse fix (~20-65m) is well inside the ~300ft EVV geofence, so we never block on
   // a cold satellite lock — that cold lock is the "GPS is taking too long" failure.
   // Returns { latitude, longitude, source } or throws an error with .code matching PositionError codes.
-  const acquireLocationForClock = async () => {
+  const acquireLocationForClock = async ({ fast = false } = {}) => {
     // 1. Recent cached watcher fix
     const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
     if (location?.latitude && age < 300000) {
@@ -640,14 +661,16 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
     // 2. Fast coarse fix — accepts a recent OS last-known fix (works indoors)
     try {
-      const p = await getCurrentPositionOnce({ highAccuracy: false, timeout: 8000, maximumAge: 120000 });
+      const p = await getCurrentPositionOnce({ highAccuracy: false, timeout: fast ? 5000 : 8000, maximumAge: 120000 });
       if (p?.latitude) return { latitude: p.latitude, longitude: p.longitude, source: 'coarse' };
     } catch (_) {
       // fall through to high-accuracy
     }
 
     // 3. High-accuracy GPS — longer timeout, but still accept a recent OS fix so we
-    //    never hang waiting on a cold satellite lock.
+    //    never hang waiting on a cold satellite lock. `fast` callers (clock-out)
+    //    skip this so a missing fix surfaces in ~5s instead of ~28s.
+    if (fast) { const e = new Error('GPS timeout'); e.code = 3; throw e; }
     const p = await getCurrentPositionOnce({ highAccuracy: true, timeout: 20000, maximumAge: 60000 });
     return { latitude: p?.latitude, longitude: p?.longitude, source: 'gps' };
   };
@@ -768,31 +791,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = null;
       let lng = null;
       if (!skipGps) {
+        // Clock-OUT must never strand a caregiver. Try for a quick GPS fix, but if
+        // it can't be acquired, clock out anyway with no location and notify admins
+        // for EVV reconciliation — never block the way clock-IN does. (Clock-IN
+        // still hard-requires GPS to keep EVV start times trustworthy.)
         try {
-          const fix = await acquireLocationForClock();
+          const fix = await acquireLocationForClock({ fast: true });
           lat = fix.latitude || null;
           lng = fix.longitude || null;
         } catch (err) {
-          await hapticNotify('error');
-          setGpsRetry({
-            action: 'clock-out',
-            message: gpsErrorMessage(err, 'clock out'),
-            retryFn: () => { setGpsRetry(null); completeClockOut(); },
-            forceFn: () => { setGpsRetry(null); completeClockOut({ skipGps: true }); }
-          });
           reportGpsFailure('clock-out', err, activeSession?.client_id || selectedClient);
-          return;
         }
         if (!lat || !lng) {
-          await hapticNotify('error');
-          setGpsRetry({
-            action: 'clock-out',
-            message: gpsErrorMessage(null, 'clock out'),
-            retryFn: () => { setGpsRetry(null); completeClockOut(); },
-            forceFn: () => { setGpsRetry(null); completeClockOut({ skipGps: true }); }
-          });
           reportGpsFailure('clock-out', null, activeSession?.client_id || selectedClient);
-          return;
         }
       }
 
