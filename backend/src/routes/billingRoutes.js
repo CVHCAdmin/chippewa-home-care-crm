@@ -317,7 +317,9 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     const amount = rateType === 'hourly' ? hours * rate : rate;
     invoiceTotal += amount;
 
-    const baseDesc = entry?.notes || visit.notes || 'Home Care Services';
+    // Notes (time-entry/visit) are internal and must NOT appear on invoices.
+    // Use a generic service label; keep the billing-relevant time-range suffix.
+    const baseDesc = 'Home Care Services';
     const description = timeRangeLabel
       ? `${baseDesc} (${timeRangeLabel})`
       : baseDesc;
@@ -359,7 +361,8 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     const timeRangeLabel = et
       ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
       : '';
-    const baseDesc = entry.notes || 'Home Care Services (unscheduled)';
+    // Notes are internal — never bill them. Generic label only.
+    const baseDesc = 'Home Care Services (unscheduled)';
 
     lineItems.push({
       time_entry_id: entry.time_entry_id,
