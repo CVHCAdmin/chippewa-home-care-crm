@@ -1051,6 +1051,96 @@ router.delete('/invoices/:id', auth, async (req, res) => {
   }
 });
 
+// ==================== EDIT INVOICE LINE ITEMS ====================
+
+// PUT /api/billing/invoices/:id/line-items
+// Replace an invoice's line items and recompute its totals. Supports editing,
+// adding, and removing lines. Allowed on any invoice that is NOT yet paid —
+// including one already emailed — but never one with a payment recorded.
+// Mirrors the math/columns used by /invoices/manual so totals stay consistent.
+router.put('/invoices/:id/line-items', auth, async (req, res) => {
+  const { id } = req.params;
+  const { lineItems, detailedMode } = req.body;
+
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    return res.status(400).json({ error: 'At least one line item is required' });
+  }
+
+  const dbClient = await db.pool.connect();
+  try {
+    const invResult = await dbClient.query(
+      'SELECT id, payment_status, amount_paid, tax FROM invoices WHERE id = $1', [id]
+    );
+    if (invResult.rows.length === 0) return res.status(404).json({ error: 'Invoice not found' });
+    const invoice = invResult.rows[0];
+
+    // Refuse once any money has been collected — never alter a paid invoice.
+    if (invoice.payment_status === 'paid' || parseFloat(invoice.amount_paid || 0) > 0) {
+      return res.status(409).json({ error: 'This invoice has a payment recorded and can no longer be edited.' });
+    }
+
+    // Same 24h -> 12h conversion the manual-create path uses for printed times.
+    const to12h = (hhmm) => {
+      if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return hhmm;
+      const [h, m] = hhmm.split(':').map(Number);
+      const ampm = h < 12 ? 'AM' : 'PM';
+      const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      return `${dh}:${m.toString().padStart(2, '0')} ${ampm}`;
+    };
+
+    let subtotal = 0;
+    const prepared = lineItems.map((item) => {
+      const hours = parseFloat(item.hours || 0);
+      const rate = parseFloat(item.rate || 0);
+      const amount = hours * rate;
+      subtotal += amount;
+      let description = item.description || 'Home Care Services';
+      if (detailedMode && item.startTime && item.endTime) {
+        description = `${description} (${to12h(item.startTime)} - ${to12h(item.endTime)})`;
+      }
+      return {
+        caregiver_id: item.caregiverId || item.caregiver_id || null,
+        description: clampLineItemDescription(description),
+        hours,
+        rate,
+        amount,
+        service_date: item.serviceDate || item.service_date || null,
+        time_entry_id: item.timeEntryId || item.time_entry_id || null,
+      };
+    });
+
+    const tax = parseFloat(invoice.tax || 0);
+    const total = subtotal + tax;
+
+    await dbClient.query('BEGIN');
+    await dbClient.query('DELETE FROM invoice_line_items WHERE invoice_id = $1', [id]);
+    for (const li of prepared) {
+      await dbClient.query(
+        `INSERT INTO invoice_line_items
+          (invoice_id, caregiver_id, description, hours, rate, amount, service_date, time_entry_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [id, li.caregiver_id, li.description, li.hours, li.rate, li.amount, li.service_date, li.time_entry_id]
+      );
+    }
+    const updated = await dbClient.query(
+      'UPDATE invoices SET subtotal = $1, total = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
+      [subtotal, total, id]
+    );
+    await dbClient.query('COMMIT');
+
+    const items = await dbClient.query(
+      'SELECT * FROM invoice_line_items WHERE invoice_id = $1 ORDER BY service_date NULLS LAST, created_at', [id]
+    );
+    res.json({ ...updated.rows[0], line_items: items.rows });
+  } catch (error) {
+    try { await dbClient.query('ROLLBACK'); } catch (_) {}
+    console.error('Error editing invoice line items:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    dbClient.release();
+  }
+});
+
 // ==================== SEND INVOICE EMAIL ====================
 
 // Send invoice to client via email with Pay Now link

@@ -474,6 +474,65 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     }
   };
 
+  // ── Edit invoice line items (any unpaid invoice) ──────────────────────────
+  const [editingInvoice, setEditingInvoice] = useState(null); // invoice being edited
+  const [editLines, setEditLines] = useState([]);             // working copy of rows
+  const [savingLineItems, setSavingLineItems] = useState(false);
+
+  const openLineItemEditor = (invoice) => {
+    const src = (invoice.line_items && invoice.line_items.length)
+      ? invoice.line_items
+      : [{ description: 'Home Care Services', hours: invoice.total_hours || '', rate: '' }];
+    setEditLines(src.map(li => ({
+      description: li.description || 'Home Care Services',
+      hours: li.hours != null ? String(li.hours) : '',
+      rate: li.rate != null ? String(li.rate) : '',
+      service_date: li.service_date ? String(li.service_date).slice(0, 10) : '',
+      caregiver_id: li.caregiver_id || null,
+      time_entry_id: li.time_entry_id || null,
+    })));
+    setEditingInvoice(invoice);
+  };
+
+  const editLineAmount = (l) => parseFloat(l.hours || 0) * parseFloat(l.rate || 0);
+  const editGrandTotal = () => editLines.reduce((s, l) => s + editLineAmount(l), 0);
+  const updateEditLine = (idx, field, value) => setEditLines(prev => prev.map((l, i) => i === idx ? { ...l, [field]: value } : l));
+  const addEditLine = () => setEditLines(prev => [...prev, { description: 'Home Care Services', hours: '', rate: '', service_date: '', caregiver_id: null, time_entry_id: null }]);
+  const removeEditLine = (idx) => setEditLines(prev => prev.filter((_, i) => i !== idx));
+
+  const saveLineItems = async () => {
+    if (!editingInvoice?.id) return;
+    const cleaned = editLines
+      .filter(l => (l.description || '').trim() || parseFloat(l.hours || 0) || parseFloat(l.rate || 0))
+      .map(l => ({
+        description: (l.description || '').trim() || 'Home Care Services',
+        hours: parseFloat(l.hours || 0),
+        rate: parseFloat(l.rate || 0),
+        serviceDate: l.service_date || null,
+        caregiver_id: l.caregiver_id || null,
+        time_entry_id: l.time_entry_id || null,
+      }));
+    if (cleaned.length === 0) { toast('Add at least one line item', 'error'); return; }
+    setSavingLineItems(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${editingInvoice.id}/line-items`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ lineItems: cleaned }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to save changes');
+      toast('Invoice updated', 'success');
+      setSelectedInvoice(prev => (prev && prev.id === data.id) ? { ...prev, ...data } : prev);
+      setEditingInvoice(null);
+      loadData();
+    } catch (error) {
+      toast('Failed to save: ' + error.message, 'error');
+    } finally {
+      setSavingLineItems(false);
+    }
+  };
+
   const [sendingInvoiceEmail, setSendingInvoiceEmail] = useState(false);
   const [creatingPaymentLink, setCreatingPaymentLink] = useState(false);
 
@@ -1390,6 +1449,53 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
         </div>
       )}
 
+      {/* EDIT LINE ITEMS MODAL */}
+      {editingInvoice && (
+        <div className="modal active">
+          <div className="modal-content modal-large">
+            <div className="modal-header">
+              <h2>Edit Invoice {editingInvoice.invoice_number}</h2>
+              <button className="close-btn" onClick={() => setEditingInvoice(null)}>×</button>
+            </div>
+            <p className="text-muted" style={{ marginTop: 0 }}>
+              Edit, add, or remove line items, then save — totals recalculate automatically. A paid invoice can't be edited.
+            </p>
+            <table className="invoice-table">
+              <thead>
+                <tr>
+                  <th style={{ width: '38%' }}>Description</th>
+                  <th>Date</th>
+                  <th>Hours</th>
+                  <th>Rate</th>
+                  <th>Amount</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {editLines.map((l, idx) => (
+                  <tr key={idx}>
+                    <td><input type="text" value={l.description} onChange={(e) => updateEditLine(idx, 'description', e.target.value)} placeholder="Home Care Services" style={{ width: '100%' }} /></td>
+                    <td><input type="date" value={l.service_date} onChange={(e) => updateEditLine(idx, 'service_date', e.target.value)} /></td>
+                    <td><input type="number" step="0.01" min="0" value={l.hours} onChange={(e) => updateEditLine(idx, 'hours', e.target.value)} style={{ width: 80 }} /></td>
+                    <td><input type="number" step="0.01" min="0" value={l.rate} onChange={(e) => updateEditLine(idx, 'rate', e.target.value)} style={{ width: 80 }} /></td>
+                    <td>{formatCurrency(editLineAmount(l))}</td>
+                    <td><button type="button" className="btn btn-secondary" onClick={() => removeEditLine(idx)} title="Remove line">🗑️</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+              <button type="button" className="btn btn-secondary" onClick={addEditLine}>+ Add Line</button>
+              <div style={{ fontWeight: 700 }}>Total: {formatCurrency(editGrandTotal())}</div>
+            </div>
+            <div className="modal-actions" style={{ marginTop: 16 }}>
+              <button type="button" className="btn btn-primary" onClick={saveLineItems} disabled={savingLineItems}>{savingLineItems ? 'Saving…' : 'Save Changes'}</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditingInvoice(null)} disabled={savingLineItems}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* AUTHORIZATION MODAL */}
       {showAuthModal && (
         <div className="modal active">
@@ -1899,6 +2005,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <div className="modal-actions no-print" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #eee' }}>
               {selectedInvoice.payment_status !== 'paid' && (
                 <>
+                  <button className="btn btn-secondary" onClick={() => openLineItemEditor(selectedInvoice)}>✏️ Edit Line Items</button>
                   <button className="btn btn-success" onClick={() => { setPaymentFormData({ ...paymentFormData, invoiceId: selectedInvoice.id }); setShowInvoiceModal(false); setShowPaymentModal(true); }}>💳 Record Payment</button>
                   <button className="btn btn-warning" onClick={() => handleMarkPaid(selectedInvoice.id)}>✓ Mark Paid</button>
                   <button className="btn btn-primary" onClick={() => handleCreatePaymentLink(selectedInvoice)} disabled={creatingPaymentLink}>
