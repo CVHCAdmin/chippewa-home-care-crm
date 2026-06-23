@@ -2,6 +2,7 @@ import { confirm } from '../ConfirmModal';
 // src/components/admin/IncidentReporting.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const IncidentReporting = ({ token }) => {
   const [clients, setClients] = useState([]);
@@ -445,7 +446,7 @@ const IncidentReporting = ({ token }) => {
                     {getClientName(incident.client_id)} - {getIncidentTypeLabel(incident.incident_type)}
                   </h4>
                   <small style={{ color: '#666' }}>
-                    {new Date(incident.incident_date).toLocaleDateString()} at {incident.incident_time || 'Unknown time'}
+                    {formatDate(incident.incident_date)} at {incident.incident_time || 'Unknown time'}
                   </small>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -519,7 +520,7 @@ const IncidentReporting = ({ token }) => {
               )}
 
               <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #ddd', fontSize: '0.85rem', color: '#999' }}>
-                Reported by {incident.reported_by || 'Unknown'} on {new Date(incident.reported_date).toLocaleDateString()}
+                Reported by {incident.reported_by || 'Unknown'} on {formatDate(incident.reported_date)}
               </div>
             </div>
           ))}

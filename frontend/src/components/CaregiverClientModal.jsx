@@ -2,6 +2,7 @@
 // What caregivers see when they click on a client - care-focused info only, no admin/billing
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../config';
+import { formatDate } from '../utils/datetime';
 
 const CaregiverClientModal = ({ clientId, isOpen, onClose, token }) => {
   const [client, setClient] = useState(null);
@@ -115,7 +116,7 @@ const CaregiverClientModal = ({ clientId, isOpen, onClose, token }) => {
                   <h4 style={{ marginTop: 0 }}>👤 Basic Information</h4>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                     <p><strong>Phone:</strong> <a href={`tel:${client.phone}`}>{client.phone || 'N/A'}</a></p>
-                    <p><strong>DOB:</strong> {client.date_of_birth ? new Date(client.date_of_birth).toLocaleDateString() : 'N/A'}</p>
+                    <p><strong>DOB:</strong> {client.date_of_birth ? formatDate(client.date_of_birth) : 'N/A'}</p>
                     <p style={{ gridColumn: '1 / -1' }}>
                       <strong>Address:</strong>{' '}
                       {client.address ? (

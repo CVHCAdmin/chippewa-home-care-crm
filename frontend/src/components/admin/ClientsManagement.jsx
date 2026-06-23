@@ -5,6 +5,7 @@ import { API_BASE_URL } from '../../config';
 import EditClientModal from './EditClientModal';
 import ClientReportModal from './ClientReportModal';
 import CareTasksManager from './CareTasksManager';
+import { formatDate } from '../../utils/datetime';
 
 // AddressLink component - opens Google Maps
 const AddressLink = ({ address, city, state, zip }) => {
@@ -34,7 +35,7 @@ const ClientCard = ({ client, getReferralSourceName, getCareTypeName, onEdit, on
         <strong style={{ fontSize: '1.1rem' }}>{client.first_name} {client.last_name}</strong>
         {client.date_of_birth && (
           <div style={{ color: '#666', fontSize: '0.85rem' }}>
-            DOB: {new Date(client.date_of_birth).toLocaleDateString()}
+            DOB: {formatDate(client.date_of_birth)}
           </div>
         )}
       </div>
@@ -717,7 +718,7 @@ const ClientsManagement = ({ token }) => {
                   </td>
                   <td>
                     <strong>{client.first_name} {client.last_name}</strong>
-                    {client.date_of_birth && (<small style={{ display: 'block', color: '#666' }}>DOB: {new Date(client.date_of_birth).toLocaleDateString()}</small>)}
+                    {client.date_of_birth && (<small style={{ display: 'block', color: '#666' }}>DOB: {formatDate(client.date_of_birth)}</small>)}
                   </td>
                   <td><a href={`tel:${client.phone}`}>{client.phone || 'N/A'}</a></td>
                   <td>{client.email ? (<a href={`mailto:${client.email}`}>{client.email}</a>) : (<span className="text-muted">-</span>)}</td>

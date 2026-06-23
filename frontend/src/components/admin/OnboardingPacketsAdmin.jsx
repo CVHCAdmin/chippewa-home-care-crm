@@ -5,6 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { toast } from '../Toast';
+import { formatDate } from '../../utils/datetime';
 import EligibilityCard from './EligibilityCard';
 
 const STATUS_META = {
@@ -31,7 +32,7 @@ const s = {
   value: { color: '#0F172A', fontSize: '0.9rem', marginBottom: '0.75rem' },
 };
 
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : '—';
+const fmtDate = (d) => d ? formatDate(d) : '—';
 const fmtDT   = (d) => d ? new Date(d).toLocaleString() : '—';
 
 const OnboardingPacketsAdmin = ({ token }) => {

@@ -3,6 +3,7 @@ import { toast } from '../Toast';
 // src/components/admin/ADLTracking.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDateTZ, formatTime } from '../../utils/datetime';
 
 const ADLTracking = ({ token }) => {
   const [clients, setClients] = useState([]);
@@ -210,7 +211,7 @@ const ADLTracking = ({ token }) => {
 
   // Group logs by date
   const logsByDate = logs.reduce((acc, log) => {
-    const date = new Date(log.performed_at).toLocaleDateString();
+    const date = formatDateTZ(log.performed_at);
     if (!acc[date]) acc[date] = [];
     acc[date].push(log);
     return acc;
@@ -326,7 +327,7 @@ const ADLTracking = ({ token }) => {
                             <td><strong>{getCategoryName(log.adl_category)}</strong></td>
                             <td>{getStatusBadge(log.status)}</td>
                             <td>{getAssistanceBadge(log.assistance_level)}</td>
-                            <td>{new Date(log.performed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                            <td>{formatTime(log.performed_at, { hour: '2-digit', minute: '2-digit' })}</td>
                             <td>{log.caregiver_first} {log.caregiver_last}</td>
                             <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {log.notes || '-'}

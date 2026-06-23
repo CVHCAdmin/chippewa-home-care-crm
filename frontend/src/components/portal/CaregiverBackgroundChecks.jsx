@@ -3,6 +3,7 @@
 // Shared by the Client Portal and Family Portal caregiver lists.
 import React, { useState } from 'react';
 import { apiCall } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const TYPE_LABELS = {
   worcs: 'Wisconsin Caregiver Background Check (WI DOJ)',
@@ -32,7 +33,7 @@ const statusBadge = (check) => {
   return { label: check.result || check.status || 'On File', bg: '#d1ecf1', fg: '#0c5460' };
 };
 
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+const fmtDate = (d) => d ? formatDate(d, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
 
 const CaregiverBackgroundChecks = ({ token, caregiverId, apiBase }) => {
   const [open, setOpen]       = useState(false);

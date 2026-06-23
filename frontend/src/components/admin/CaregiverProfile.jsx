@@ -1,6 +1,7 @@
 // src/components/admin/CaregiverProfile.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const CaregiverProfile = ({ caregiverId, token, onBack }) => {
   const [caregiver, setCaregiver] = useState(null);
@@ -204,7 +205,7 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
           <h3>Contact Information</h3>
           <p><strong>Email:</strong> {caregiver.email}</p>
           <p><strong>Phone:</strong> {caregiver.phone || 'Not provided'}</p>
-          <p><strong>Hire Date:</strong> {caregiver.hire_date ? new Date(caregiver.hire_date).toLocaleDateString() : 'N/A'}</p>
+          <p><strong>Hire Date:</strong> {caregiver.hire_date ? formatDate(caregiver.hire_date) : 'N/A'}</p>
           <p><strong>Role:</strong> <span className="badge badge-info">{caregiver.role?.toUpperCase()}</span></p>
         </div>
 
@@ -337,10 +338,10 @@ const CaregiverProfile = ({ caregiverId, token, onBack }) => {
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
                     <div>
-                      <strong>Issued:</strong> {new Date(cert.issued_date).toLocaleDateString()}
+                      <strong>Issued:</strong> {formatDate(cert.issued_date)}
                     </div>
                     <div>
-                      <strong>Expires:</strong> {new Date(cert.expiration_date).toLocaleDateString()}
+                      <strong>Expires:</strong> {formatDate(cert.expiration_date)}
                     </div>
                   </div>
                 </div>

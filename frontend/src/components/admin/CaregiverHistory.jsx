@@ -2,6 +2,7 @@
 // Shift timeline + GPS route viewer for admin
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatTime as formatTimeCT } from '../../utils/datetime';
 
 const formatDuration = (minutes) => {
   if (!minutes) return '—';
@@ -78,7 +79,7 @@ const GPSRouteMap = ({ timeEntryId, token, onClose }) => {
     // Start marker (green)
     if (latlngs.length > 0) {
       L.circleMarker(latlngs[0], { radius: 10, fillColor: '#16A34A', color: '#fff', weight: 2, fillOpacity: 1 })
-        .bindPopup(`<b>Clock In</b><br>${new Date(points[0].timestamp).toLocaleTimeString()}`)
+        .bindPopup(`<b>Clock In</b><br>${formatTimeCT(points[0].timestamp)}`)
         .addTo(map);
     }
 
@@ -86,7 +87,7 @@ const GPSRouteMap = ({ timeEntryId, token, onClose }) => {
     if (latlngs.length > 1) {
       const last = latlngs[latlngs.length - 1];
       L.circleMarker(last, { radius: 10, fillColor: '#DC2626', color: '#fff', weight: 2, fillOpacity: 1 })
-        .bindPopup(`<b>Clock Out</b><br>${new Date(points[points.length - 1].timestamp).toLocaleTimeString()}`)
+        .bindPopup(`<b>Clock Out</b><br>${formatTimeCT(points[points.length - 1].timestamp)}`)
         .addTo(map);
     }
 

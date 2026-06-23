@@ -1,6 +1,7 @@
 // src/components/admin/ShiftSwaps.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate, formatDateTZ } from '../../utils/datetime';
 
 const ShiftSwaps = ({ token }) => {
   const [swaps, setSwaps] = useState([]);
@@ -168,11 +169,7 @@ const ShiftSwaps = ({ token }) => {
                 <tr key={swap.id}>
                   <td>
                     <strong>
-                      {new Date(swap.shift_date).toLocaleDateString('en-US', { 
-                        weekday: 'short', 
-                        month: 'short', 
-                        day: 'numeric' 
-                      })}
+                      {formatDate(swap.shift_date, { weekday: 'short', month: 'short', day: 'numeric' })}
                     </strong>
                   </td>
                   <td>{swap.start_time?.slice(0,5)} - {swap.end_time?.slice(0,5)}</td>
@@ -193,7 +190,7 @@ const ShiftSwaps = ({ token }) => {
                   </td>
                   <td>{getStatusBadge(swap.status)}</td>
                   <td style={{ fontSize: '0.85rem' }}>
-                    {new Date(swap.requested_at).toLocaleDateString()}
+                    {formatDateTZ(swap.requested_at)}
                   </td>
                   <td>
                     {swap.status === 'accepted' && (

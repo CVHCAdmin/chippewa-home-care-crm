@@ -2,6 +2,7 @@ import { toast } from '../Toast';
 // src/components/admin/ClaimsManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const ClaimsManagement = ({ token }) => {
   const [claims, setClaims] = useState([]);
@@ -298,7 +299,7 @@ const ClaimsManagement = ({ token }) => {
                   <td><strong>{claim.claim_number}</strong></td>
                   <td>{claim.client_first_name} {claim.client_last_name}</td>
                   <td>{claim.payer_name}</td>
-                  <td>{claim.service_date_from ? new Date(claim.service_date_from).toLocaleDateString() : '-'}</td>
+                  <td>{claim.service_date_from ? formatDate(claim.service_date_from) : '-'}</td>
                   <td><strong>${Number(parseFloat(claim.charge_amount || 0)).toFixed(2)}</strong></td>
                   <td>{getStatusBadge(claim.status)}</td>
                   <td>

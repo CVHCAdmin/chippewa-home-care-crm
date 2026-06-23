@@ -4,6 +4,7 @@ import { toast } from '../Toast';
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import SignaturePad from '../SignaturePad';
+import { formatDate, formatDateTZ } from '../../utils/datetime';
 
 const DocumentsManagement = ({ token }) => {
   const [documents, setDocuments] = useState([]);
@@ -294,14 +295,14 @@ const DocumentsManagement = ({ token }) => {
                   <td>{getCategoryBadge(doc.category)}</td>
                   <td>{formatFileSize(doc.file_size)}</td>
                   <td style={{ fontSize: '0.85rem' }}>
-                    {new Date(doc.uploaded_at).toLocaleDateString()}
+                    {formatDateTZ(doc.uploaded_at)}
                   </td>
                   <td>
                     {doc.expiration_date ? (
                       <span style={{ 
                         color: new Date(doc.expiration_date) < new Date() ? '#f44336' : '#333'
                       }}>
-                        {new Date(doc.expiration_date).toLocaleDateString()}
+                        {formatDate(doc.expiration_date)}
                       </span>
                     ) : '-'}
                   </td>

@@ -5,6 +5,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import VitalsTracker from './VitalsTracker';
 import VisitPhotoGallery from './VisitPhotoGallery';
+import { formatDate } from '../../utils/datetime';
 
 const MedicationsManagement = ({ token }) => {
   const [clients, setClients] = useState([]);
@@ -343,7 +344,7 @@ const MedicationsManagement = ({ token }) => {
                             <tr key={med.id} style={{ opacity: 0.6 }}>
                               <td>{med.medication_name}</td>
                               <td>{med.dosage || '-'}</td>
-                              <td>{med.end_date ? new Date(med.end_date).toLocaleDateString() : '-'}</td>
+                              <td>{med.end_date ? formatDate(med.end_date) : '-'}</td>
                               <td>{getStatusBadge(false)}</td>
                             </tr>
                           ))}

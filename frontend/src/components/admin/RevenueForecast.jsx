@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const API = API_BASE_URL;
 
@@ -105,7 +106,7 @@ export default function RevenueForecast({ token }) {
                 const collected = parseFloat(row.collected || 0);
                 const maxBilled = Math.max(...actual.map(r => parseFloat(r.billed || 0)), 1);
                 const collRate = billed > 0 ? Math.round((collected / billed) * 100) : 0;
-                const period = new Date(row.period).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                const period = formatDate(row.period, { month: 'long', year: 'numeric' });
                 return (
                   <div key={i} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: '10px', padding: '1rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>

@@ -2,6 +2,7 @@ import { confirm } from '../ConfirmModal';
 // src/components/admin/CarePlans.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const CarePlans = ({ token }) => {
   const [clients, setClients] = useState([]);
@@ -592,8 +593,8 @@ const CarePlans = ({ token }) => {
                               </div>
 
                               <div style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-                                <strong>Period:</strong> {new Date(plan.start_date).toLocaleDateString()}
-                                {plan.end_date && ` - ${new Date(plan.end_date).toLocaleDateString()}`}
+                                <strong>Period:</strong> {formatDate(plan.start_date)}
+                                {plan.end_date && ` - ${formatDate(plan.end_date)}`}
                               </div>
 
                               {plan.service_description && (

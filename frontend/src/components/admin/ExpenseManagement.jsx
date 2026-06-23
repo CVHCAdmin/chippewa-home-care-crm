@@ -4,6 +4,7 @@ import { toast } from '../Toast';
 // Complete expense tracking: Categories, Filtering, Reports, Receipt Management, Budgets
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const ExpenseManagement = ({ token }) => {
   const [expenses, setExpenses] = useState([]);
@@ -439,7 +440,7 @@ const ExpenseManagement = ({ token }) => {
               const categoryInfo = getCategoryInfo(expense.category);
               return (
                 <tr key={expense.id}>
-                  <td>{new Date(expense.expense_date).toLocaleDateString()}</td>
+                  <td>{formatDate(expense.expense_date)}</td>
                   <td>
                     <span style={{ 
                       display: 'inline-flex', 

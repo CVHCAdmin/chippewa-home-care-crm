@@ -2,6 +2,7 @@ import { toast } from '../Toast';
 // src/components/admin/ReportsAnalytics.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const ReportsAnalytics = ({ token }) => {
   const [reportType, setReportType] = useState('overview');
@@ -598,7 +599,7 @@ const ReportsAnalytics = ({ token }) => {
                   if (c.format === 'num') v = fmtNum(v);
                   else if (c.format === 'pct') v = fmtPct(v);
                   else if (c.format === 'hr') v = v != null ? `${parseFloat(v).toFixed(2)}h` : '—';
-                  else if (c.format === 'date' && v) v = new Date(v).toLocaleDateString();
+                  else if (c.format === 'date' && v) v = formatDate(v);
                   return <td key={c.key} style={{ textAlign: c.right ? 'right' : 'left', fontWeight: c.bold ? 700 : 400 }}>{v ?? '—'}</td>;
                 })}
               </tr>

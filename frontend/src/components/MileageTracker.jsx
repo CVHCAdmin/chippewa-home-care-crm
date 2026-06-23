@@ -2,6 +2,7 @@
 // Simple start/stop mileage tracking for caregivers
 import React, { useState } from 'react';
 import { API_BASE_URL } from '../config';
+import { formatDate } from '../utils/datetime';
 
 // Calculate distance between two GPS points (Haversine formula)
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -354,7 +355,7 @@ const MileageTracker = ({ token, caregiverId }) => {
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <strong>{trip.miles} mi</strong>
                     <span style={{ color: '#666' }}>
-                      {new Date(trip.date).toLocaleDateString()}
+                      {formatDate(trip.date)}
                     </span>
                   </div>
                   {(trip.from_location || trip.to_location) && (

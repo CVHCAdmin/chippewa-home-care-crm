@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { API_BASE_URL } from '../../config';
 import { usePolling } from '../../hooks/usePolling';
 import VisitGpsMap from './VisitGpsMap';
+import { formatTime } from '../../utils/datetime';
 
 const LiveBoard = ({ token }) => {
   const [data, setData] = useState({ shifts: [], stats: {}, asOf: null });
@@ -52,7 +53,7 @@ const LiveBoard = ({ token }) => {
         <h2>Live Shift Board</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <span style={{ fontSize: '0.78rem', color: '#6B7280' }}>
-            Auto-refreshes every 30s {data.asOf && `| Last: ${new Date(data.asOf).toLocaleTimeString()}`}
+            Auto-refreshes every 30s {data.asOf && `| Last: ${formatTime(data.asOf)}`}
           </span>
           <button className="btn btn-sm btn-primary" onClick={loadBoard}>Refresh Now</button>
         </div>
@@ -209,7 +210,7 @@ const LiveBoard = ({ token }) => {
                         <strong>GPS Trail ({shift.gps_trail.length} points)</strong>
                         <div style={{ maxHeight: 100, overflow: 'auto', fontSize: '0.72rem', color: '#9CA3AF', marginTop: '0.25rem' }}>
                           {shift.gps_trail.map((pt, i) => (
-                            <div key={i}>{new Date(pt.ts).toLocaleTimeString()} — {pt.lat?.toFixed(5)}, {pt.lng?.toFixed(5)}</div>
+                            <div key={i}>{formatTime(pt.ts)} — {pt.lat?.toFixed(5)}, {pt.lng?.toFixed(5)}</div>
                           ))}
                         </div>
                       </div>

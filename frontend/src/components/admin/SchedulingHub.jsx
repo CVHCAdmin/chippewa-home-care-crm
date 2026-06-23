@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import { getTodayCT } from '../../utils/timezone';
+import { formatDate } from '../../utils/datetime';
 import AutoFillButton from './AutoFillButton';
 import DragDropScheduler from './DragDropScheduler';
 import ScheduleOptimizer from './ScheduleOptimizer';
@@ -1168,7 +1169,7 @@ const SchedulingHub = ({ token }) => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <div>
                       <strong>{shift.client_first || ''} {shift.client_last || ''}</strong>
-                      <div style={{ fontSize: '0.85rem', color: '#666' }}>{shift.shift_date ? new Date(shift.shift_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : ''} · {formatTime(shift.start_time)} – {formatTime(shift.end_time)}</div>
+                      <div style={{ fontSize: '0.85rem', color: '#666' }}>{shift.shift_date ? formatDate(shift.shift_date, { weekday: 'short', month: 'short', day: 'numeric' }) : ''} · {formatTime(shift.start_time)} – {formatTime(shift.end_time)}</div>
                       {shift.notes && <div style={{ fontSize: '0.82rem', color: '#888', marginTop: '0.3rem' }}>{shift.notes}</div>}
                     </div>
                     <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
@@ -1202,7 +1203,7 @@ const SchedulingHub = ({ token }) => {
                 <tbody>
                   {swaps.map(sw => (
                     <tr key={sw.id}>
-                      <td><strong>{sw.shift_date ? new Date(sw.shift_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : ''}</strong></td>
+                      <td><strong>{sw.shift_date ? formatDate(sw.shift_date, { weekday: 'short', month: 'short', day: 'numeric' }) : ''}</strong></td>
                       <td>{sw.start_time?.slice(0,5)}–{sw.end_time?.slice(0,5)}</td>
                       <td>{sw.client_first} {sw.client_last}</td>
                       <td><strong>{sw.requester_first} {sw.requester_last}</strong></td>
@@ -1266,7 +1267,7 @@ const SchedulingHub = ({ token }) => {
                   {absences.map(ab => (
                     <tr key={ab.id}>
                       <td><strong>{getCaregiverName(ab.caregiver_id)}</strong></td>
-                      <td>{new Date(ab.date).toLocaleDateString()}</td>
+                      <td>{formatDate(ab.date)}</td>
                       <td><span style={bge(ab.type==='no_show'?'#FEE2E2':ab.type==='sick'?'#DBEAFE':'#FEF3C7', ab.type==='no_show'?'#DC2626':ab.type==='sick'?'#2563EB':'#D97706')}>{ab.type?.replace('_', ' ').toUpperCase()}</span></td>
                       <td>{ab.reason || '—'}</td>
                       <td><button className='btn btn-sm btn-danger' onClick={() => deleteAbsence(ab.id)}>Delete</button></td>
@@ -1341,7 +1342,7 @@ const SchedulingHub = ({ token }) => {
                   <div style={{ display: 'grid', gap: '0.5rem' }}>
                     {blackoutDates.sort((a, b) => new Date(a.start_date) - new Date(b.start_date)).map(bd => (
                       <div key={bd.id} style={{ padding: '0.6rem 0.75rem', background: '#FEF2F2', borderLeft: '3px solid #DC2626', borderRadius: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div><strong style={{ fontSize: '0.88rem' }}>{new Date(bd.start_date).toLocaleDateString()} – {new Date(bd.end_date).toLocaleDateString()}</strong>{bd.reason && <div style={{ fontSize: '0.82rem', color: '#666' }}>{bd.reason}</div>}</div>
+                        <div><strong style={{ fontSize: '0.88rem' }}>{formatDate(bd.start_date)} – {formatDate(bd.end_date)}</strong>{bd.reason && <div style={{ fontSize: '0.82rem', color: '#666' }}>{bd.reason}</div>}</div>
                         <button className='btn btn-sm btn-danger' onClick={() => deleteBlackout(bd.id)}>Delete</button>
                       </div>
                     ))}

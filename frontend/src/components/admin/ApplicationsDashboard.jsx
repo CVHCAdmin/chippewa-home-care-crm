@@ -2,6 +2,7 @@ import { toast } from '../Toast';
 // src/components/admin/ApplicationsDashboard.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDateTZ } from '../../utils/datetime';
 import ApplicationDetail from './ApplicationDetail';
 
 const ApplicationsDashboard = ({ token }) => {
@@ -167,7 +168,7 @@ const ApplicationsDashboard = ({ token }) => {
               <div className="app-header">
                 <div>
                   <h4>{app.first_name} {app.last_name}</h4>
-                  <p className="app-date">{new Date(app.created_at).toLocaleDateString()}</p>
+                  <p className="app-date">{formatDateTZ(app.created_at)}</p>
                 </div>
                 <span className={`badge ${getStatusColor(app.status)}`}>
                   {(app.status || 'new').toUpperCase()}

@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiCall } from '../../config';
 import CaregiverBackgroundChecks from './CaregiverBackgroundChecks';
+import { formatDate, formatDateTZ, formatDateTime } from '../../utils/datetime';
 
 const CARD = {
   background: '#fff',
@@ -193,7 +194,7 @@ const CarePlanView = ({ token }) => {
                   {n.caregiver_first} {n.caregiver_last}
                 </strong>
                 <span style={{ color: '#888', fontSize: '0.8rem' }}>
-                  {new Date(n.start_time).toLocaleDateString()}
+                  {formatDateTZ(n.start_time)}
                   {n.duration_minutes ? ` · ${n.duration_minutes} min` : ''}
                 </span>
               </div>
@@ -238,7 +239,7 @@ const VitalsView = ({ token }) => {
       <h3 style={{ margin: '0 0 16px', fontSize: '1.1rem' }}>Latest Vitals</h3>
       <div style={{ ...CARD, marginBottom: 20 }}>
         <div style={{ fontSize: '0.78rem', color: '#666', marginBottom: 8 }}>
-          Recorded {new Date(latest.recorded_at).toLocaleString()}
+          Recorded {formatDateTime(latest.recorded_at)}
           {latest.caregiver_first && ` by ${latest.caregiver_first} ${latest.caregiver_last?.[0] || ''}.`}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
@@ -268,7 +269,7 @@ const VitalsView = ({ token }) => {
           <tbody>
             {vitals.map(v => (
               <tr key={v.id} style={{ borderTop: '1px solid #F3F4F6' }}>
-                <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{new Date(v.recorded_at).toLocaleDateString()}</td>
+                <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{formatDateTZ(v.recorded_at)}</td>
                 {FIELDS.map(f => <td key={f.k} style={{ padding: '5px 8px', textAlign: 'right' }}>{v[f.k] != null ? v[f.k] : '—'}</td>)}
               </tr>
             ))}
@@ -594,7 +595,7 @@ const OverviewView = ({ client, userName, permissions, setActiveTab }) => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.88rem' }}>
             <div><span style={{ color: '#888' }}>Name:</span> {client.first_name} {client.last_name}</div>
             {client.date_of_birth && (
-              <div><span style={{ color: '#888' }}>DOB:</span> {new Date(client.date_of_birth).toLocaleDateString()}</div>
+              <div><span style={{ color: '#888' }}>DOB:</span> {formatDate(client.date_of_birth)}</div>
             )}
             {client.phone && <div><span style={{ color: '#888' }}>Phone:</span> {client.phone}</div>}
             {client.address && (

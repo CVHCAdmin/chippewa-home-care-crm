@@ -3,6 +3,7 @@ import { toast } from '../Toast';
 // src/components/admin/CaregiverManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 import AddCaregiverModal from './AddCaregiverModal';
 import CaregiverDetail from './CaregiverDetail';
 
@@ -760,7 +761,7 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                     <tr key={rate.id}>
                       <td><strong>{rate.care_type_name}</strong></td>
                       <td><strong>{formatCurrency(rate.hourly_rate)}</strong>/hr</td>
-                      <td>{new Date(rate.effective_date).toLocaleDateString()}</td>
+                      <td>{formatDate(rate.effective_date)}</td>
                       <td>
                         <button className="btn btn-sm btn-danger" onClick={() => handleDeleteRate(rate.id)}>Remove</button>
                       </td>

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { toast } from '../Toast';
+import { formatDate } from '../../utils/datetime';
 
 const BillingEngine = ({ token }) => {
   const [activeTab, setActiveTab] = useState('claims');
@@ -298,7 +299,7 @@ const ClaimsTab = ({ token }) => {
                     <td><strong style={{ fontSize: '0.82rem' }}>{c.claim_number}</strong></td>
                     <td>{c.client_first_name} {c.client_last_name}</td>
                     <td style={{ fontSize: '0.82rem' }}>{c.payer_name || '-'}</td>
-                    <td>{c.service_date ? new Date(c.service_date).toLocaleDateString() : c.service_date_from ? new Date(c.service_date_from).toLocaleDateString() : '-'}</td>
+                    <td>{c.service_date ? formatDate(c.service_date) : c.service_date_from ? formatDate(c.service_date_from) : '-'}</td>
                     <td>{c.units_billed || c.units || '-'}</td>
                     <td><strong>${Number(parseFloat(c.charge_amount || 0)).toFixed(2)}</strong></td>
                     <td>{statusBadge(c.status)}</td>
@@ -475,7 +476,7 @@ const AuthorizationsTab = ({ token }) => {
 
               <div style={{ display: 'flex', gap: '1rem', fontSize: '0.78rem', color: '#6B7280' }}>
                 <span>Code: {a.procedure_code || 'T1019'}</span>
-                <span>Expires: {a.end_date ? new Date(a.end_date).toLocaleDateString() : 'N/A'}</span>
+                <span>Expires: {a.end_date ? formatDate(a.end_date) : 'N/A'}</span>
                 {daysLeft !== null && daysLeft <= 30 && (
                   <span style={{ color: daysLeft <= 0 ? '#EF4444' : '#F59E0B', fontWeight: '600' }}>
                     {daysLeft <= 0 ? 'EXPIRED' : `${daysLeft} days left`}
@@ -559,7 +560,7 @@ const DenialsTab = ({ token }) => {
 
               <div style={{ display: 'flex', gap: '1rem', fontSize: '0.78rem', color: '#6B7280', alignItems: 'center' }}>
                 <span>Payer: {d.payer_name || '-'}</span>
-                <span>Date: {d.service_date ? new Date(d.service_date).toLocaleDateString() : '-'}</span>
+                <span>Date: {d.service_date ? formatDate(d.service_date) : '-'}</span>
                 <span>Auth: {d.auth_number || '-'}</span>
                 <div style={{ flex: 1 }} />
                 <button className="btn btn-sm btn-primary" onClick={() => resubmit(d.id)}>Resubmit</button>
@@ -735,7 +736,7 @@ const PaymentsTab = ({ token }) => {
             <tbody>
               {payments.map(p => (
                 <tr key={p.id}>
-                  <td>{p.payment_date ? new Date(p.payment_date).toLocaleDateString() : '-'}</td>
+                  <td>{p.payment_date ? formatDate(p.payment_date) : '-'}</td>
                   <td>{p.payer_display_name || p.payer_name}</td>
                   <td>{p.check_number || '-'}</td>
                   <td><strong>${parseFloat(p.check_amount || 0).toFixed(2)}</strong></td>

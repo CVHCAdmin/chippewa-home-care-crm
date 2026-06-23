@@ -3,6 +3,7 @@ import { toast } from '../Toast';
 // src/components/admin/AbsenceManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const AbsenceManagement = ({ token }) => {
   const [absences, setAbsences] = useState([]);
@@ -212,7 +213,7 @@ const AbsenceManagement = ({ token }) => {
             {absences.map(absence => (
               <tr key={absence.id}>
                 <td><strong>{getCaregiverName(absence.caregiver_id)}</strong></td>
-                <td>{new Date(absence.date).toLocaleDateString()}</td>
+                <td>{formatDate(absence.date)}</td>
                 <td>
                   <span className={`badge ${getTypeColor(absence.type)}`}>
                     {getTypeLabel(absence.type)}

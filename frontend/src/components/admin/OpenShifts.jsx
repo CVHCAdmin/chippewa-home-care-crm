@@ -1,6 +1,7 @@
 // src/components/admin/OpenShifts.jsx
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { formatDate } from '../../utils/datetime';
 
 const OpenShifts = ({ token }) => {
   const [shifts, setShifts] = useState([]);
@@ -332,7 +333,7 @@ const OpenShifts = ({ token }) => {
               {shifts.map(shift => (
                 <tr key={shift.id}>
                   <td>
-                    <strong>{new Date(shift.shift_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
+                    <strong>{formatDate(shift.shift_date, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
                   </td>
                   <td>{shift.start_time?.slice(0,5)} - {shift.end_time?.slice(0,5)}</td>
                   <td>{shift.client_first_name} {shift.client_last_name}</td>
@@ -432,7 +433,7 @@ const OpenShifts = ({ token }) => {
             </div>
             <div>
               <p><strong>Client:</strong> {currentShift.client_first_name} {currentShift.client_last_name}</p>
-              <p><strong>Date:</strong> {new Date(currentShift.shift_date).toLocaleDateString()}</p>
+              <p><strong>Date:</strong> {formatDate(currentShift.shift_date)}</p>
               <p><strong>Time:</strong> {currentShift.start_time?.slice(0,5)} - {currentShift.end_time?.slice(0,5)}</p>
               <p><strong>Rate:</strong> ${Number(parseFloat(currentShift.hourly_rate || 0)).toFixed(2)}/hr</p>
               {parseFloat(currentShift.bonus_amount) > 0 && (
@@ -484,7 +485,7 @@ const OpenShifts = ({ token }) => {
             <div>
               <div style={{ background: '#F9FAFB', padding: '0.75rem', borderRadius: 6, marginBottom: '0.75rem', fontSize: '0.88rem' }}>
                 <strong>{smartFillShift.client_first_name} {smartFillShift.client_last_name}</strong> ·{' '}
-                {new Date(smartFillShift.shift_date).toLocaleDateString()} ·{' '}
+                {formatDate(smartFillShift.shift_date)} ·{' '}
                 {smartFillShift.start_time?.slice(0,5)}–{smartFillShift.end_time?.slice(0,5)}
               </div>
               {smartFillLoading ? (

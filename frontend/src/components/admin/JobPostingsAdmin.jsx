@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { toast } from '../Toast';
+import { formatDateTZ } from '../../utils/datetime';
 
 const s = {
   page: { maxWidth: 1100, margin: '0 auto', fontFamily: "'DM Sans', system-ui, sans-serif" },
@@ -233,8 +234,8 @@ const JobPostingsAdmin = ({ token }) => {
                 {p.summary && <div style={{ color: '#374151', fontSize: '0.88rem', marginTop: 6 }}>{p.summary}</div>}
                 <div style={{ color: '#9CA3AF', fontSize: '0.78rem', marginTop: 6 }}>
                   {Number(p.applications_count_live ?? p.applications_count ?? 0)} application{(p.applications_count_live ?? p.applications_count) === 1 ? '' : 's'}
-                  {p.published_at && ` · Posted ${new Date(p.published_at).toLocaleDateString()}`}
-                  {p.closes_at && ` · Closes ${new Date(p.closes_at).toLocaleDateString()}`}
+                  {p.published_at && ` · Posted ${formatDateTZ(p.published_at)}`}
+                  {p.closes_at && ` · Closes ${formatDateTZ(p.closes_at)}`}
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 120 }}>

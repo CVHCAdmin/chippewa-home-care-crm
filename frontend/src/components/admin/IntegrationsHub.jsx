@@ -3,10 +3,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { API_BASE_URL } from '../../config';
 import { toast } from '../Toast';
+import { formatDate } from '../../utils/datetime';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt$ = (n) => n != null ? `$${Number(parseFloat(n||0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}` : '—';
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+// Calendar-date display (tz-independent); see utils/datetime.
+const fmtDate = (d) => d ? formatDate(d, { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 const fmtNum = (n) => n != null ? Number(parseFloat(n||0)).toFixed(2) : '—';
 
 const STATUS_COLORS = {

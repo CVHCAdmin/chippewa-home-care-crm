@@ -10,6 +10,7 @@ import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, isNative, platform } from '../hooks/useNative';
+import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
 import SignaturePad from './SignaturePad';
@@ -973,7 +974,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+  // Calendar dates (shift_date, expiration_date, schedule date, time-off range) —
+  // tz-safe via the shared helper; keeps the existing weekday/short-month format.
+  const formatDate = (d) => d ? fmtCalDate(d, { weekday: 'short', month: 'short', day: 'numeric' }) : '';
   const getDayName = (n) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][n] || '';
 
   // Check if a recurring schedule is active for a given date (respects effective_date & biweekly)
@@ -1151,7 +1154,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                     {req.requesting_caregiver_first} {req.requesting_caregiver_last} wants you to take their shift
                   </div>
                   <div style={{ fontSize: '0.82rem', color: '#4338CA' }}>
-                    {req.shift_date && new Date(req.shift_date).toLocaleDateString()}
+                    {req.shift_date && formatDate(req.shift_date)}
                   </div>
                   {req.reason && <div style={{ fontSize: '0.82rem', color: '#374151', fontStyle: 'italic', marginTop: 4 }}>"{req.reason}"</div>}
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
@@ -1181,7 +1184,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                   {d.description && <div style={{ fontSize: '0.8rem', color: '#6B7280' }}>{d.description}</div>}
                   {d.expiration_date && (
                     <div style={{ fontSize: '0.78rem', color: '#DC2626', marginTop: 2 }}>
-                      Expires {new Date(d.expiration_date).toLocaleDateString()}
+                      Expires {formatDate(d.expiration_date)}
                     </div>
                   )}
                 </div>
@@ -1779,7 +1782,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <tbody>
               {recentVisits.map((v, i) => (
                 <tr key={v.id || i}>
-                  <td>{formatDate(v.start_time)}</td>
+                  <td>{formatDateTZ(v.start_time, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
                   <td><span onClick={() => setViewingClientId(v.client_id)} style={{ cursor: 'pointer', color: '#007bff' }}>{v.client_name || getClientName(v.client_id)}</span></td>
                   <td>{v.hours_worked ? `${Number(parseFloat(v.hours_worked || 0)).toFixed(2)}h` : '-'}</td>
                 </tr>
