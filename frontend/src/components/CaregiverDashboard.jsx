@@ -716,37 +716,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = null;
       let lng = null;
       if (!skipGps) {
+        // GPS must NEVER block clock-in. Try for a quick fix (coarse, ~5s); if it
+        // can't be acquired, clock in anyway with no location and notify admins
+        // for EVV reconciliation. Mirrors clock-out — a caregiver is never stranded
+        // by GPS. (Previously this showed a retry prompt and returned, which left
+        // people unable to clock in when their device's GPS was flaky.)
         try {
-          // Fast GPS (coarse, ~5s, no 20s high-accuracy wait). A coarse fix is
-          // well inside the ~300ft EVV geofence, and if it can't be acquired the
-          // caregiver gets the "Clock in anyway (no GPS)" prompt in seconds
-          // instead of being stuck ~28s — which read as "can't clock in".
           const fix = await acquireLocationForClock({ fast: true });
           lat = fix.latitude || null;
           lng = fix.longitude || null;
         } catch (err) {
-          await hapticNotify('error');
-          setGpsRetry({
-            action: 'clock-in',
-            message: gpsErrorMessage(err, 'clock in'),
-            retryFn: () => { setGpsRetry(null); handleClockIn(); },
-            forceFn: () => { setGpsRetry(null); handleClockIn({ skipGps: true }); }
-          });
           reportGpsFailure('clock-in', err, selectedClient);
-          setClockingIn(false);
-          return;
         }
         if (!lat || !lng) {
-          await hapticNotify('error');
-          setGpsRetry({
-            action: 'clock-in',
-            message: gpsErrorMessage(null, 'clock in'),
-            retryFn: () => { setGpsRetry(null); handleClockIn(); },
-            forceFn: () => { setGpsRetry(null); handleClockIn({ skipGps: true }); }
-          });
           reportGpsFailure('clock-in', null, selectedClient);
-          setClockingIn(false);
-          return;
         }
       }
 
