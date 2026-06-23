@@ -59,10 +59,10 @@ router.post('/create-checkout-session', auth, requireStripe, async (req, res) =>
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
-      // Card payments (known-good). ACH/us_bank_account was temporarily reverted
-      // after enabling it coincided with checkout failures — re-add it here (or
-      // omit this line to let the Dashboard control methods) once verified.
-      payment_method_types: ['card'],
+      // Payment methods are controlled in the Stripe Dashboard (card + ACH bank
+      // debit). Omitting payment_method_types lets Checkout show whatever is
+      // enabled there, so ACH appears automatically. (The earlier "invalid pay"
+      // was a blank customer_email, not ACH — fixed separately.)
       line_items: [
         {
           price_data: {
@@ -242,10 +242,10 @@ router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
     const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0);
 
     const session = await stripe.checkout.sessions.create({
-      // Card payments (known-good). ACH/us_bank_account was temporarily reverted
-      // after enabling it coincided with checkout failures — re-add it here (or
-      // omit this line to let the Dashboard control methods) once verified.
-      payment_method_types: ['card'],
+      // Payment methods are controlled in the Stripe Dashboard (card + ACH bank
+      // debit). Omitting payment_method_types lets Checkout show whatever is
+      // enabled there, so ACH appears automatically. (The earlier "invalid pay"
+      // was a blank customer_email, not ACH — fixed separately.)
       line_items: [
         {
           price_data: {
