@@ -59,7 +59,11 @@ router.post('/create-checkout-session', auth, requireStripe, async (req, res) =>
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
+      // Payment methods (card + ACH bank debit) are controlled in the Stripe
+      // Dashboard. Omitting payment_method_types lets Checkout show whatever is
+      // enabled there — so turning on ACH/us_bank_account in the Dashboard makes
+      // bank direct-debit appear here automatically, with no code change and no
+      // risk of erroring if it isn't enabled yet.
       line_items: [
         {
           price_data: {
@@ -233,7 +237,11 @@ router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
     const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0);
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
+      // Payment methods (card + ACH bank debit) are controlled in the Stripe
+      // Dashboard. Omitting payment_method_types lets Checkout show whatever is
+      // enabled there — so turning on ACH/us_bank_account in the Dashboard makes
+      // bank direct-debit appear here automatically, with no code change and no
+      // risk of erroring if it isn't enabled yet.
       line_items: [
         {
           price_data: {
@@ -311,34 +319,56 @@ router.post('/webhook', express.raw({ type: 'application/json' }), requireStripe
     return res.status(500).json({ error: 'idempotency check failed' });
   }
 
+  // Marks an invoice paid/partial from a completed AND settled Checkout session.
+  // Used by card (instant) and ACH bank debit (after it clears) alike. Caps
+  // amount_paid at total so a payment can't push past the invoice amount.
+  const applySessionPayment = async (session) => {
+    const invoiceId = session.metadata?.invoice_id;
+    if (!invoiceId) return;
+    const amountPaid = session.amount_total / 100; // cents -> dollars
+    await db.query(`
+      UPDATE invoices
+      SET
+        amount_paid = LEAST(total, COALESCE(amount_paid, 0) + $1),
+        payment_status = CASE
+          WHEN COALESCE(amount_paid, 0) + $1 >= total THEN 'paid'
+          ELSE 'partial'
+        END,
+        stripe_payment_id = $2,
+        paid_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $3
+    `, [amountPaid, session.payment_intent, invoiceId]);
+    console.log(`✅ Payment settled for invoice ${invoiceId}: $${amountPaid}`);
+  };
+
   // Handle the event
   switch (event.type) {
     case 'checkout.session.completed': {
       const session = event.data.object;
-      const invoiceId = session.metadata?.invoice_id;
-
-      if (invoiceId) {
-        const amountPaid = session.amount_total / 100; // Convert from cents
-
-        // Update invoice. Cap amount_paid at total so a Stripe payment can't
-        // push it past the invoice amount (mirrors the guard on the manual
-        // /invoice-payments endpoint). LEAST() clamps the running total.
-        await db.query(`
-          UPDATE invoices
-          SET
-            amount_paid = LEAST(total, COALESCE(amount_paid, 0) + $1),
-            payment_status = CASE
-              WHEN COALESCE(amount_paid, 0) + $1 >= total THEN 'paid'
-              ELSE 'partial'
-            END,
-            stripe_payment_id = $2,
-            paid_at = NOW(),
-            updated_at = NOW()
-          WHERE id = $3
-        `, [amountPaid, session.payment_intent, invoiceId]);
-
-        console.log(`✅ Payment received for invoice ${invoiceId}: $${amountPaid}`);
+      // Card payments are 'paid' the moment checkout completes. Delayed methods
+      // — ACH bank debit — return here 'unpaid'/processing and settle days
+      // later, so we must NOT mark those paid yet. We wait for the
+      // async_payment_succeeded event below instead.
+      if (session.payment_status === 'paid') {
+        await applySessionPayment(session);
+      } else {
+        console.log(`⏳ Checkout completed, payment still processing (e.g. ACH) for invoice ${session.metadata?.invoice_id}`);
       }
+      break;
+    }
+
+    // ACH/bank debit cleared — fires days after checkout for delayed methods.
+    case 'checkout.session.async_payment_succeeded': {
+      await applySessionPayment(event.data.object);
+      break;
+    }
+
+    // ACH/bank debit failed to clear (insufficient funds, closed account, etc.)
+    // Leave the invoice unpaid so it still shows as owed.
+    case 'checkout.session.async_payment_failed': {
+      const session = event.data.object;
+      console.log(`❌ Bank payment failed for invoice ${session.metadata?.invoice_id} — invoice left unpaid`);
       break;
     }
 
