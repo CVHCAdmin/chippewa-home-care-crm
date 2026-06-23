@@ -5,6 +5,16 @@ import { useParams, useSearchParams } from 'react-router-dom';
 
 import { API_BASE_URL } from '../config';
 
+// Safe date formatter — returns '' for null/unparseable values instead of the
+// literal "Invalid Date" the browser produces from new Date(null/garbage).
+const fmtDate = (v, opts = { month: 'short', day: 'numeric', year: 'numeric' }) => {
+  if (!v) return '';
+  const s = typeof v === 'string' && v.length === 10 ? v + 'T00:00:00' : v;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', opts);
+};
+const fmtMoney = (v) => `$${Number(parseFloat(v || 0)).toFixed(2)}`;
+
 const PaymentPage = () => {
   const { invoiceId } = useParams();
   const [searchParams] = useSearchParams();
@@ -112,13 +122,14 @@ const PaymentPage = () => {
         </div>
 
         <div style={styles.details}>
-          <div style={styles.detailRow}>
-            <span>Billing Period:</span>
-            <span>
-              {invoice?.billingPeriod?.start && new Date(invoice.billingPeriod.start).toLocaleDateString()} - {' '}
-              {invoice?.billingPeriod?.end && new Date(invoice.billingPeriod.end).toLocaleDateString()}
-            </span>
-          </div>
+          {(fmtDate(invoice?.billingPeriod?.start) || fmtDate(invoice?.billingPeriod?.end)) && (
+            <div style={styles.detailRow}>
+              <span>Billing Period:</span>
+              <span>
+                {fmtDate(invoice?.billingPeriod?.start)} – {fmtDate(invoice?.billingPeriod?.end)}
+              </span>
+            </div>
+          )}
           <div style={styles.detailRow}>
             <span>Invoice Total:</span>
             <span>${Number(parseFloat(invoice?.total || 0)).toFixed(2)}</span>
@@ -134,6 +145,32 @@ const PaymentPage = () => {
             <span style={styles.amountDue}>${Number(parseFloat(invoice?.amountDue || 0)).toFixed(2)}</span>
           </div>
         </div>
+
+        {invoice?.lineItems?.length > 0 && (
+          <div style={styles.details}>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#2c3e50' }}>Services</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: '#888' }}>
+                  <th style={{ padding: '4px 0' }}>Date</th>
+                  <th style={{ padding: '4px 0' }}>Service</th>
+                  <th style={{ padding: '4px 0', textAlign: 'right' }}>Hours</th>
+                  <th style={{ padding: '4px 0', textAlign: 'right' }}>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.lineItems.map((li, i) => (
+                  <tr key={i} style={{ borderTop: '1px solid #eee' }}>
+                    <td style={{ padding: '4px 8px 4px 0' }}>{fmtDate(li.service_date, { month: 'numeric', day: 'numeric' }) || '—'}</td>
+                    <td style={{ padding: '4px 8px 4px 0' }}>{li.description || 'Home Care Services'}</td>
+                    <td style={{ padding: '4px 0', textAlign: 'right' }}>{Number(parseFloat(li.hours || 0)).toFixed(2)}</td>
+                    <td style={{ padding: '4px 0', textAlign: 'right' }}>{fmtMoney(li.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {error && (
           <div style={styles.errorBanner}>

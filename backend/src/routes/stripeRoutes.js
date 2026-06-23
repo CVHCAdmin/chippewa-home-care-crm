@@ -200,6 +200,17 @@ router.get('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
     const invoice = invoiceResult.rows[0];
     const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0);
 
+    // Per-line breakdown so the client can see the days/hours they're paying for.
+    // Fall back to the linked time-entry date when service_date isn't stored.
+    const lineItemsResult = await db.query(`
+      SELECT COALESCE(ili.service_date, DATE(te.start_time)) AS service_date,
+             ili.description, ili.hours, ili.amount
+      FROM invoice_line_items ili
+      LEFT JOIN time_entries te ON te.id = ili.time_entry_id
+      WHERE ili.invoice_id = $1
+      ORDER BY COALESCE(ili.service_date, DATE(te.start_time)) NULLS LAST, ili.created_at
+    `, [invoiceId]);
+
     res.json({
       invoiceNumber: invoice.invoice_number || invoice.id.slice(0, 8),
       clientName: `${invoice.first_name} ${invoice.last_name}`,
@@ -210,7 +221,8 @@ router.get('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
       billingPeriod: {
         start: invoice.billing_period_start,
         end: invoice.billing_period_end
-      }
+      },
+      lineItems: lineItemsResult.rows
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
