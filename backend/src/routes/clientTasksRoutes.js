@@ -261,6 +261,45 @@ router.post('/clients/:clientId/care-tasks/import', verifyToken, requireAdmin, a
   }
 });
 
+// GET /api/clients/:clientId/care-tasks/adherence?days=30
+// Admin report: per active task, how often it got done vs skipped/refused vs
+// not addressed over the window — so admins can see what isn't getting done.
+router.get('/clients/:clientId/care-tasks/adherence', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    await ensureTables();
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 180);
+    const clientId = req.params.clientId;
+
+    // Denominator for daily tasks: how many shifts this client had in the window.
+    const shiftsRow = await db.query(
+      `SELECT COUNT(*)::int AS n FROM time_entries
+        WHERE client_id = $1 AND start_time >= NOW() - ($2 || ' days')::interval`,
+      [clientId, String(days)]
+    );
+    const totalShifts = shiftsRow.rows[0].n;
+
+    const inWindow = `te.start_time >= NOW() - ($2 || ' days')::interval`;
+    const result = await db.query(
+      `SELECT t.id AS task_id, t.task_name, t.category, t.cadence,
+              COUNT(*) FILTER (WHERE sc.status = 'completed' AND ${inWindow})::int AS completed,
+              COUNT(*) FILTER (WHERE sc.status = 'skipped'   AND ${inWindow})::int AS skipped,
+              COUNT(*) FILTER (WHERE sc.status = 'refused'   AND ${inWindow})::int AS refused,
+              MAX(sc.completed_at) FILTER (WHERE ${inWindow}) AS last_completed
+       FROM client_task_templates t
+       LEFT JOIN shift_task_completions sc ON sc.task_template_id = t.id
+       LEFT JOIN time_entries te ON te.id = sc.time_entry_id
+       WHERE t.client_id = $1 AND t.is_active = true
+       GROUP BY t.id, t.task_name, t.category, t.cadence, t.sort_order
+       ORDER BY t.sort_order, t.task_name`,
+      [clientId, String(days)]
+    );
+    res.json({ days, totalShifts, tasks: result.rows });
+  } catch (error) {
+    console.error('Care task adherence error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ──────────────────────────────────────────────────────────────────────────
 // Per-shift completion (caregiver during active shift)
 // ──────────────────────────────────────────────────────────────────────────

@@ -31,7 +31,23 @@ export default function CareTasksManager({ client, token, onClose }) {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
 
+  // Adherence report state ("what's getting done")
+  const [showAdherence, setShowAdherence] = useState(false);
+  const [adherence, setAdherence] = useState(null);
+  const [adherenceDays, setAdherenceDays] = useState(30);
+  const [adherenceLoading, setAdherenceLoading] = useState(false);
+
   const hdr = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+
+  const loadAdherence = async (days) => {
+    const d = days ?? adherenceDays;
+    setAdherenceLoading(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/clients/${client.id}/care-tasks/adherence?days=${d}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setAdherence(await r.json());
+    } catch (e) { /* non-fatal */ }
+    finally { setAdherenceLoading(false); }
+  };
 
   const load = async () => {
     try {
@@ -161,6 +177,69 @@ export default function CareTasksManager({ client, token, onClose }) {
             style={{ marginBottom: '0.75rem' }}>
             {showImport ? '▾ Hide MIDAS import' : '▸ Import from MIDAS assessment'}
           </button>
+          <button
+            onClick={() => { const next = !showAdherence; setShowAdherence(next); if (next && !adherence) loadAdherence(); }}
+            className="btn btn-sm btn-secondary"
+            style={{ marginBottom: '0.75rem', marginLeft: '0.5rem' }}>
+            {showAdherence ? "▾ Hide what's getting done" : "📊 What's getting done"}
+          </button>
+
+          {showAdherence && (
+            <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '0.9rem', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.92rem' }}>📊 Task completion — last {adherence?.days || adherenceDays} days</div>
+                <select value={adherenceDays} onChange={(e) => { const d = parseInt(e.target.value); setAdherenceDays(d); loadAdherence(d); }} style={{ padding: '0.3rem 0.5rem', borderRadius: 6, border: '1px solid #D1D5DB', fontSize: '0.82rem' }}>
+                  <option value={7}>Last 7 days</option>
+                  <option value={30}>Last 30 days</option>
+                  <option value={90}>Last 90 days</option>
+                </select>
+              </div>
+              {adherenceLoading ? (
+                <div style={{ color: '#92400E', fontSize: '0.85rem' }}>Loading…</div>
+              ) : !adherence || adherence.tasks.length === 0 ? (
+                <div style={{ color: '#92400E', fontSize: '0.85rem' }}>No active tasks to report on.</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: '0.78rem', color: '#92400E', marginBottom: '0.5rem' }}>
+                    {adherence.totalShifts} shift{adherence.totalShifts !== 1 ? 's' : ''} in this period · "Not addressed" = daily tasks with no entry on a shift. Rows where misses outweigh completions are highlighted.
+                  </div>
+                  <div style={{ overflow: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', color: '#78350F' }}>
+                          <th style={{ padding: '0.3rem 0.4rem' }}>Task</th>
+                          <th>When</th>
+                          <th style={{ textAlign: 'right' }}>Done</th>
+                          <th style={{ textAlign: 'right' }}>Skipped</th>
+                          <th style={{ textAlign: 'right' }}>Refused</th>
+                          <th style={{ textAlign: 'right' }}>Not addressed</th>
+                          <th>Last done</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adherence.tasks.map(t => {
+                          const completed = t.completed || 0, skipped = t.skipped || 0, refused = t.refused || 0;
+                          const notAddressed = t.cadence === 'weekly' ? null : Math.max(0, (adherence.totalShifts || 0) - completed - skipped - refused);
+                          const flag = (skipped + refused) > completed || (notAddressed != null && notAddressed > completed);
+                          return (
+                            <tr key={t.task_id} style={{ borderTop: '1px solid #FEF3C7', background: flag ? '#FEF2F2' : undefined }}>
+                              <td style={{ padding: '0.3rem 0.4rem', fontWeight: 600 }}>{t.task_name}</td>
+                              <td>{t.cadence === 'weekly' ? '🗓️ Weekly' : '📅 Daily'}</td>
+                              <td style={{ textAlign: 'right', color: '#065F46', fontWeight: 700 }}>{completed}</td>
+                              <td style={{ textAlign: 'right', color: '#92400E' }}>{skipped}</td>
+                              <td style={{ textAlign: 'right', color: '#991B1B' }}>{refused}</td>
+                              <td style={{ textAlign: 'right', color: notAddressed ? '#991B1B' : '#9CA3AF', fontWeight: notAddressed ? 700 : 400 }}>{notAddressed == null ? '—' : notAddressed}</td>
+                              <td style={{ color: '#6B7280' }}>{t.last_completed ? new Date(t.last_completed).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'never'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {showImport && (
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '0.9rem', marginBottom: '1rem' }}>
