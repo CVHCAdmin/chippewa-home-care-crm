@@ -385,7 +385,13 @@ const SchedulingHub = ({ token }) => {
       clientId: clientId || '',
       date: date || new Date().toISOString().split('T')[0],
       dayOfWeek: dayOfWeek !== '' ? dayOfWeek.toString() : '',
-      scheduleType: dayOfWeek !== '' ? 'recurring' : 'one-time',
+      // Clicking a specific date cell means "add a shift on THAT date" — a
+      // one-time shift. Only default to recurring when a weekday was chosen
+      // without a concrete date. (Previously any cell click created a recurring
+      // shift, whose effective_date got clamped forward to today — so a past
+      // date silently jumped to the next upcoming weekday.) The weekday stays
+      // prefilled so switching to Recurring in the form still works.
+      scheduleType: (dayOfWeek !== '' && !date) ? 'recurring' : 'one-time',
       startTime: '09:00', endTime: '13:00', notes: ''
     }));
     setSelectedDays([]);
