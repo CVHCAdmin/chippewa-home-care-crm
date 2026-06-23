@@ -82,6 +82,75 @@ export default function CareTaskChecklist({ token, timeEntryId, compact = false,
   const total = items.length;
   const pct = Math.round((done / total) * 100);
 
+  const dailyItems  = items.filter(t => (t.cadence || 'daily') !== 'weekly');
+  const weeklyItems = items.filter(t => (t.cadence || 'daily') === 'weekly');
+
+  const renderItem = (t) => {
+    const sc = STATUS_COLORS[t.status] || STATUS_COLORS.pending;
+    const weeklyDone = t.cadence === 'weekly' && t.done_this_week;
+    return (
+      <div key={t.task_id} style={{
+        background: sc.bg, border: `1.5px solid ${sc.border}`, borderRadius: 10,
+        padding: '0.6rem 0.75rem', opacity: weeklyDone && t.status !== 'completed' ? 0.65 : 1
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: '0.93rem', color: '#111827' }}>{t.task_name}</div>
+            <div style={{ fontSize: '0.72rem', color: '#6B7280' }}>
+              {CATEGORY_LABELS[t.category] || t.category}
+              {t.allotted_minutes > 0 && ` · ${t.allotted_minutes} min`}
+              {weeklyDone && ' · ✅ done earlier this week'}
+            </div>
+          </div>
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: sc.text }}>{sc.label}</span>
+        </div>
+
+        {t.description && (
+          <div style={{ fontSize: '0.78rem', color: '#4B5563', marginBottom: '0.4rem' }}>{t.description}</div>
+        )}
+
+        {t.notes && (
+          <div style={{ fontSize: '0.78rem', color: '#374151', background: 'rgba(0,0,0,0.04)', padding: '0.3rem 0.5rem', borderRadius: 6, marginBottom: '0.4rem' }}>
+            📝 {t.notes}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+          {t.status !== 'completed' && (
+            <button onClick={() => setStatus(t.task_id, 'completed', t.notes)}
+              style={{ padding: '0.35rem 0.65rem', background: '#10B981', color: '#fff', border: 'none', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
+              ✓ Done
+            </button>
+          )}
+          {t.status !== 'skipped' && (
+            <button onClick={() => setStatus(t.task_id, 'skipped', t.notes)}
+              style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#92400E', border: '1px solid #F59E0B', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
+              Skip
+            </button>
+          )}
+          {t.status !== 'refused' && (
+            <button onClick={() => setStatus(t.task_id, 'refused', t.notes)}
+              style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#991B1B', border: '1px solid #EF4444', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
+              Refused
+            </button>
+          )}
+          {t.status !== 'pending' && (
+            <button onClick={() => setStatus(t.task_id, 'pending', t.notes)}
+              style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#6B7280', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer' }}>
+              Reset
+            </button>
+          )}
+          <button onClick={() => openNotes(t)}
+            style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer', marginLeft: 'auto' }}>
+            {t.notes ? '📝 Edit Note' : '📝 Add Note'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const sectionHeader = { fontSize: '0.72rem', fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.03em', margin: '0.25rem 0 0.4rem' };
+
   return (
     <div style={{ padding: compact ? '0.5rem 0' : '0.75rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
@@ -94,69 +163,22 @@ export default function CareTaskChecklist({ token, timeEntryId, compact = false,
         <div style={{ height: '100%', width: `${pct}%`, background: pct === 100 ? '#10B981' : '#3B82F6', transition: 'width 0.3s' }} />
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-        {items.map(t => {
-          const sc = STATUS_COLORS[t.status] || STATUS_COLORS.pending;
-          return (
-            <div key={t.task_id} style={{
-              background: sc.bg, border: `1.5px solid ${sc.border}`, borderRadius: 10,
-              padding: '0.6rem 0.75rem'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.93rem', color: '#111827' }}>{t.task_name}</div>
-                  <div style={{ fontSize: '0.72rem', color: '#6B7280' }}>
-                    {CATEGORY_LABELS[t.category] || t.category}
-                    {t.allotted_minutes > 0 && ` · ${t.allotted_minutes} min`}
-                  </div>
-                </div>
-                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: sc.text }}>{sc.label}</span>
-              </div>
-
-              {t.description && (
-                <div style={{ fontSize: '0.78rem', color: '#4B5563', marginBottom: '0.4rem' }}>{t.description}</div>
-              )}
-
-              {t.notes && (
-                <div style={{ fontSize: '0.78rem', color: '#374151', background: 'rgba(0,0,0,0.04)', padding: '0.3rem 0.5rem', borderRadius: 6, marginBottom: '0.4rem' }}>
-                  📝 {t.notes}
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-                {t.status !== 'completed' && (
-                  <button onClick={() => setStatus(t.task_id, 'completed', t.notes)}
-                    style={{ padding: '0.35rem 0.65rem', background: '#10B981', color: '#fff', border: 'none', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
-                    ✓ Done
-                  </button>
-                )}
-                {t.status !== 'skipped' && (
-                  <button onClick={() => setStatus(t.task_id, 'skipped', t.notes)}
-                    style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#92400E', border: '1px solid #F59E0B', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
-                    Skip
-                  </button>
-                )}
-                {t.status !== 'refused' && (
-                  <button onClick={() => setStatus(t.task_id, 'refused', t.notes)}
-                    style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#991B1B', border: '1px solid #EF4444', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
-                    Refused
-                  </button>
-                )}
-                {t.status !== 'pending' && (
-                  <button onClick={() => setStatus(t.task_id, 'pending', t.notes)}
-                    style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#6B7280', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer' }}>
-                    Reset
-                  </button>
-                )}
-                <button onClick={() => openNotes(t)}
-                  style={{ padding: '0.35rem 0.65rem', background: '#fff', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer', marginLeft: 'auto' }}>
-                  {t.notes ? '📝 Edit Note' : '📝 Add Note'}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {dailyItems.length > 0 && (
+        <div style={{ marginBottom: weeklyItems.length ? '0.9rem' : 0 }}>
+          <div style={sectionHeader}>📅 Daily</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {dailyItems.map(renderItem)}
+          </div>
+        </div>
+      )}
+      {weeklyItems.length > 0 && (
+        <div>
+          <div style={sectionHeader}>🗓️ This Week</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {weeklyItems.map(renderItem)}
+          </div>
+        </div>
+      )}
 
       {notesFor && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}

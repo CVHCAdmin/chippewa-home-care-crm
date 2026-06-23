@@ -45,6 +45,11 @@ const ensureTables = async () => {
     ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS days_of_week TEXT;
     ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS time_of_day VARCHAR(10) DEFAULT 'any';
     ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS assessment_source VARCHAR(60);
+
+    -- cadence: 'daily' (do every shift) vs 'weekly' (do once per week). Drives
+    -- how the caregiver checklist groups tasks and whether a weekly task counts
+    -- as already done for the current week. Existing rows default to 'daily'.
+    ALTER TABLE client_task_templates ADD COLUMN IF NOT EXISTS cadence VARCHAR(10) DEFAULT 'daily';
   `);
   _bootstrapped = true;
 };
@@ -55,6 +60,7 @@ const normFreq = (v) => {
   return Number.isFinite(n) && n > 0 ? n : 1;
 };
 const normTimeOfDay = (v) => (['AM', 'PM', 'any'].includes(v) ? v : 'any');
+const normCadence = (v) => (v === 'weekly' ? 'weekly' : 'daily');
 
 // ──────────────────────────────────────────────────────────────────────────
 // Template CRUD (admin)
@@ -67,7 +73,7 @@ router.get('/clients/:clientId/care-tasks', verifyToken, async (req, res) => {
     await ensureTables();
     const result = await db.query(
       `SELECT id, client_id, task_name, description, category, allotted_minutes,
-              weekly_frequency, days_of_week, time_of_day, assessment_source,
+              weekly_frequency, days_of_week, time_of_day, assessment_source, cadence,
               (COALESCE(weekly_frequency, 1) * COALESCE(allotted_minutes, 0)) AS minutes_per_week,
               sort_order, is_active, created_at, updated_at
        FROM client_task_templates
@@ -87,7 +93,7 @@ router.post('/clients/:clientId/care-tasks', verifyToken, requireAdmin, async (r
   try {
     await ensureTables();
     const { taskName, description, category, allottedMinutes, sortOrder,
-            weeklyFrequency, daysOfWeek, timeOfDay, assessmentSource } = req.body;
+            weeklyFrequency, daysOfWeek, timeOfDay, assessmentSource, cadence } = req.body;
     if (!taskName || !taskName.trim()) return res.status(400).json({ error: 'taskName is required' });
 
     const nextOrder = sortOrder ?? (await db.query(
@@ -98,11 +104,11 @@ router.post('/clients/:clientId/care-tasks', verifyToken, requireAdmin, async (r
     const result = await db.query(
       `INSERT INTO client_task_templates
          (client_id, task_name, description, category, allotted_minutes,
-          weekly_frequency, days_of_week, time_of_day, assessment_source, sort_order, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+          weekly_frequency, days_of_week, time_of_day, assessment_source, cadence, sort_order, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [req.params.clientId, taskName.trim(), description || null, category || 'other', allottedMinutes || 0,
        normFreq(weeklyFrequency), daysOfWeek || null, normTimeOfDay(timeOfDay), assessmentSource || null,
-       nextOrder, req.user.id]
+       normCadence(cadence), nextOrder, req.user.id]
     );
     await auditLog(req.user.id, 'CREATE', 'client_task_templates', result.rows[0].id, null, result.rows[0]);
     res.json(result.rows[0]);
@@ -116,7 +122,7 @@ router.post('/clients/:clientId/care-tasks', verifyToken, requireAdmin, async (r
 router.put('/care-tasks/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { taskName, description, category, allottedMinutes, sortOrder,
-            weeklyFrequency, daysOfWeek, timeOfDay } = req.body;
+            weeklyFrequency, daysOfWeek, timeOfDay, cadence } = req.body;
     const result = await db.query(
       `UPDATE client_task_templates
        SET task_name = COALESCE($1, task_name),
@@ -127,12 +133,14 @@ router.put('/care-tasks/:id', verifyToken, requireAdmin, async (req, res) => {
            weekly_frequency = COALESCE($7, weekly_frequency),
            days_of_week = COALESCE($8, days_of_week),
            time_of_day = COALESCE($9, time_of_day),
+           cadence = COALESCE($10, cadence),
            updated_at = NOW()
        WHERE id = $6 RETURNING *`,
       [taskName, description, category, allottedMinutes, sortOrder, req.params.id,
        weeklyFrequency != null ? normFreq(weeklyFrequency) : null,
        daysOfWeek ?? null,
-       timeOfDay ? normTimeOfDay(timeOfDay) : null]
+       timeOfDay ? normTimeOfDay(timeOfDay) : null,
+       cadence ? normCadence(cadence) : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Task not found' });
     await auditLog(req.user.id, 'UPDATE', 'client_task_templates', req.params.id, null, result.rows[0]);
@@ -269,9 +277,16 @@ router.get('/time-entries/:timeEntryId/task-completions', verifyToken, async (re
 
     const result = await db.query(
       `SELECT t.id AS task_id, t.task_name, t.description, t.category, t.allotted_minutes,
-              t.weekly_frequency, t.days_of_week, t.time_of_day, t.sort_order,
+              t.weekly_frequency, t.days_of_week, t.time_of_day, t.sort_order, t.cadence,
               c.id AS completion_id, COALESCE(c.status, 'pending') AS status,
-              c.notes, c.completed_at, c.updated_at
+              c.notes, c.completed_at, c.updated_at,
+              EXISTS (
+                SELECT 1 FROM shift_task_completions sc2
+                JOIN time_entries te2 ON te2.id = sc2.time_entry_id
+                WHERE sc2.task_template_id = t.id
+                  AND sc2.status = 'completed'
+                  AND te2.start_time >= date_trunc('week', NOW())
+              ) AS done_this_week
        FROM client_task_templates t
        LEFT JOIN shift_task_completions c
          ON c.task_template_id = t.id AND c.time_entry_id = $1

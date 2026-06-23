@@ -13,7 +13,7 @@ const CATEGORIES = [
   { value: 'other', label: 'Other' }
 ];
 
-const emptyForm = { taskName: '', description: '', category: 'iadl', allottedMinutes: 15, weeklyFrequency: 1, daysOfWeek: '', timeOfDay: 'any' };
+const emptyForm = { taskName: '', description: '', category: 'iadl', allottedMinutes: 15, weeklyFrequency: 1, daysOfWeek: '', timeOfDay: 'any', cadence: 'daily' };
 
 export default function CareTasksManager({ client, token, onClose }) {
   const [tasks, setTasks] = useState([]);
@@ -76,7 +76,8 @@ export default function CareTasksManager({ client, token, onClose }) {
       allottedMinutes: t.allotted_minutes || 0,
       weeklyFrequency: t.weekly_frequency || 1,
       daysOfWeek: t.days_of_week || '',
-      timeOfDay: t.time_of_day || 'any'
+      timeOfDay: t.time_of_day || 'any',
+      cadence: t.cadence || 'daily'
     });
   };
 
@@ -252,7 +253,11 @@ export default function CareTasksManager({ client, token, onClose }) {
                 style={inp}
               />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <select value={form.cadence} onChange={(e) => setForm({ ...form, cadence: e.target.value })} style={inp} title="Daily = every shift; Weekly = once per week">
+                <option value="daily">📅 Daily</option>
+                <option value="weekly">🗓️ Weekly</option>
+              </select>
               <input
                 type="number" min="1" step="1"
                 placeholder="x / week"
@@ -301,7 +306,8 @@ export default function CareTasksManager({ client, token, onClose }) {
                     <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{t.task_name}</div>
                     {t.description && <div style={{ color: '#6B7280', fontSize: '0.82rem', marginTop: '0.15rem' }}>{t.description}</div>}
                     <div style={{ color: '#9CA3AF', fontSize: '0.75rem', marginTop: '0.2rem' }}>
-                      {CATEGORIES.find(c => c.value === t.category)?.label || t.category}
+                      <b style={{ color: t.cadence === 'weekly' ? '#7C3AED' : '#2563EB' }}>{t.cadence === 'weekly' ? '🗓️ Weekly' : '📅 Daily'}</b>
+                      {' · '}{CATEGORIES.find(c => c.value === t.category)?.label || t.category}
                       {' · '}{t.weekly_frequency || 1}×/wk × {t.allotted_minutes} min = <b>{(t.weekly_frequency || 1) * (t.allotted_minutes || 0)} min/wk</b>
                       {t.days_of_week ? ` · ${t.days_of_week}` : ''}
                       {t.time_of_day && t.time_of_day !== 'any' ? ` · ${t.time_of_day}` : ''}
