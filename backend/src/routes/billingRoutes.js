@@ -282,7 +282,28 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     return (a.visit.start_time || '').localeCompare(b.visit.start_time || '');
   });
 
+  // De-dupe overlapping schedules: when two schedules cover the same shift
+  // (e.g. a recurring + a one-time for the same caregiver/day/time) but there's
+  // only one clock-in, the clock-in matches one and the OTHER would be billed as
+  // a phantom "scheduled" line — double-billing the same shift. Suppress an
+  // unmatched scheduled visit only when it overlaps in time with a MATCHED
+  // (worked) visit for the same caregiver+date. Standalone scheduled days with
+  // no clock-in are untouched (that's how non-EVV private-pay clients bill).
+  const minutesOf = (hms) => { if (!hms) return null; const [h, m] = String(hms).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const matchedWindows = visitsWithMatch
+    .filter(x => x.entry)
+    .map(x => ({ caregiver_id: x.visit.caregiver_id, day: ymd(x.visit.date), start: minutesOf(x.visit.start_time), end: minutesOf(x.visit.end_time) }));
+  const duplicatesWorkedShift = (v) => {
+    const vs = minutesOf(v.start_time), ve = minutesOf(v.end_time);
+    if (vs == null || ve == null) return false;
+    return matchedWindows.some(m =>
+      m.caregiver_id === v.caregiver_id && m.day === ymd(v.date) &&
+      m.start != null && m.end != null && vs < m.end && m.start < ve);
+  };
+
   for (const { visit, entry } of visitsWithMatch) {
+    // Skip a no-clock-in scheduled visit that duplicates an already-worked shift.
+    if (!entry && duplicatesWorkedShift(visit)) continue;
     let hours = 0;
     let startISO = null, endISO = null, timeRangeLabel = '';
     let source = 'scheduled';
@@ -302,7 +323,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       const st = new Date(entry.start_time);
       const et = entry.end_time ? new Date(entry.end_time) : null;
       timeRangeLabel = et
-        ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
+        ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })}`
         : '';
     } else {
       // No EVV → bill scheduled
@@ -359,7 +380,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     const st = new Date(entry.start_time);
     const et = entry.end_time ? new Date(entry.end_time) : null;
     const timeRangeLabel = et
-      ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
+      ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })}`
       : '';
     // Notes are internal — never bill them. Generic label only.
     const baseDesc = 'Home Care Services (unscheduled)';
@@ -1849,6 +1870,7 @@ router.post('/import-csv', auth, requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
-// Exposed for unit tests; not part of the HTTP surface.
+// Exposed for unit tests + diagnostics; not part of the HTTP surface.
 module.exports.clampLineItemDescription = clampLineItemDescription;
 module.exports.MAX_LINE_ITEM_DESC = MAX_LINE_ITEM_DESC;
+module.exports.generateLineItems = generateLineItems;
