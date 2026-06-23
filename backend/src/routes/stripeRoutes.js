@@ -79,7 +79,13 @@ router.post('/create-checkout-session', auth, requireStripe, async (req, res) =>
       mode: 'payment',
       success_url: `${FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}&invoice_id=${invoiceId}`,
       cancel_url: `${FRONTEND_URL}/payment-cancelled?invoice_id=${invoiceId}`,
-      customer_email: invoice.client_email,
+      // Only prefill the email when it's a valid address. A client with no email
+      // (or a blank one) otherwise makes Stripe reject the whole session with
+      // "Invalid email address" — so we omit it and let Stripe collect it on the
+      // checkout page instead of failing the payment.
+      ...(invoice.client_email && /^\S+@\S+\.\S+$/.test(String(invoice.client_email).trim())
+        ? { customer_email: String(invoice.client_email).trim() }
+        : {}),
       metadata: {
         invoice_id: invoiceId,
         client_name: `${invoice.first_name} ${invoice.last_name}`,
@@ -256,7 +262,13 @@ router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
       mode: 'payment',
       success_url: `${FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}&invoice_id=${invoiceId}`,
       cancel_url: `${FRONTEND_URL}/pay/${invoiceId}?cancelled=true`,
-      customer_email: invoice.client_email,
+      // Only prefill the email when it's a valid address. A client with no email
+      // (or a blank one) otherwise makes Stripe reject the whole session with
+      // "Invalid email address" — so we omit it and let Stripe collect it on the
+      // checkout page instead of failing the payment.
+      ...(invoice.client_email && /^\S+@\S+\.\S+$/.test(String(invoice.client_email).trim())
+        ? { customer_email: String(invoice.client_email).trim() }
+        : {}),
       metadata: {
         invoice_id: invoiceId,
       },
