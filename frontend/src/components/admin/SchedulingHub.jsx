@@ -831,7 +831,10 @@ const SchedulingHub = ({ token }) => {
                   <tr>
                     <th style={{ width: '140px' }}>Caregiver</th>
                     {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((day, idx) => {
-                      const date = new Date(weekData.weekStart); date.setDate(date.getDate() + idx);
+                      // Parse the week-start as LOCAL midnight (append T00:00:00) — a bare
+                      // 'YYYY-MM-DD' parses as UTC, so getDate() below read one day behind in
+                      // US timezones, making the header numbers off by one vs the cell data.
+                      const date = new Date(weekData.weekStart + 'T00:00:00'); date.setDate(date.getDate() + idx);
                       const isToday = date.toISOString().split('T')[0] === getTodayCT();
                       return (<th key={day} style={{ textAlign: 'center', minWidth: '95px', background: isToday ? '#EFF6FF' : undefined }}><div>{day}</div><div style={{ fontSize: '0.72rem', color: isToday ? '#2563EB' : '#6B7280', fontWeight: isToday ? '700' : '400' }}>{date.getDate()}</div></th>);
                     })}
@@ -847,7 +850,7 @@ const SchedulingHub = ({ token }) => {
                         </div>
                       </td>
                       {[0,1,2,3,4,5,6].map(di => {
-                        const date = new Date(weekData.weekStart); date.setDate(date.getDate() + di);
+                        const date = new Date(weekData.weekStart + 'T00:00:00'); date.setDate(date.getDate() + di);
                         const isToday = date.toISOString().split('T')[0] === getTodayCT();
                         const dateStr = date.toISOString().split('T')[0];
                         const hasShifts = dayData[di] && dayData[di].length > 0;
