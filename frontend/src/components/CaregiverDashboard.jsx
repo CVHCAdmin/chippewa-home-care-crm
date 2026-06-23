@@ -772,6 +772,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   };
 
   const completeClockOut = async ({ skipGps = false } = {}) => {
+    // Guard: if the session went away (stale modal, reload, re-login), don't throw
+    // on activeSession.id below — close the modal cleanly instead of trapping the user.
+    if (!activeSession?.id) { toast('No active session — reopen and try again.', 'error'); setShowNoteModal(false); return; }
     try {
       await impact('heavy'); // strong haptic for clock out
 
@@ -842,6 +845,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     } catch (error) {
       await hapticNotify('error');
       toast('Failed to clock out: ' + error.message, 'error');
+      setShowNoteModal(false); // never trap the caregiver in the notes modal on error
     }
   };
 
