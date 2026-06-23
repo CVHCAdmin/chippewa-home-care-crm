@@ -717,7 +717,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lng = null;
       if (!skipGps) {
         try {
-          const fix = await acquireLocationForClock();
+          // Fast GPS (coarse, ~5s, no 20s high-accuracy wait). A coarse fix is
+          // well inside the ~300ft EVV geofence, and if it can't be acquired the
+          // caregiver gets the "Clock in anyway (no GPS)" prompt in seconds
+          // instead of being stuck ~28s — which read as "can't clock in".
+          const fix = await acquireLocationForClock({ fast: true });
           lat = fix.latitude || null;
           lng = fix.longitude || null;
         } catch (err) {
