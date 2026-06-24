@@ -15,6 +15,24 @@ import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
 import SignaturePad from './SignaturePad';
 
+// fetch that always settles — aborts after `ms` so a stalled request (TCP open
+// but no response, common on flaky mobile data / captive WiFi) can never leave a
+// clock-in/out button spinning grey forever. On timeout it throws so the caller's
+// catch/finally runs and re-enables the button. Mirrors the "never trap the
+// caregiver" guarantee that GPS already has.
+const fetchWithTimeout = async (url, options = {}, ms = 20000) => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } catch (err) {
+    if (err?.name === 'AbortError') throw new Error('Request timed out — check your connection and try again.');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const subscribeToPush = async (token) => {
   try {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
@@ -676,6 +694,24 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return { latitude: p?.latitude, longitude: p?.longitude, source: 'gps' };
   };
 
+  // Best-effort location snapshot that can NEVER block or hang clock-in/out.
+  // GPS is a "nice to have" for EVV — it must never stop a caregiver from clocking.
+  // We race the location lookup against a hard wall-clock cap because the browser's
+  // permission prompt does NOT count against the geolocation timeout (and Capacitor
+  // on Android can ignore its own timeout) — so getCurrentPosition can hang forever
+  // while the button sits grey. After `capMs` we just give up and return nulls.
+  // Always resolves { latitude, longitude } (nulls if no fix); never throws, never hangs.
+  const getLocationSnapshot = async (capMs = 6000) => {
+    const hardCap = new Promise(resolve => setTimeout(() => resolve(null), capMs));
+    try {
+      const fix = await Promise.race([acquireLocationForClock({ fast: true }), hardCap]);
+      if (fix?.latitude && fix?.longitude) {
+        return { latitude: fix.latitude, longitude: fix.longitude };
+      }
+    } catch (_) { /* fall through to nulls — GPS must never block clocking */ }
+    return { latitude: null, longitude: null };
+  };
+
   // Notify admins (fire-and-forget) when the caregiver hits a GPS hard block.
   const reportGpsFailure = (action, err, clientId) => {
     fetch(`${API_BASE_URL}/api/time-entries/gps-failure`, {
@@ -711,32 +747,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     setClockingIn(true);
 
     try {
-      // GPS is REQUIRED for EVV-compliant clock-in. When it genuinely can't be
-      // acquired, the caregiver can override (skipGps) — admins are alerted via
-      // reportGpsFailure and the entry is stored with no location for reconciliation.
+      // GPS is a best-effort EVV snapshot — it must NEVER block clock-in. Grab a
+      // location if we can get one quickly (hard-capped, can't hang); otherwise
+      // clock in anyway with no location and notify admins for reconciliation.
       let lat = null;
       let lng = null;
       if (!skipGps) {
-        // GPS must NEVER block clock-in. Try for a quick fix (coarse, ~5s); if it
-        // can't be acquired, clock in anyway with no location and notify admins
-        // for EVV reconciliation. Mirrors clock-out — a caregiver is never stranded
-        // by GPS. (Previously this showed a retry prompt and returned, which left
-        // people unable to clock in when their device's GPS was flaky.)
-        try {
-          const fix = await acquireLocationForClock({ fast: true });
-          lat = fix.latitude || null;
-          lng = fix.longitude || null;
-        } catch (err) {
-          reportGpsFailure('clock-in', err, selectedClient);
-        }
-        if (!lat || !lng) {
-          reportGpsFailure('clock-in', null, selectedClient);
-        }
+        ({ latitude: lat, longitude: lng } = await getLocationSnapshot());
+        if (!lat || !lng) reportGpsFailure('clock-in', null, selectedClient);
       }
 
       await impact('medium'); // native haptic on button press
 
-      const res = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/clock-in`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ clientId: selectedClient, latitude: lat, longitude: lng })
@@ -782,23 +805,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = null;
       let lng = null;
       if (!skipGps) {
-        // Clock-OUT must never strand a caregiver. Try for a quick GPS fix, but if
-        // it can't be acquired, clock out anyway with no location and notify admins
-        // for EVV reconciliation — never block the way clock-IN does. (Clock-IN
-        // still hard-requires GPS to keep EVV start times trustworthy.)
-        try {
-          const fix = await acquireLocationForClock({ fast: true });
-          lat = fix.latitude || null;
-          lng = fix.longitude || null;
-        } catch (err) {
-          reportGpsFailure('clock-out', err, activeSession?.client_id || selectedClient);
-        }
-        if (!lat || !lng) {
-          reportGpsFailure('clock-out', null, activeSession?.client_id || selectedClient);
-        }
+        // Same best-effort snapshot as clock-in — never strand a caregiver waiting
+        // on GPS. Grab a fix if we can (hard-capped); otherwise clock out anyway
+        // with no location and notify admins for EVV reconciliation.
+        ({ latitude: lat, longitude: lng } = await getLocationSnapshot());
+        if (!lat || !lng) reportGpsFailure('clock-out', null, activeSession?.client_id || selectedClient);
       }
 
-      const res = await fetch(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ latitude: lat, longitude: lng, notes: visitNote })
