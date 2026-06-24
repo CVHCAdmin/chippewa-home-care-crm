@@ -15,12 +15,14 @@ import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
 import { API_BASE_URL, setSessionExpiredCallback } from './config'; // also installs global 401 fetch interceptor
 import { ErrorBoundary } from './components/ErrorBoundary';
+import VersionWatcher from './components/VersionWatcher';
 
 const App = () => {
   return (
     <BrowserRouter>
       <ToastContainer />
       <ConfirmModal />
+      <VersionWatcher />
 
       <Routes>
         {/* Public payment routes */}

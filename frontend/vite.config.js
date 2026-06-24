@@ -2,8 +2,21 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Unique id per build — baked into the bundle (__BUILD_ID__) AND written to
+// dist/version.json, so the long-lived SPA can detect when a newer build has
+// deployed and offer a reload (caregivers keep the app open all day).
+const BUILD_ID = String(Date.now());
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'emit-version-json',
+      generateBundle() {
+        this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: BUILD_ID }) });
+      },
+    },
+  ],
   test: {
     environment: 'jsdom',
     globals: true,
@@ -34,5 +47,6 @@ export default defineConfig({
     // Don't wipe process.env — it prevents import.meta.env from working
     // Explicitly define the API URL so it's always baked into the build
     '__API_URL__': JSON.stringify('https://chippewa-home-care-api.onrender.com'),
+    '__BUILD_ID__': JSON.stringify(BUILD_ID),
   },
 });

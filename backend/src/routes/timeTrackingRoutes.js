@@ -505,7 +505,7 @@ router.post('/gps-failure', verifyToken, async (req, res) => {
 // actor in audit_log and flags the entry for approval.
 router.post('/:id/admin-force-clockout', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { reason } = req.body || {};
+    const { reason, endTime, scheduled } = req.body || {};
     const entry = await db.query(
       `SELECT te.*, c.is_private_pay, c.referral_source_id, rs.payer_type as referral_payer_type
        FROM time_entries te
@@ -518,22 +518,39 @@ router.post('/:id/admin-force-clockout', verifyToken, requireAdmin, async (req, 
     const e = entry.rows[0];
     if (e.end_time) return res.status(400).json({ error: 'Time entry is already closed' });
 
-    const durationMinutes = Math.round((new Date() - new Date(e.start_time)) / 60000);
+    const start = new Date(e.start_time);
     const allottedMinutes = e.allotted_minutes;
     const isPrivatePay = e.is_private_pay === true || e.referral_payer_type === 'private_pay';
 
+    // Closing time: scheduled allotment, an explicit time the admin picked, or now.
+    let end = new Date();
+    if (scheduled) {
+      if (allottedMinutes == null) {
+        return res.status(400).json({ error: 'This shift has no scheduled amount — pick an end time or use Now.' });
+      }
+      end = new Date(start.getTime() + allottedMinutes * 60000);
+    } else if (endTime) {
+      end = new Date(endTime);
+      if (isNaN(end.getTime())) return res.status(400).json({ error: 'Invalid end time.' });
+      if (end <= start) return res.status(400).json({ error: 'End time must be after the clock-in time.' });
+    }
+
+    const durationMinutes = Math.round((end - start) / 60000);
+
     let billableMinutes;
-    if (isPrivatePay) billableMinutes = durationMinutes;
+    if (scheduled && allottedMinutes != null) billableMinutes = allottedMinutes; // close at scheduled amount
+    else if (isPrivatePay) billableMinutes = durationMinutes;
     else if (allottedMinutes == null) billableMinutes = durationMinutes;
     else billableMinutes = allottedMinutes;
 
     const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
-    const adminTag = `[Admin force clock-out by ${req.user.email || req.user.id}${reason ? `: ${reason}` : ''}]`;
+    const how = scheduled ? 'scheduled amount' : (endTime ? `ended ${end.toLocaleString('en-US', { timeZone: 'America/Chicago' })}` : 'now');
+    const adminTag = `[Admin force clock-out by ${req.user.email || req.user.id} (${how})${reason ? `: ${reason}` : ''}]`;
     const combinedNotes = e.notes ? `${e.notes}\n${adminTag}` : adminTag;
 
     const result = await db.query(
       `UPDATE time_entries SET
-         end_time = NOW(),
+         end_time = $6,
          clock_out_location = NULL,
          duration_minutes = $1,
          is_complete = true,
@@ -543,10 +560,11 @@ router.post('/:id/admin-force-clockout', verifyToken, requireAdmin, async (req, 
          needs_approval = true,
          approval_reason = COALESCE(approval_reason, 'admin_force_clockout'),
          updated_at = NOW()
-       WHERE id = $5
+       WHERE id = $5 AND end_time IS NULL
        RETURNING *`,
-      [durationMinutes, combinedNotes, discrepancyMinutes, billableMinutes, req.params.id]
+      [durationMinutes, combinedNotes, discrepancyMinutes, billableMinutes, req.params.id, end.toISOString()]
     );
+    if (result.rows.length === 0) return res.status(409).json({ error: 'This shift is already clocked out.' });
 
     await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, {
       action: 'admin_force_clockout',

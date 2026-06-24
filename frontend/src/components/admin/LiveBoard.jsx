@@ -12,6 +12,38 @@ const LiveBoard = ({ token }) => {
   const [filter, setFilter] = useState('all');
   const [selectedShift, setSelectedShift] = useState(null);
   const [mapShift, setMapShift] = useState(null);
+  // Force clock-out modal
+  const [closeTarget, setCloseTarget] = useState(null);
+  const [closeMode, setCloseMode] = useState('scheduled'); // 'scheduled' | 'now' | 'time'
+  const [closeEndTime, setCloseEndTime] = useState('');
+  const [closeReason, setCloseReason] = useState('');
+  const [closing, setClosing] = useState(false);
+
+  const submitForceClose = async () => {
+    if (!closeTarget) return;
+    const body = { reason: closeReason || null };
+    if (closeMode === 'scheduled') body.scheduled = true;
+    else if (closeMode === 'time') {
+      if (!closeEndTime) { window.alert('Pick an end time.'); return; }
+      body.endTime = new Date(closeEndTime).toISOString();
+    } // 'now' → send neither (server defaults to now)
+    setClosing(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/time-entries/${closeTarget.time_entry_id}/admin-force-clockout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Failed');
+      setCloseTarget(null);
+      loadBoard();
+    } catch (err) {
+      window.alert('Failed to close shift: ' + err.message);
+    } finally {
+      setClosing(false);
+    }
+  };
 
   const loadBoard = async () => {
     try {
@@ -134,25 +166,7 @@ const LiveBoard = ({ token }) => {
                 {/* Force clock-out button for active shifts */}
                 {shift.shift_status === 'clocked_in' && shift.time_entry_id && (
                   <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      const reason = window.prompt(`Force clock out ${shift.caregiver_first} ${shift.caregiver_last}?\n\nThis closes their session NOW (no clock-out GPS recorded; the shift will be flagged for approval). Enter a reason:`, 'GPS unavailable on caregiver phone');
-                      if (reason === null) return;
-                      try {
-                        const r = await fetch(`${API_BASE_URL}/api/time-entries/${shift.time_entry_id}/admin-force-clockout`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                          body: JSON.stringify({ reason })
-                        });
-                        if (!r.ok) {
-                          const d = await r.json().catch(() => ({}));
-                          throw new Error(d.error || 'Failed');
-                        }
-                        loadBoard();
-                      } catch (err) {
-                        window.alert('Failed to force clock-out: ' + err.message);
-                      }
-                    }}
+                    onClick={(e) => { e.stopPropagation(); setCloseTarget(shift); setCloseMode('scheduled'); setCloseEndTime(''); setCloseReason(''); }}
                     style={{
                       marginTop: '0.5rem', width: '100%', padding: '0.45rem 0.6rem',
                       background: '#fff', color: '#B45309', border: '1px solid #FCD34D',
@@ -229,6 +243,33 @@ const LiveBoard = ({ token }) => {
           50% { box-shadow: 0 0 20px rgba(239,68,68,0.4); }
         }
       `}</style>
+
+      {/* Force clock-out modal */}
+      {closeTarget && (
+        <div onClick={() => !closing && setCloseTarget(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 10, maxWidth: 440, width: '95%', padding: '1.25rem' }}>
+            <h3 style={{ margin: '0 0 0.35rem', fontSize: '1rem' }}>Close shift — {closeTarget.caregiver_first} {closeTarget.caregiver_last}</h3>
+            <div style={{ fontSize: '0.82rem', color: '#6B7280', marginBottom: '0.9rem' }}>
+              {closeTarget.client_first} {closeTarget.client_last} · in {formatTime(closeTarget.clock_in_time)}
+              {closeTarget.scheduled_start && ` · scheduled ${formatTime(closeTarget.scheduled_start)}–${formatTime(closeTarget.scheduled_end)}`}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <label style={{ fontSize: '0.88rem', cursor: 'pointer' }}><input type="radio" name="closemode" checked={closeMode === 'scheduled'} onChange={() => setCloseMode('scheduled')} /> Bill the scheduled amount</label>
+              <label style={{ fontSize: '0.88rem', cursor: 'pointer' }}><input type="radio" name="closemode" checked={closeMode === 'now'} onChange={() => setCloseMode('now')} /> Clock out now (actual elapsed)</label>
+              <label style={{ fontSize: '0.88rem', cursor: 'pointer' }}><input type="radio" name="closemode" checked={closeMode === 'time'} onChange={() => setCloseMode('time')} /> Specific end time</label>
+              {closeMode === 'time' && (
+                <input type="datetime-local" value={closeEndTime} onChange={(e) => setCloseEndTime(e.target.value)} style={{ padding: '0.4rem', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.88rem' }} />
+              )}
+            </div>
+            <input type="text" placeholder="Reason (optional)" value={closeReason} onChange={(e) => setCloseReason(e.target.value)} style={{ width: '100%', padding: '0.4rem', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.88rem', marginBottom: '0.6rem', boxSizing: 'border-box' }} />
+            <div style={{ fontSize: '0.75rem', color: '#92400E', marginBottom: '0.9rem' }}>The shift will be flagged for approval before billing/payroll.</div>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+              <button onClick={() => setCloseTarget(null)} disabled={closing} className="btn btn-sm btn-secondary">Cancel</button>
+              <button onClick={submitForceClose} disabled={closing} className="btn btn-sm btn-primary">{closing ? 'Closing…' : 'Close shift'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* GPS trail map modal for the selected shift */}
       {mapShift && (
