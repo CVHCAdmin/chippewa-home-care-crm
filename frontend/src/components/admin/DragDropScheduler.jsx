@@ -367,10 +367,17 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     if (!deleteConfirm) return;
     const { shift, date } = deleteConfirm;
     const isSplit = shift.is_split_shift;
+    const isRecurring = shift.day_of_week !== null && shift.day_of_week !== undefined;
+
+    // Guard: 'this'/'following' need a concrete date. Without one the backend
+    // can't scope the delete — never let it silently become a wipe-all.
+    if ((scope === 'this' || scope === 'following') && (!isRecurring || !date)) {
+      showToast('Could not determine the occurrence date — delete cancelled. Reopen the shift from its day cell and try again.', 'error');
+      return;
+    }
+
     setSaving(true);
     try {
-      const isRecurring = shift.day_of_week !== null && shift.day_of_week !== undefined;
-
       if (isRecurring && scope === 'this') {
         // Cancel just this occurrence via exception
         await fetch(`${API_BASE_URL}/api/schedules/${shift.id}?scope=this&date=${date}`, {

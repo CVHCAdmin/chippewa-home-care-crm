@@ -209,6 +209,23 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
     const shift = current.rows[0];
     const isRecurring = shift.day_of_week !== null && shift.day_of_week !== undefined;
 
+    // ── Safety: a scoped (this/following) delete must NEVER silently fall
+    // through to the wipe-everything 'all' branch. If the request asked for a
+    // partial delete but we can't honor it (missing date, or not a recurring
+    // pattern), reject it instead of escalating to a destructive full delete.
+    if ((scope === 'this' || scope === 'following')) {
+      if (!isRecurring) {
+        return res.status(400).json({
+          error: `scope='${scope}' is only valid for recurring shifts; this is a one-time shift. Use scope=all to delete it.`,
+        });
+      }
+      if (!date) {
+        return res.status(400).json({
+          error: `scope='${scope}' requires a 'date' query param. Refusing to delete to avoid wiping the whole pattern.`,
+        });
+      }
+    }
+
     // ── Scope: cancel this single occurrence ──
     if (scope === 'this' && date && isRecurring) {
       try {
