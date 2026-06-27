@@ -66,6 +66,64 @@ router.post('/prospects', leadLimiter, async (req, res) => {
   }
 });
 
+// ── POST /api/public/chatbot-lead ────────────────────────────────────────
+// Inbound webhook from the Twomiah Close chat widget (twomiah-close). The bot
+// fires this when a website visitor hands over their contact info. This is a
+// machine-to-machine call, not a browser form, so it's gated by a shared
+// secret header instead of the honeypot used above. The bot posts the raw
+// captured-lead row: { name, email, phone, business_name, pain_summary,
+// fit_score, stage_at_capture, ... }. We split `name` into first/last (both
+// NOT NULL on prospects) and fold the AI summary into the notes.
+router.post('/chatbot-lead', leadLimiter, async (req, res) => {
+  try {
+    const expected = process.env.CHATBOT_WEBHOOK_SECRET;
+    if (!expected) {
+      console.error('publicLeadRoutes /chatbot-lead: CHATBOT_WEBHOOK_SECRET not configured');
+      return res.status(503).json({ error: 'Lead intake not configured' });
+    }
+    if (req.headers['x-chatbot-secret'] !== expected) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { name, email, phone, pain_summary, fit_score, stage_at_capture } = req.body || {};
+
+    if (!name && !email && !phone) {
+      return res.status(400).json({ error: 'Lead must include a name, email, or phone' });
+    }
+
+    // prospects.first_name / last_name are both NOT NULL. Split the single
+    // captured name; fall back to a placeholder when only one token is given.
+    const tokens = String(name || '').trim().split(/\s+/).filter(Boolean);
+    const firstName = (tokens[0] || 'Website').slice(0, 255);
+    const lastName = (tokens.slice(1).join(' ') || 'Chat Lead').slice(0, 255);
+
+    const notesParts = ['Captured by the website chat assistant.'];
+    if (pain_summary)     notesParts.push(`What they need: ${pain_summary}`);
+    if (fit_score != null) notesParts.push(`Bot fit score: ${fit_score}/10`);
+    if (stage_at_capture) notesParts.push(`Conversation stage: ${stage_at_capture}`);
+
+    const result = await db.query(
+      `INSERT INTO prospects (first_name, last_name, phone, email, state, notes, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id`,
+      [
+        firstName,
+        lastName,
+        phone ? String(phone).trim().slice(0, 20) : null,
+        email ? String(email).trim().slice(0, 255) : null,
+        process.env.AGENCY_STATE || 'WI',
+        notesParts.join('\n\n'),
+        'chatbot'
+      ]
+    );
+
+    res.status(201).json({ success: true, id: result.rows[0].id });
+  } catch (err) {
+    console.error('publicLeadRoutes /chatbot-lead error:', err);
+    res.status(500).json({ error: 'Something went wrong saving the lead' });
+  }
+});
+
 // ── GET /api/public/job-postings ─────────────────────────────────────────
 // Returns currently-open postings for the website. Empty array → careers page
 // shows the evergreen "we're always building our pool" fallback copy.
