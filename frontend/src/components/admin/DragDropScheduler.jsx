@@ -281,7 +281,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         anchorStart.setDate(anchorStart.getDate() - anchorStart.getDay());
         const anchorStr = anchorStart.toISOString().split('T')[0];
 
-        let created = 0, failed = 0;
+        let created = 0, failed = 0, clampedTo = null;
         for (const dayOfWeek of days) {
           try {
             const payload = {
@@ -307,6 +307,8 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               body: JSON.stringify(payload),
             });
             if (!res.ok) throw new Error();
+            const body = await res.json().catch(() => ({}));
+            if (body.effectiveDateClamped) clampedTo = body.effectiveDate;
             created++;
           } catch { failed++; }
         }
@@ -317,7 +319,13 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           // (simplified: we re-fetch and the backend already supports end_date in PUT)
         }
 
-        showToast(`Created ${created} recurring schedule${created !== 1 ? 's' : ''}${failed ? ` (${failed} failed)` : ''}`);
+        const baseMsg = `Created ${created} recurring schedule${created !== 1 ? 's' : ''}${failed ? ` (${failed} failed)` : ''}`;
+        if (clampedTo) {
+          const d = new Date(clampedTo + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+          showToast(`${baseMsg} — recurring shifts can't start in the past, so it begins ${d}.`, 'warning');
+        } else {
+          showToast(baseMsg);
+        }
       } else {
         // One-time shift
         const payload = {
@@ -804,7 +812,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       {toast && (
         <div style={{
           position:'fixed', top:20, right:20, zIndex:9999,
-          background: toast.type === 'error' ? '#EF4444' : '#10B981',
+          background: toast.type === 'error' ? '#EF4444' : toast.type === 'warning' ? '#F59E0B' : '#10B981',
           color:'#fff', padding:'10px 18px', borderRadius:8,
           fontWeight:600, fontSize:14, boxShadow:'0 4px 16px rgba(0,0,0,0.15)',
         }}>

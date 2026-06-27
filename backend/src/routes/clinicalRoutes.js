@@ -487,8 +487,12 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
     // to today, clamp past dates forward. (DB trigger in v36 also enforces.)
     const isRecurring = dayOfWeek !== null && dayOfWeek !== undefined;
     let effectiveDate = rawEffectiveDate || null;
+    let effectiveDateClamped = false;
     if (isRecurring) {
       const today = new Date().toISOString().slice(0, 10);
+      // Flag (don't hide) when a past start date gets pulled forward, so the
+      // client can warn the user instead of the change happening silently.
+      if (effectiveDate && effectiveDate < today) effectiveDateClamped = true;
       effectiveDate = (effectiveDate && effectiveDate >= today) ? effectiveDate : today;
     }
 
@@ -543,7 +547,7 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
       const seg2 = await db.query(insertSQL, [id2, ...baseParams.slice(0,5), splitShift.startTime, splitShift.endTime, ...baseParams.slice(5), splitGroupId, 2, !!isTraining]);
 
       // TODO: EVV integration — split shifts may need separate EVV visit records
-      return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]] });
+      return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]], effectiveDateClamped, effectiveDate });
     }
 
     // ── Standard single shift ──
@@ -553,7 +557,7 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [id, caregiverId, clientId, scheduleType||'recurring', dayOfWeek!=null?dayOfWeek:null, date||null, startTime, endTime, notes||null, frequency||'weekly', effectiveDate||null, anchorDate||null, !!isTraining]
     );
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({ ...result.rows[0], effectiveDateClamped, effectiveDate });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
