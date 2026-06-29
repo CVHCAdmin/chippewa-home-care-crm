@@ -122,9 +122,11 @@ workflows:
     integrations:
       app_store_connect: codemagic_api_key   # existing integration on this account
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.cvhc.homecare
+      # No `ios_signing:` block on purpose. Codemagic's automatic signing fails
+      # for a brand-new bundle id that has no provisioning profile yet ("No
+      # matching profiles found"). Instead we sign manually in the scripts via
+      # `app-store-connect fetch-signing-files --create`, which creates the
+      # cert/profile on first run and reuses them afterward.
       vars:
         XCODE_PROJECT: "frontend/ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
