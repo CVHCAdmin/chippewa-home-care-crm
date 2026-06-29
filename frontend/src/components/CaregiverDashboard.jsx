@@ -9,7 +9,7 @@ import ShiftMissReport from './caregiver/ShiftMissReport';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
-import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, isNative, platform } from '../hooks/useNative';
+import { useGeolocation, useHaptics, useOfflineSync, getCurrentPositionOnce, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
@@ -156,7 +156,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const { position: location, error: locationError, getPosition } = useGeolocation({ watch: true });
   const { impact, notification: hapticNotify } = useHaptics();
   const { online, queueCount } = useOfflineSync();
-  const { start: startBgGeo } = useBackgroundGeolocation();
 
   // Self-service state
   const [openShifts, setOpenShifts] = useState([]);
@@ -188,30 +187,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [changeRequests, setChangeRequests] = useState([]);
   const [crResolving, setCrResolving]       = useState(null);
 
-  // Ref to hold a setter so background geo can push updates into geofence check
-  const bgLocationRef = React.useRef(null);
-
   useEffect(() => {
     loadData();
-    // GPS tracking handled by useGeolocation hook (watch: true)
+    // GPS is captured foreground-only: a snapshot at clock-in/out and, while
+    // clocked in, the geofence auto-clock-out watcher (useGeolocation watch).
+    // No background tracking — the app never reads location when closed or when
+    // the caregiver is clocked out.
     subscribeToPush(token);
-    // Start background geolocation on Android so geofence works when screen is off
-    startBgGeo({
-      notificationTitle: 'CVHC HomeCare',
-      notificationText: 'Monitoring location for auto clock-in',
-      onLocation: (loc) => {
-        // Background location updates trigger a geofence check using latest refs
-        if (loc && (loc.latitude || loc.lat)) {
-          bgLocationRef.current = loc;
-          runGeofenceCheck(
-            loc,
-            activeSessionRef.current,
-            clientsRef.current,
-            schedulesRef.current
-          );
-        }
-      }
-    });
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };

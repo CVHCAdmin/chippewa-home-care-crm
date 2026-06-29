@@ -14,6 +14,7 @@ router.get('/', verifyToken, async (req, res) => {
     const result = await db.query(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.hire_date, u.is_active,
               u.certifications, u.role, u.default_pay_rate,
+              u.emergency_contact_name, u.emergency_contact_phone,
               u.address, u.city, u.state, u.zip, u.latitude, u.longitude, u.ivr_pin,
               cp.evv_worker_id,
               cp.npi_number,

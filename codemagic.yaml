@@ -1,25 +1,50 @@
+# Codemagic CI/CD for CVHC HomeCare (Capacitor 8 + React + Vite).
+# Modeled on the working ick-v3 config (same stack). Reuses the Codemagic
+# integrations already set up on this account:
+#   - iOS:     App Store Connect integration  ->  "codemagic_api_key"
+#   - Android: keystore reference             ->  "keystore_reference"
+#
+# Prerequisites (configured in the Codemagic UI, not here):
+#   iOS:     App ID com.cvhc.homecare registered (Push Notifications on),
+#            App Store Connect app created (Apple ID 6785646689),
+#            "codemagic_api_key" integration present.
+#   Android: a keystore uploaded to Codemagic under reference
+#            "keystore_reference" (reused from Ick — see note below).
+#            For Play auto-publish: a Google Play service account (optional).
+#
+# NOTE: the release workflows are MANUAL (no `triggering:` block) on purpose.
+# CVHC's `main` gets frequent web-deploy commits; we do NOT want a TestFlight /
+# Play build on every push. Start these builds by hand in the Codemagic UI.
+#
+# The ios/ and android/ native folders are gitignored; Capacitor regenerates
+# them on each build via `cap add` + `cap sync`.
+
 workflows:
+  # ============================================================
+  # ANDROID DEBUG  (sideload APK — emailed)
+  # ============================================================
   android-debug:
-    name: Android Debug Build (Capacitor)
+    name: CVHC Android Debug (sideload APK)
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      node: 22.11.0
+      node: 22
       java: 21
     scripts:
-      - name: Install frontend dependencies
+      - name: Install frontend deps
         script: |
           cd frontend
           npm ci
-      - name: Build web bundle
+      - name: Build web (Vite)
         script: |
           cd frontend
           npm run build
-      - name: Sync Capacitor to Android
+      - name: Sync Capacitor Android
         script: |
           cd frontend
+          if [ ! -d "android" ]; then npx cap add android; fi
           npx cap sync android
-      - name: Build Android debug APK
+      - name: Build debug APK
         script: |
           cd frontend/android
           chmod +x gradlew
@@ -34,41 +59,44 @@ workflows:
           success: true
           failure: true
 
+  # ============================================================
+  # ANDROID RELEASE  (signed AAB -> Google Play)
+  # ============================================================
   android-release:
-    name: Android Release AAB (Play Store)
+    name: CVHC Android Release (AAB)
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      node: 22.11.0
-      java: 21
-      groups:
-        - android_signing
+      android_signing:
+        # Reuses the keystore already in your Codemagic account (the one Ick
+        # uses). If you'd rather isolate CVHC with its own upload key, generate
+        # a new keystore in Codemagic and replace this reference name.
+        - keystore_reference
       vars:
-        PACKAGE_NAME: com.cvhc.homecare
+        PACKAGE_NAME: "com.cvhc.homecare"
+      node: 22
+      java: 21
     scripts:
-      - name: Install frontend dependencies
+      - name: Install frontend deps
         script: |
           cd frontend
           npm ci
-      - name: Build web bundle
+      - name: Build web (Vite)
         script: |
           cd frontend
           npm run build
-      - name: Sync Capacitor to Android
+      - name: Sync Capacitor Android
         script: |
           cd frontend
+          if [ ! -d "android" ]; then npx cap add android; fi
           npx cap sync android
-      - name: Set up release keystore
+      - name: Set versionCode (auto-increment from Codemagic build number)
         script: |
-          cd frontend/android
-          echo $CM_KEYSTORE | base64 --decode > release.keystore
-          cat <<EOF >> gradle.properties
-          MYAPP_RELEASE_STORE_FILE=release.keystore
-          MYAPP_RELEASE_KEY_ALIAS=$CM_KEY_ALIAS
-          MYAPP_RELEASE_STORE_PASSWORD=$CM_KEYSTORE_PASSWORD
-          MYAPP_RELEASE_KEY_PASSWORD=$CM_KEY_PASSWORD
-          EOF
-      - name: Build Android release AAB
+          cd frontend/android/app
+          # perl -i works identically on macOS (BSD) and Linux (GNU), unlike sed.
+          perl -i -pe "s/versionCode .*/versionCode $BUILD_NUMBER/" build.gradle
+          grep "versionCode" build.gradle
+      - name: Build signed AAB
         script: |
           cd frontend/android
           chmod +x gradlew
@@ -76,58 +104,73 @@ workflows:
     artifacts:
       - frontend/android/app/build/outputs/**/*.aab
       - frontend/android/app/build/outputs/**/mapping.txt
-    publishing:
-      email:
-        recipients:
-          - chippewavalleyhomecare@gmail.com
-        notify:
-          success: true
-          failure: true
-      # Uncomment after creating a Google Play service account
-      # google_play:
-      #   credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
-      #   track: internal
-      #   submit_as_draft: true
+    # Google Play auto-publish (optional). Add a Google Play service account in
+    # the Codemagic UI (Integrations -> Google Play), then uncomment:
+    # publishing:
+    #   google_play:
+    #     credentials: $GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS
+    #     track: internal          # internal | alpha | beta | production
+    #     submit_as_draft: true
 
+  # ============================================================
+  # iOS RELEASE  (.ipa -> TestFlight)
+  # ============================================================
   ios-release:
-    name: iOS Release (TestFlight)
+    name: CVHC iOS Release (TestFlight)
     instance_type: mac_mini_m2
     max_build_duration: 90
     integrations:
-      app_store_connect: cvhc_app_store
+      app_store_connect: codemagic_api_key   # existing integration on this account
     environment:
-      node: 22.11.0
-      xcode: latest
-      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.cvhc.homecare
       vars:
-        BUNDLE_ID: com.cvhc.homecare
-        XCODE_WORKSPACE: ios/App/App.xcworkspace
-        XCODE_SCHEME: App
-        APP_STORE_APPLE_ID: TBD
+        XCODE_PROJECT: "frontend/ios/App/App.xcodeproj"
+        XCODE_SCHEME: "App"
+        BUNDLE_ID: "com.cvhc.homecare"
+        # Numeric App Store app ID (not sensitive — it's in every TestFlight /
+        # App Store URL). Used to auto-increment the build number.
+        APP_STORE_APP_ID: "6785646689"
+      node: 22
+      xcode: latest
     scripts:
-      - name: Install frontend dependencies
+      - name: Install frontend deps
         script: |
           cd frontend
           npm ci
-      - name: Build web bundle
+      - name: Build web (Vite)
         script: |
           cd frontend
           npm run build
-      - name: Add iOS platform if missing
+      - name: Set up Capacitor iOS native project
         script: |
           cd frontend
-          if [ ! -d "ios" ]; then
-            npx cap add ios
-          fi
-      - name: Sync Capacitor to iOS
-        script: |
-          cd frontend
+          # Capacitor 8 generates an SPM-based iOS project (no Podfile, no
+          # .xcworkspace). cap add ios isn't idempotent — nuke + re-add clean.
+          rm -rf ios
+          npx cap add ios
           npx cap sync ios
-      - name: Install CocoaPods
+          if [ ! -d "ios/App/App.xcodeproj" ]; then
+            echo "ERROR: cap add ios did not produce App.xcodeproj" >&2
+            exit 1
+          fi
+      - name: Resolve Swift Package dependencies
         script: |
           cd frontend/ios/App
-          pod install
-      - name: Set up signing
+          xcodebuild -resolvePackageDependencies -project App.xcodeproj -scheme App
+      - name: Set build number (auto-increment from App Store Connect)
+        script: |
+          cd frontend/ios/App
+          if [ -n "$APP_STORE_APP_ID" ]; then
+            LATEST=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "0")
+            NEW=$(($LATEST + 1))
+            agvtool new-version -all $NEW
+            echo "Set build number to $NEW"
+          else
+            echo "APP_STORE_APP_ID not set — using default build number"
+          fi
+      - name: Fetch + install signing files (cert + provisioning profile)
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
@@ -135,27 +178,16 @@ workflows:
             --create
           keychain add-certificates
           xcode-project use-profiles
-      - name: Increment build number
+      - name: Build .ipa with xcodebuild
         script: |
-          cd frontend/ios/App
-          BUILD_NUMBER=$(($(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID") + 1))
-          agvtool new-version -all $BUILD_NUMBER
-      - name: Build iOS app
-        script: |
-          cd frontend
           xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
+            --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
     artifacts:
-      - frontend/build/ios/ipa/*.ipa
+      - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
     publishing:
-      email:
-        recipients:
-          - chippewavalleyhomecare@gmail.com
-        notify:
-          success: true
-          failure: true
       app_store_connect:
         auth: integration
         submit_to_testflight: true
+        # submit_to_app_store: false   # set true when ready for App Store review

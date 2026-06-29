@@ -90,12 +90,16 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
   const [editData, setEditData] = useState({
     firstName: '',
     lastName: '',
+    email: '',
     phone: '',
     payRate: '',
+    hireDate: '',
     address: '',
     city: '',
     state: '',
-    zip: ''
+    zip: '',
+    emergencyContactName: '',
+    emergencyContactPhone: ''
   });
 
   const [rateFormData, setRateFormData] = useState({
@@ -175,12 +179,16 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
     setEditData({
       firstName: caregiver.first_name || '',
       lastName: caregiver.last_name || '',
+      email: caregiver.email || '',
       phone: caregiver.phone || '',
       payRate: caregiver.default_pay_rate || '',
+      hireDate: (caregiver.hire_date || '').slice(0, 10),
       address: caregiver.address || '',
       city: caregiver.city || '',
       state: caregiver.state || '',
-      zip: caregiver.zip || ''
+      zip: caregiver.zip || '',
+      emergencyContactName: caregiver.emergency_contact_name || '',
+      emergencyContactPhone: caregiver.emergency_contact_phone || ''
     });
     setShowEditModal(true);
   };
@@ -197,12 +205,16 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
         body: JSON.stringify({
           firstName: editData.firstName,
           lastName: editData.lastName,
+          email: editData.email ? editData.email.trim() : null,
           phone: editData.phone,
           payRate: parseFloat(editData.payRate) || null,
+          hireDate: editData.hireDate || null,
           address: editData.address || null,
           city: editData.city || null,
           state: editData.state || null,
-          zip: editData.zip || null
+          zip: editData.zip || null,
+          emergencyContactName: editData.emergencyContactName || null,
+          emergencyContactPhone: editData.emergencyContactPhone || null
         })
       });
 
@@ -634,6 +646,11 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
               </div>
 
               <div className="form-group">
+                <label>Email <small className="text-muted">(this is their login username)</small></label>
+                <input type="email" value={editData.email} onChange={(e) => setEditData({ ...editData, email: e.target.value })} placeholder="name@example.com" required />
+              </div>
+
+              <div className="form-group">
                 <label>Phone</label>
                 <input type="tel" value={editData.phone} onChange={(e) => setEditData({ ...editData, phone: e.target.value })} />
               </div>
@@ -642,6 +659,11 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                 <label>Default Hourly Pay Rate</label>
                 <input type="number" step="0.01" min="0" value={editData.payRate} onChange={(e) => setEditData({ ...editData, payRate: e.target.value })} placeholder="15.00" />
                 <small className="text-muted">Used when no care-type-specific rate is set</small>
+              </div>
+
+              <div className="form-group">
+                <label>Hire Date</label>
+                <input type="date" value={editData.hireDate} onChange={(e) => setEditData({ ...editData, hireDate: e.target.value })} />
               </div>
 
               <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1rem', marginTop: '0.5rem' }}>
@@ -667,6 +689,23 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
                 <div className="form-group">
                   <label>Zip</label>
                   <input type="text" value={editData.zip} onChange={(e) => setEditData({ ...editData, zip: e.target.value })} placeholder="54701" maxLength="10" />
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1rem', marginTop: '0.5rem' }}>
+                <label style={{ fontWeight: '700', fontSize: '0.9rem', marginBottom: '0.5rem', display: 'block' }}>
+                  🚑 Emergency Contact
+                </label>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Name</label>
+                  <input type="text" value={editData.emergencyContactName} onChange={(e) => setEditData({ ...editData, emergencyContactName: e.target.value })} placeholder="Jane Doe" />
+                </div>
+                <div className="form-group">
+                  <label>Phone</label>
+                  <input type="tel" value={editData.emergencyContactPhone} onChange={(e) => setEditData({ ...editData, emergencyContactPhone: e.target.value })} placeholder="(715) 555-1234" />
                 </div>
               </div>
 

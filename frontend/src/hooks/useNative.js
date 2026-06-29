@@ -10,7 +10,6 @@ const getGeolocation = () => import('@capacitor/geolocation').then(m => m.Geoloc
 const getNetwork     = () => import('@capacitor/network').then(m => m.Network).catch(() => null);
 const getHaptics     = () => import('@capacitor/haptics').then(m => m.Haptics).catch(() => null);
 const getLocalNotif  = () => import('@capacitor/local-notifications').then(m => m.LocalNotifications).catch(() => null);
-const getBgGeo       = () => import('@capacitor-community/background-geolocation').then(m => m.BackgroundGeolocation).catch(() => null);
 
 export const isNative = Capacitor.isNativePlatform();
 export const platform = Capacitor.getPlatform(); // 'ios' | 'android' | 'web'
@@ -290,100 +289,6 @@ export function useOfflineSync() {
   return { queueCount, syncing, online };
 }
 
-
-// ── useBackgroundGeolocation ──────────────────────────────────────────────────
-// Runs a foreground service on Android that keeps GPS active even when the
-// screen is off or the app is backgrounded. Shows a persistent notification
-// so Android doesn't kill it. Falls back to regular watchPosition on web/iOS.
-export function useBackgroundGeolocation() {
-  const [isRunning, setIsRunning] = useState(false);
-  const webWatchIdRef = useRef(null);
-  const bgWatcherIdRef = useRef(null);
-
-  const start = useCallback(async ({ onLocation, notificationTitle = 'CVHC HomeCare', notificationText = 'Monitoring your location for auto clock-in' } = {}) => {
-    const BgGeo = await getBgGeo();
-
-    if (BgGeo && isNative && platform === 'android') {
-      try {
-        // Request permissions first
-        const Geo = await getGeolocation();
-        if (Geo) {
-          const perm = await Geo.requestPermissions({ permissions: ['location', 'coarseLocation'] });
-          if (perm.location !== 'granted') throw new Error('Location permission denied');
-        }
-
-        bgWatcherIdRef.current = await BgGeo.addWatcher(
-          {
-            backgroundMessage: notificationText,
-            backgroundTitle: notificationTitle,
-            requestPermissions: true,
-            stale: false,
-            distanceFilter: 20, // meters — only fire if moved 20m
-          },
-          (location, error) => {
-            if (error) {
-              console.warn('[BgGeo]', error.code, error.message);
-              return;
-            }
-            if (onLocation) onLocation({
-              latitude: location.latitude,
-              longitude: location.longitude,
-              accuracy: location.accuracy,
-              timestamp: location.time,
-            });
-          }
-        );
-        setIsRunning(true);
-        console.log('[BgGeo] Background geolocation started');
-      } catch (err) {
-        console.warn('[BgGeo] Failed to start background geolocation:', err.message);
-        // Fall back to regular watch
-        setIsRunning(false);
-      }
-    } else {
-      // Web or iOS — use regular watchPosition as fallback
-      if ('geolocation' in navigator) {
-        webWatchIdRef.current = navigator.geolocation.watchPosition(
-          pos => {
-            if (onLocation) onLocation({
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
-              accuracy: pos.coords.accuracy,
-              timestamp: pos.timestamp,
-            });
-          },
-          err => console.warn('[BgGeo fallback]', err.message),
-          { enableHighAccuracy: true, maximumAge: 10000 }
-        );
-        setIsRunning(true);
-      }
-    }
-  }, []);
-
-  const stop = useCallback(async () => {
-    const BgGeo = await getBgGeo();
-    if (BgGeo && isNative && platform === 'android' && bgWatcherIdRef.current !== null) {
-      await BgGeo.removeWatcher({ id: bgWatcherIdRef.current }).catch(() => {});
-      bgWatcherIdRef.current = null;
-    } else if (webWatchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(webWatchIdRef.current);
-      webWatchIdRef.current = null;
-    }
-    setIsRunning(false);
-  }, []);
-
-  // Cleanup on unmount — stop watcher if still running
-  useEffect(() => {
-    return () => {
-      if (webWatchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(webWatchIdRef.current);
-        webWatchIdRef.current = null;
-      }
-    };
-  }, []);
-
-  return { start, stop, isRunning };
-}
 
 // ── useLocalNotifications ─────────────────────────────────────────────────────
 // Schedule local notifications (shift reminders etc)
