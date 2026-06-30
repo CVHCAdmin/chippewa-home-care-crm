@@ -122,15 +122,12 @@ workflows:
     integrations:
       app_store_connect: codemagic_api_key   # existing integration on this account
     environment:
-      ios_signing:
-        # The com.cvhc.homecare App Store profile was created on the first run
-        # (fetch-signing-files --create). Now that it exists, Codemagic's
-        # automatic signing finds it and applies it to the Capacitor target
-        # correctly — manual signing alone left the target with no profile
-        # ("App requires a provisioning profile"). The manual fetch step below
-        # is kept (idempotent) so the profile is also created/refreshed.
-        distribution_type: app_store
-        bundle_identifier: com.cvhc.homecare
+      # Manual signing: the script step `fetch-signing-files --create` creates
+      # the cert + App Store profile (Codemagic's automatic ios_signing block
+      # only FETCHES existing profiles and errors "No matching profiles found"
+      # for a brand-new bundle id). This run reaches the archive step; the
+      # remaining provisioning-attachment for the Capacitor target is being
+      # finalized — see notes in the commit history.
       vars:
         XCODE_PROJECT: "frontend/ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
