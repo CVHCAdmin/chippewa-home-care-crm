@@ -194,7 +194,10 @@ router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
 // Query params:
 //   ?scope=this&date=YYYY-MM-DD  — cancel this single occurrence (creates exception)
 //   ?scope=following&date=YYYY-MM-DD — end recurring pattern before this date
-//   ?scope=all (default) — soft delete entire pattern
+//   ?scope=all (default) — for a recurring pattern, END it as of today (keeps
+//        every past/worked occurrence); for a one-time shift, delete the row.
+//   ?scope=purge — EXPLICIT full erase incl. history (deactivate the whole
+//        pattern, hiding past + future). Only for patterns created by mistake.
 //   ?deletePair=true — also delete split shift partner
 router.delete('/:scheduleId', verifyToken, async (req, res) => {
   try {
@@ -269,28 +272,79 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
       }
     }
 
-    // ── Scope: all — delete entire pattern (original behavior) ──
+    // Which rows does this action target — just this shift, or the whole split
+    // pair when the caller asked to delete the partner too?
+    const isSplitPair = shift.is_split_shift && shift.split_shift_group_id && deletePair === 'true';
+    const targetClause = isSplitPair ? 'split_shift_group_id = $1 AND is_active = true' : 'id = $1';
+    const targetParam  = isSplitPair ? shift.split_shift_group_id : scheduleId;
 
-    // If split shift and deletePair requested, delete both segments
-    if (shift.is_split_shift && shift.split_shift_group_id && deletePair === 'true') {
+    // ── Scope: purge — EXPLICIT full erase, history included ──
+    // The ONLY path that deactivates a recurring pattern (hiding past + future).
+    // Wired to a clearly-labeled destructive action in the UI; never the default.
+    if (scope === 'purge') {
       const result = await db.query(
-        `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE split_shift_group_id = $1 AND is_active = true RETURNING *`,
-        [shift.split_shift_group_id]
+        `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
+        [targetParam]
       );
       for (const row of result.rows) {
         await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
       }
-      return res.json({ message: 'Split shift pair deleted', deletedCount: result.rows.length });
+      return res.json({ message: 'Schedule permanently removed (history included)', deletedCount: result.rows.length });
     }
 
-    // Single delete
+    // ── Scope: all ──
+    // For a RECURRING pattern this must NEVER wipe already-worked history. A
+    // recurring shift is a single row spanning past→future, so is_active=false
+    // would hide every past occurrence too. Instead we END the pattern as of
+    // today: future occurrences stop, every past occurrence stays visible and
+    // billable. (Use scope=purge to truly erase a pattern created by mistake.)
+    if (isRecurring) {
+      // "Today" in the agency's timezone (Central). Last active day is yesterday,
+      // so no occurrence is generated from today forward.
+      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+      const end = new Date(todayStr + 'T12:00:00');
+      end.setDate(end.getDate() - 1);
+      const endStr = end.toISOString().split('T')[0];
+      const effStr = new Date(shift.effective_date).toISOString().split('T')[0];
+
+      // Pattern hadn't started yet → no past occurrences to protect → remove outright.
+      if (endStr < effStr) {
+        const result = await db.query(
+          `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
+          [targetParam]
+        );
+        for (const row of result.rows) {
+          await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
+        }
+        return res.json({ message: 'Recurring schedule removed (had not started; no past occurrences)', deletedCount: result.rows.length });
+      }
+
+      const result = await db.query(
+        `UPDATE schedules SET end_date = $2, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
+        [targetParam, endStr]
+      );
+      for (const row of result.rows) {
+        await auditLog(req.user.id, 'END_PATTERN', 'schedules', row.id, shift, row, reason || null);
+      }
+      return res.json({
+        message: 'Recurring pattern ended today; past occurrences kept',
+        endDate: endStr,
+        pastKept: true,
+        deletedCount: result.rows.length,
+      });
+    }
+
+    // ── Scope: all on a one-time shift — delete the single row (or split pair) ──
     const result = await db.query(
-      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [scheduleId]
+      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
+      [targetParam]
     );
-    await auditLog(req.user.id, 'DELETE', 'schedules', scheduleId, null, result.rows[0], reason || null);
-    res.json({
-      message: 'Schedule deleted',
+    for (const row of result.rows) {
+      await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
+    }
+    return res.json({
+      message: isSplitPair ? 'Split shift pair deleted' : 'Schedule deleted',
+      deletedCount: result.rows.length,
       wasSplitShift: shift.is_split_shift || false,
       splitShiftGroupId: shift.split_shift_group_id || null,
     });

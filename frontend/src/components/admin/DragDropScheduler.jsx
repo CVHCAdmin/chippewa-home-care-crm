@@ -398,15 +398,26 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
         });
         showToast('Future occurrences removed');
+      } else if (scope === 'purge') {
+        // Explicit full erase — removes past + future. Deliberate, confirmed action.
+        const url = isSplit
+          ? `${API_BASE_URL}/api/schedules/${shift.id}?scope=purge&deletePair=true`
+          : `${API_BASE_URL}/api/schedules/${shift.id}?scope=purge`;
+        await fetch(url, {
+          method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
+        });
+        showToast('Schedule and its history removed');
       } else {
-        // Delete all — original behavior
+        // scope=all — for a recurring pattern the backend ends it as of today
+        // and KEEPS every past occurrence; for a one-time shift it just deletes.
         const url = isSplit
           ? `${API_BASE_URL}/api/schedules/${shift.id}?scope=all&deletePair=true`
           : `${API_BASE_URL}/api/schedules/${shift.id}?scope=all`;
         await fetch(url, {
           method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
         });
-        showToast(isSplit ? 'Split shift pair deleted' : 'Shift deleted');
+        showToast(isSplit ? 'Split shift pair deleted'
+          : (isRecurring ? 'Ended going forward — past occurrences kept' : 'Shift deleted'));
       }
 
       setDeleteConfirm(null);
@@ -1401,11 +1412,25 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                 <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>End the recurring pattern starting from {dateLabel}. Past occurrences stay.</div>
               </button>
               <button onClick={() => handleDeleteShift('all')} disabled={saving} style={{
-                padding:'12px 16px', borderRadius:8, border:'1px solid #FECACA', cursor:'pointer',
-                background:'#FEF2F2', textAlign:'left', fontSize:13,
+                padding:'12px 16px', borderRadius:8, border:'1px solid #D1D5DB', cursor:'pointer',
+                background:'#fff', textAlign:'left', fontSize:13,
               }}>
-                <div style={{ fontWeight:700, color:'#EF4444' }}>All occurrences</div>
-                <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Permanently remove this entire recurring schedule.</div>
+                <div style={{ fontWeight:700, color:'#374151' }}>Stop going forward</div>
+                <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>End this schedule as of today. All past (already-worked) occurrences are kept.</div>
+              </button>
+              <button
+                onClick={() => {
+                  if (window.confirm('ERASE the ENTIRE schedule, including every PAST occurrence and its worked history?\n\nThis is rarely what you want — use it only for a schedule created by mistake. Past occurrences will disappear from view.')) {
+                    handleDeleteShift('purge');
+                  }
+                }}
+                disabled={saving}
+                style={{
+                  padding:'12px 16px', borderRadius:8, border:'1px solid #FECACA', cursor:'pointer',
+                  background:'#FEF2F2', textAlign:'left', fontSize:13,
+                }}>
+                <div style={{ fontWeight:700, color:'#EF4444' }}>Erase entire schedule (incl. past history)</div>
+                <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Removes past + future. Only for a schedule created by mistake.</div>
               </button>
             </div>
             <div style={{ display:'flex', justifyContent:'flex-end', marginTop:12 }}>

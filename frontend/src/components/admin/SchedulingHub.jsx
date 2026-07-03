@@ -496,9 +496,10 @@ const SchedulingHub = ({ token }) => {
   const handleDeleteSchedule = async (scheduleId, schedule) => {
     const isRecurring = schedule && schedule.day_of_week !== null && schedule.day_of_week !== undefined;
     if (isRecurring) {
-      // For recurring schedules, default to deleting all occurrences (same as before)
-      // The DragDropScheduler handles per-occurrence deletion via its scope UI
-      const _cok = await confirm('Delete all occurrences of this recurring schedule?', {danger: true}); if (!_cok) return;
+      // scope=all on a recurring pattern now ENDS it as of today and keeps every
+      // past (already-worked) occurrence. Full history erase lives in the
+      // DragDropScheduler's scope UI (scope=purge), behind its own confirm.
+      const _cok = await confirm('Stop this recurring schedule going forward? Past (already-worked) occurrences are kept.', {danger: true}); if (!_cok) return;
     } else {
       const _cok = await confirm('Delete this schedule?', {danger: true}); if (!_cok) return;
     }
