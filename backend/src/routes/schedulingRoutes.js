@@ -468,6 +468,8 @@ router.post('/check-conflicts', verifyToken, async (req, res) => {
       FROM schedules s LEFT JOIN clients c ON s.client_id=c.id
       WHERE s.caregiver_id=$1 AND s.is_active=true AND NOT (s.end_time<=$2 OR s.start_time>=$3)
         AND (s.date=$4 OR s.day_of_week=$5)
+        AND (s.day_of_week IS NULL OR s.end_date IS NULL
+             OR s.end_date >= (now() AT TIME ZONE 'America/Chicago')::date)
     `, [caregiverId, startTime, endTime, date, dayOfWeek]);
     res.json({ hasConflict: result.rows.length > 0, conflicts: result.rows.map(s => ({ id: s.id, clientName: `${s.client_first_name} ${s.client_last_name}`, startTime: s.start_time, endTime: s.end_time, isRecurring: s.day_of_week !== null })) });
   } catch (error) { res.status(500).json({ error: error.message }); }

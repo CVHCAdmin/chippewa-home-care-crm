@@ -45,6 +45,8 @@ router.get('/caregiver/:caregiverId', verifyToken, async (req, res) => {
       FROM schedules s
       JOIN clients c ON s.client_id = c.id
       WHERE s.caregiver_id = $1 AND s.is_active = true
+        AND (s.day_of_week IS NULL OR s.end_date IS NULL
+             OR s.end_date >= (now() AT TIME ZONE 'America/Chicago')::date)
       ORDER BY s.day_of_week, s.date, s.start_time
     `, [req.params.caregiverId]);
     res.json(result.rows);
@@ -67,6 +69,8 @@ router.get('/:caregiverId', verifyToken, async (req, res) => {
       JOIN clients c ON s.client_id = c.id
       LEFT JOIN care_types ct ON c.care_type_id = ct.id
       WHERE s.caregiver_id = $1 AND s.is_active = true
+        AND (s.day_of_week IS NULL OR s.end_date IS NULL
+             OR s.end_date >= (now() AT TIME ZONE 'America/Chicago')::date)
       ORDER BY s.day_of_week, s.date, s.start_time
     `, [req.params.caregiverId]);
     res.json(result.rows);
