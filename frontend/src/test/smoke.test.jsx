@@ -38,6 +38,9 @@ describe('Login', () => {
       Promise.resolve({
         ok: false,
         status: 401,
+        // Login reads response.text() then JSON.parses it (so it can survive a
+        // non-JSON 429). The mock must provide text(), not just json().
+        text: () => Promise.resolve(JSON.stringify({ error: 'Invalid credentials' })),
         json: () => Promise.resolve({ error: 'Invalid credentials' }),
       })
     );
