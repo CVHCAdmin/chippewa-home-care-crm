@@ -281,7 +281,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         anchorStart.setDate(anchorStart.getDate() - anchorStart.getDay());
         const anchorStr = anchorStart.toISOString().split('T')[0];
 
-        let created = 0, failed = 0, clampedTo = null;
+        let created = 0, dup = 0, failed = 0, clampedTo = null;
         for (const dayOfWeek of days) {
           try {
             const payload = {
@@ -306,7 +306,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
               body: JSON.stringify(payload),
             });
-            if (!res.ok) throw new Error();
+            if (!res.ok) { if (res.status === 409) { dup++; continue; } throw new Error(); }
             const body = await res.json().catch(() => ({}));
             if (body.effectiveDateClamped) clampedTo = body.effectiveDate;
             created++;
@@ -319,7 +319,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           // (simplified: we re-fetch and the backend already supports end_date in PUT)
         }
 
-        const baseMsg = `Created ${created} recurring schedule${created !== 1 ? 's' : ''}${failed ? ` (${failed} failed)` : ''}`;
+        const baseMsg = `Created ${created} recurring schedule${created !== 1 ? 's' : ''}${dup ? ` — ${dup} already scheduled` : ''}${failed ? ` (${failed} failed)` : ''}`;
         if (clampedTo) {
           const d = new Date(clampedTo + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
           showToast(`${baseMsg} — recurring shifts can't start in the past, so it begins ${d}.`, 'warning');

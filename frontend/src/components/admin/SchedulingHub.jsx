@@ -455,7 +455,7 @@ const SchedulingHub = ({ token }) => {
     try {
       if (formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') {
         const freq = formData.scheduleType === 'bi-weekly' ? 'biweekly' : 'weekly';
-        let created = 0, failed = 0;
+        let created = 0, dup = 0, failed = 0;
         for (const dayOfWeek of selectedDays) {
           try {
             await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
@@ -465,9 +465,14 @@ const SchedulingHub = ({ token }) => {
               isTraining: formData.isTraining
             })});
             created++;
-          } catch { failed++; }
+          } catch (err) { if (String(err.message).includes('(409)')) dup++; else failed++; }
         }
-        showMsg(`Created ${created} ${freq === 'biweekly' ? 'bi-weekly' : 'recurring'} schedule${created !== 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}!`);
+        // 409 = the DB duplicate guard rejected an identical active shift.
+        const label = freq === 'biweekly' ? 'bi-weekly' : 'recurring';
+        let m = `Created ${created} ${label} schedule${created !== 1 ? 's' : ''}`;
+        if (dup > 0) m += ` — ${dup} already scheduled`;
+        if (failed > 0) m += ` (${failed} failed)`;
+        if (failed > 0) showMsg(m, 'error'); else showMsg(m);
       } else if (formData.scheduleType === 'recurring') {
         await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
           caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'recurring',
@@ -489,7 +494,10 @@ const SchedulingHub = ({ token }) => {
       loadCaregiverSchedules(selectedCaregiverId);
       if (scheduleView === 'week') loadWeekView();
       if (scheduleView === 'month') loadCalendarData();
-    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+    } catch (e) {
+      if (String(e.message).includes('(409)')) showMsg('That shift is already scheduled for this caregiver.', 'error');
+      else showMsg('Error: ' + e.message, 'error');
+    }
     finally { setSaving(false); }
   };
 

@@ -115,6 +115,9 @@ router.post('/', verifyToken, async (req, res) => {
     await auditLog(req.user.id, 'CREATE', 'schedules', scheduleId, null, result.rows[0]);
     res.status(201).json({ ...result.rows[0], authWarnings: authCheck.warnings });
   } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'This caregiver already has this exact shift (same client, day, and time).', duplicate: true });
+    }
     res.status(500).json({ error: error.message });
   }
 });

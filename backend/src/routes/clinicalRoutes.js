@@ -558,7 +558,12 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
       [id, caregiverId, clientId, scheduleType||'recurring', dayOfWeek!=null?dayOfWeek:null, date||null, startTime, endTime, notes||null, frequency||'weekly', effectiveDate||null, anchorDate||null, !!isTraining]
     );
     res.status(201).json({ ...result.rows[0], effectiveDateClamped, effectiveDate });
-  } catch (error) { res.status(500).json({ error: error.message }); }
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'This caregiver already has this exact shift (same client, day, and time).', duplicate: true });
+    }
+    res.status(500).json({ error: error.message });
+  }
 });
 
 module.exports = router;
