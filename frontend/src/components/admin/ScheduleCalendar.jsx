@@ -119,12 +119,14 @@ const ScheduleCalendar = ({ token }) => {
       if (schedule.day_of_week !== null && schedule.day_of_week !== undefined) {
         if (schedule.day_of_week !== targetDayOfWeek) return;
         // Respect effective_date
-        if (schedule.effective_date && targetDate < new Date(schedule.effective_date + 'T00:00:00')) return;
-        // Respect end_date
-        if (schedule.end_date && targetDate > new Date(schedule.end_date + 'T23:59:59')) return;
+        // Dates arrive as full ISO timestamps; compare by calendar date (the old
+        // string concat yielded Invalid Date, so these bounds never applied and
+        // ended recurring shifts kept showing).
+        if (schedule.effective_date && dateStr < schedule.effective_date.slice(0, 10)) return;
+        if (schedule.end_date && dateStr > schedule.end_date.slice(0, 10)) return;
         // Biweekly check
         if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
-          const diffWeeks = Math.floor((targetDate - new Date(schedule.anchor_date + 'T00:00:00')) / (7*24*60*60*1000));
+          const diffWeeks = Math.floor((targetDate - new Date(schedule.anchor_date)) / (7*24*60*60*1000));
           if (diffWeeks % 2 !== 0) return;
         }
         // Check exceptions

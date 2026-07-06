@@ -562,11 +562,13 @@ const SchedulingHub = ({ token }) => {
       }
       if (s.day_of_week !== null && s.day_of_week !== undefined) {
         if (s.day_of_week !== dow) return;
-        if (s.effective_date && target < new Date(s.effective_date + 'T00:00:00')) return;
-        // Respect end_date
-        if (s.end_date && target > new Date(s.end_date + 'T23:59:59')) return;
+        // Dates arrive as full ISO timestamps; compare by calendar date. The old
+        // `+ 'T00:00:00'` / `+ 'T23:59:59'` concat made an Invalid Date, so these
+        // bounds silently never applied and ended shifts kept showing.
+        if (s.effective_date && dateStr < s.effective_date.slice(0, 10)) return;
+        if (s.end_date && dateStr > s.end_date.slice(0, 10)) return;
         if (s.frequency === 'biweekly' && s.anchor_date) {
-          const diffWeeks = Math.floor((target - new Date(s.anchor_date + 'T00:00:00')) / (7*24*60*60*1000));
+          const diffWeeks = Math.floor((target - new Date(s.anchor_date)) / (7*24*60*60*1000));
           if (diffWeeks % 2 !== 0) return;
         }
         // Check exceptions

@@ -163,11 +163,11 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           if (cellDate < from) return;
         }
 
-        // Respect end_date
-        if (s.end_date) {
-          const endD = new Date(s.end_date + 'T23:59:59');
-          if (cellDate > endD) return;
-        }
+        // Respect end_date. end_date arrives as a full ISO timestamp
+        // (e.g. 2026-07-04T05:00:00Z), so the old `end_date + 'T23:59:59'`
+        // produced an Invalid Date and NEVER filtered — leaving deleted/ended
+        // recurring shifts painted on the grid. Compare by calendar date.
+        if (s.end_date && dateStr > s.end_date.slice(0, 10)) return;
 
         // Biweekly check
         if (s.frequency === 'biweekly' && s.anchor_date) {
