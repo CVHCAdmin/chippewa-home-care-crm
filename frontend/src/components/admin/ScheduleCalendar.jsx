@@ -118,11 +118,10 @@ const ScheduleCalendar = ({ token }) => {
       // Recurring schedules
       if (schedule.day_of_week !== null && schedule.day_of_week !== undefined) {
         if (schedule.day_of_week !== targetDayOfWeek) return;
-        // Respect effective_date
-        // Dates arrive as full ISO timestamps; compare by calendar date (the old
-        // string concat yielded Invalid Date, so these bounds never applied and
-        // ended recurring shifts kept showing).
-        if (schedule.effective_date && dateStr < schedule.effective_date.slice(0, 10)) return;
+        // Do NOT gate on effective_date: recurring patterns must stay visible in
+        // PAST weeks so prior schedules can be reviewed and past shifts added.
+        // Only end_date matters — hide a deleted (ended) pattern from its end date
+        // forward. end_date is a full ISO timestamp, so compare by date string.
         if (schedule.end_date && dateStr > schedule.end_date.slice(0, 10)) return;
         // Biweekly check
         if (schedule.frequency === 'biweekly' && schedule.anchor_date) {

@@ -562,10 +562,10 @@ const SchedulingHub = ({ token }) => {
       }
       if (s.day_of_week !== null && s.day_of_week !== undefined) {
         if (s.day_of_week !== dow) return;
-        // Dates arrive as full ISO timestamps; compare by calendar date. The old
-        // `+ 'T00:00:00'` / `+ 'T23:59:59'` concat made an Invalid Date, so these
-        // bounds silently never applied and ended shifts kept showing.
-        if (s.effective_date && dateStr < s.effective_date.slice(0, 10)) return;
+        // Do NOT gate on effective_date: recurring patterns must stay visible in
+        // PAST weeks so prior schedules can be reviewed and past shifts added.
+        // Only end_date matters — hide a deleted (ended) pattern from its end date
+        // forward. end_date is a full ISO timestamp, so compare by date string.
         if (s.end_date && dateStr > s.end_date.slice(0, 10)) return;
         if (s.frequency === 'biweekly' && s.anchor_date) {
           const diffWeeks = Math.floor((target - new Date(s.anchor_date)) / (7*24*60*60*1000));
