@@ -120,7 +120,7 @@ async function generateClaimFromEVV(evvVisitId, userId) {
       place_of_service, units, units_billed,
       charge_amount, total_amount,
       submission_method, status, created_by
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'pending',$21)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'draft',$21)
     RETURNING *
   `, [
     uuidv4(), evvVisitId, visit.client_id, visit.caregiver_id,
@@ -138,7 +138,7 @@ async function generateClaimFromEVV(evvVisitId, userId) {
   // Log status
   await db.query(`
     INSERT INTO claim_status_history (id, claim_id, status, notes, created_by)
-    VALUES ($1, $2, 'pending', 'Claim generated from EVV visit', $3)
+    VALUES ($1, $2, 'draft', 'Claim generated from EVV visit', $3)
   `, [uuidv4(), result.rows[0].id, userId]);
 
   return { claim: result.rows[0], route };
@@ -148,13 +148,24 @@ async function generateClaimFromEVV(evvVisitId, userId) {
  * Batch generate claims from all verified EVV visits in a date range
  */
 async function batchGenerateClaims(startDate, endDate, userId) {
+  // EVV compliance (Sandata) is handled OUTSIDE the CRM for these payers, so we
+  // do NOT gate on sandata_status/is_verified here (those flags are never set).
+  // A visit is claimable when: its time entry is complete with billable time,
+  // the client bills via a claim-based payer (MCO/Medicaid/VA — NOT private pay,
+  // which bills via invoices), and it isn't already on a claim. Generated claims
+  // start as 'draft' for admin review/approval before submission.
   const visits = await db.query(`
     SELECT ev.id
     FROM evv_visits ev
+    JOIN time_entries te ON te.id = ev.time_entry_id
+    JOIN clients c ON c.id = ev.client_id
+    JOIN referral_sources rs ON rs.id = c.referral_source_id
     LEFT JOIN claims cl ON cl.evv_visit_id = ev.id
     WHERE ev.service_date BETWEEN $1 AND $2
-      AND ev.is_verified = true
-      AND ev.sandata_status IN ('ready', 'submitted', 'accepted')
+      AND te.is_complete = true
+      AND COALESCE(te.billable_minutes, te.duration_minutes) > 0
+      AND rs.payer_type IS NOT NULL
+      AND rs.payer_type <> 'private_pay'
       AND cl.id IS NULL
     ORDER BY ev.service_date ASC
   `, [startDate, endDate]);
