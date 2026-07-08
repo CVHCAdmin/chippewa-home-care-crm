@@ -389,7 +389,18 @@ const PayrollProcessing = ({ token }) => {
 
   const formatCurrency = (amount) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
   const formatTime = (time) => time ? time.substring(0, 5) : '--:--';
-  const formatMinutes = (min) => min != null ? `${(min / 60).toFixed(2)}h` : '--';
+  // Show durations as "2h 16m" instead of decimal hours.
+  const formatMinutes = (min) => {
+    if (min == null || isNaN(min)) return '--';
+    const total = Math.round(Math.abs(min));
+    const h = Math.floor(total / 60), m = total % 60;
+    const sign = min < 0 ? '-' : '';
+    if (h && m) return `${sign}${h}h ${m}m`;
+    if (h) return `${sign}${h}h`;
+    return `${sign}${m}m`;
+  };
+  // Same, but the input is decimal hours (e.g. 2.32 -> "2h 19m").
+  const formatHoursHM = (hours) => formatMinutes((parseFloat(hours) || 0) * 60);
 
   const shiftStatusConfig = {
     verified:      { bg: '#D1FAE5', color: '#065F46', label: 'Verified',      icon: '✅' },
@@ -485,7 +496,7 @@ const PayrollProcessing = ({ token }) => {
                 { label: 'Pending Review', val: shiftData.stats.pending || 0, color: '#F59E0B' },
                 { label: 'Missing Punch', val: shiftData.stats.missing_punch || 0, color: '#EF4444' },
                 { label: 'Flagged', val: shiftData.stats.flagged || 0, color: '#DC2626' },
-                { label: 'Payable Hours', val: `${(shiftData.stats.totalPayableMinutes / 60 || 0).toFixed(1)}h`, color: '#2ABBA7' },
+                { label: 'Payable Hours', val: formatMinutes(shiftData.stats.totalPayableMinutes || 0), color: '#2ABBA7' },
               ].map(s => (
                 <div key={s.label} style={{ flex: 1, minWidth: 120, padding: '0.75rem 1rem', background: '#F9FAFB', borderRadius: 12, borderLeft: `4px solid ${s.color}` }}>
                   <div style={{ fontSize: '1.25rem', fontWeight: 800, color: s.color }}>{s.val}</div>
@@ -588,7 +599,7 @@ const PayrollProcessing = ({ token }) => {
                               <span style={{ color: '#6B7280', fontSize: '0.75rem' }}> ({formatMinutes(shift.actual_minutes)})</span>
                               {discrepancy != null && Math.abs(discrepancy) >= 15 && (
                                 <div style={{ fontSize: '0.7rem', fontWeight: 700, color: discrepancy > 0 ? '#DC2626' : '#F59E0B' }}>
-                                  {discrepancy > 0 ? '+' : ''}{(discrepancy / 60).toFixed(2)}h {discrepancy > 0 ? 'over' : 'short'}
+                                  {formatMinutes(Math.abs(discrepancy))} {discrepancy > 0 ? 'over' : 'short'}
                                 </div>
                               )}
                             </span>
@@ -667,9 +678,9 @@ const PayrollProcessing = ({ token }) => {
                   {analytics.analytics.map(r => (
                     <tr key={r.id}>
                       <td>{r.first_name} {r.last_name}</td>
-                      <td>{parseFloat(r.scheduled_hours).toFixed(1)}h</td>
-                      <td>{parseFloat(r.clocked_hours).toFixed(1)}h</td>
-                      <td><strong>{parseFloat(r.payable_hours).toFixed(1)}h</strong></td>
+                      <td>{formatHoursHM(r.scheduled_hours)}</td>
+                      <td>{formatHoursHM(r.clocked_hours)}</td>
+                      <td><strong>{formatHoursHM(r.payable_hours)}</strong></td>
                       <td>
                         <span style={{ fontWeight: 700, color:
                           r.reliability_pct == null ? '#9CA3AF'
@@ -692,9 +703,9 @@ const PayrollProcessing = ({ token }) => {
                 <tfoot>
                   <tr style={{ fontWeight: 700, borderTop: '2px solid #E5E7EB' }}>
                     <td>Total</td>
-                    <td>{analytics.totals.scheduled_hours}h</td>
-                    <td>{analytics.totals.clocked_hours}h</td>
-                    <td>{analytics.totals.payable_hours}h</td>
+                    <td>{formatHoursHM(analytics.totals.scheduled_hours)}</td>
+                    <td>{formatHoursHM(analytics.totals.clocked_hours)}</td>
+                    <td>{formatHoursHM(analytics.totals.payable_hours)}</td>
                     <td></td>
                     <td>{analytics.totals.missing_punches}</td>
                     <td>{analytics.totals.late_arrivals}</td>
@@ -715,16 +726,16 @@ const PayrollProcessing = ({ token }) => {
           <div className="grid">
             <div className="stat-card">
               <h3>Scheduled</h3>
-              <div className="value">{totals.totalScheduledHours.toFixed(2)}h</div>
+              <div className="value">{formatHoursHM(totals.totalScheduledHours)}</div>
             </div>
             <div className="stat-card">
               <h3>Clocked In</h3>
-              <div className="value">{totals.totalClockedHours.toFixed(2)}h</div>
+              <div className="value">{formatHoursHM(totals.totalClockedHours)}</div>
             </div>
             <div className="stat-card">
               <h3>Payable Hours</h3>
-              <div className="value" style={{ color: '#2ABBA7' }}>{totals.totalHours.toFixed(2)}h</div>
-              <div className="stat-subtext">{totals.totalOvertimeHours.toFixed(2)} overtime</div>
+              <div className="value" style={{ color: '#2ABBA7' }}>{formatHoursHM(totals.totalHours)}</div>
+              <div className="stat-subtext">{formatHoursHM(totals.totalOvertimeHours)} overtime</div>
             </div>
             <div className="stat-card">
               <h3>Gross Pay</h3>
@@ -782,11 +793,11 @@ const PayrollProcessing = ({ token }) => {
                   return (
                     <tr key={payroll.caregiver_id} style={{ background: hasUnresolved ? '#FFFBEB' : undefined }}>
                       <td><strong>{payroll.first_name} {payroll.last_name}</strong></td>
-                      <td>{parseFloat(payroll.scheduled_hours || 0).toFixed(2)}h</td>
-                      <td>{parseFloat(payroll.clocked_hours || 0).toFixed(2)}h</td>
-                      <td style={{ color: '#2ABBA7', fontWeight: 700 }}>{parseFloat(payroll.total_hours || 0).toFixed(2)}h</td>
+                      <td>{formatHoursHM(payroll.scheduled_hours)}</td>
+                      <td>{formatHoursHM(payroll.clocked_hours)}</td>
+                      <td style={{ color: '#2ABBA7', fontWeight: 700 }}>{formatHoursHM(payroll.total_hours)}</td>
                       <td style={{ color: payroll.overtime_hours > 0 ? '#fd7e14' : undefined }}>
-                        {payroll.overtime_hours.toFixed(2)}
+                        {formatHoursHM(payroll.overtime_hours)}
                       </td>
                       <td>
                         <span style={{ color: '#10B981' }}>{payroll.approved_shifts}</span>
@@ -826,10 +837,10 @@ const PayrollProcessing = ({ token }) => {
           {filteredPayroll.length > 0 && (
             <div className="card" style={{ marginTop: '1rem', background: '#f5f5f5' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem' }}>
-                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Scheduled</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold' }}>{totals.totalScheduledHours.toFixed(2)}h</p></div>
-                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Clocked</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold' }}>{totals.totalClockedHours.toFixed(2)}h</p></div>
-                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Payable</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold', color: '#2ABBA7' }}>{totals.totalHours.toFixed(2)}h</p></div>
-                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Overtime</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold', color: '#fd7e14' }}>{totals.totalOvertimeHours.toFixed(2)}h</p></div>
+                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Scheduled</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold' }}>{formatHoursHM(totals.totalScheduledHours)}</p></div>
+                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Clocked</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold' }}>{formatHoursHM(totals.totalClockedHours)}</p></div>
+                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Payable</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold', color: '#2ABBA7' }}>{formatHoursHM(totals.totalHours)}</p></div>
+                <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Overtime</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold', color: '#fd7e14' }}>{formatHoursHM(totals.totalOvertimeHours)}</p></div>
                 <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Gross Pay</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold', color: '#28a745' }}>{formatCurrency(totals.totalGrossPay)}</p></div>
                 <div><p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>Net Pay</p><p style={{ margin: '0.25rem 0 0', fontSize: '1.2rem', fontWeight: 'bold', color: '#2196f3' }}>{formatCurrency(totals.totalNetPay)}</p></div>
               </div>
