@@ -15,8 +15,11 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
-// Helper to calculate hours from schedule time range (wraps overnight: end<start adds 24h)
+// Legacy per-row hours calc. Used with "(date in range) OR (any recurring)", it
+// OVER-counts recurring shifts (counts ended / not-yet-started / cancelled ones)
+// and does not expand per day. Prefer SCHEDULE_OCCURRENCES_CTE for period totals.
 const SCHEDULE_HOURS_CALC = `(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)`;
 
 // ==================== OVERVIEW REPORT ====================
@@ -43,16 +46,10 @@ router.post('/overview', auth, async (req, res) => {
 
     // Summary stats - CLIENT HOURS from schedules
     const summaryQuery = await db.query(`
-      SELECT 
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as "totalHours",
-        COUNT(DISTINCT s.id) as "totalShifts"
-      FROM schedules s
-      WHERE s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
-        ${scheduleFilters}
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT COALESCE(SUM(occ.hours), 0) as "totalHours",
+             COUNT(*) as "totalShifts"
+      FROM occ WHERE 1=1 ${scheduleFilters.replace(/\bs\./g, 'occ.')}
     `, params);
 
     // Average satisfaction from performance ratings
@@ -71,21 +68,14 @@ router.post('/overview', auth, async (req, res) => {
 
     // Top caregivers - by SCHEDULED hours with clients
     const topCaregiversQuery = await db.query(`
-      SELECT 
-        u.id,
-        u.first_name,
-        u.last_name,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}) * COALESCE(u.default_pay_rate, 25), 0) as total_revenue,
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT
+        u.id, u.first_name, u.last_name,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) as total_hours,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) * COALESCE(u.default_pay_rate, 25) as total_revenue,
         COALESCE(AVG(pr.satisfaction_score), 0) as avg_satisfaction,
-        COUNT(DISTINCT s.client_id) as clients_served
+        COALESCE((SELECT COUNT(DISTINCT o.client_id) FROM occ o WHERE o.caregiver_id = u.id), 0) as clients_served
       FROM users u
-      LEFT JOIN schedules s ON s.caregiver_id = u.id 
-        AND s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
       LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id
         AND pr.created_at >= $1 AND pr.created_at <= $2
       WHERE u.role = 'caregiver' AND u.is_active = true
@@ -96,23 +86,14 @@ router.post('/overview', auth, async (req, res) => {
 
     // Top clients - by SCHEDULED hours
     const topClientsQuery = await db.query(`
-      SELECT 
-        c.id,
-        c.first_name,
-        c.last_name,
-        c.service_type,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}) * 25, 0) as total_cost,
-        COUNT(DISTINCT s.caregiver_id) as caregiver_count
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT
+        c.id, c.first_name, c.last_name, c.service_type,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.client_id = c.id), 0) as total_hours,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.client_id = c.id), 0) * 25 as total_cost,
+        COALESCE((SELECT COUNT(DISTINCT o.caregiver_id) FROM occ o WHERE o.client_id = c.id), 0) as caregiver_count
       FROM clients c
-      LEFT JOIN schedules s ON s.client_id = c.id 
-        AND s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
       WHERE c.is_active = true
-      GROUP BY c.id, c.first_name, c.last_name, c.service_type
       ORDER BY total_hours DESC
       LIMIT 10
     `, [startDate, endDate]);
@@ -139,72 +120,42 @@ router.post('/hours', auth, async (req, res) => {
   const { startDate, endDate, caregiverId, clientId } = req.body;
 
   try {
-    let params = [startDate, endDate];
-    let filterClause = '';
-    
-    if (caregiverId) {
-      filterClause += ` AND s.caregiver_id = $${params.length + 1}`;
-      params.push(caregiverId);
-    }
-    if (clientId) {
-      filterClause += ` AND s.client_id = $${params.length + 1}`;
-      params.push(clientId);
-    }
+    // $1 = startDate, $2 = endDate (required by SCHEDULE_OCCURRENCES_CTE), then filters.
+    const params = [startDate, endDate];
+    let occFilter = '';
+    if (caregiverId) { params.push(caregiverId); occFilter += ` AND occ.caregiver_id = $${params.length}`; }
+    if (clientId)    { params.push(clientId);    occFilter += ` AND occ.client_id = $${params.length}`; }
 
-    // Hours by week - from SCHEDULES
+    // Hours by week — actual occurrences in range (respects effective/end dates + cancellations)
     const hoursByWeekQuery = await db.query(`
-      SELECT 
-        DATE_TRUNC('week', COALESCE(s.date, CURRENT_DATE)) as week_start,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as hours
-      FROM schedules s
-      WHERE s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
-        ${filterClause}
-      GROUP BY DATE_TRUNC('week', COALESCE(s.date, CURRENT_DATE))
-      ORDER BY week_start
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT DATE_TRUNC('week', occ.occ_date) AS week_start, COALESCE(SUM(occ.hours), 0) AS hours
+      FROM occ WHERE 1=1 ${occFilter}
+      GROUP BY 1 ORDER BY week_start
     `, params);
 
-    // Hours by service type - from SCHEDULES joined with clients
+    // Hours by service type
     const hoursByTypeQuery = await db.query(`
-      SELECT 
-        COALESCE(c.service_type, 'unspecified') as service_type,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as hours
-      FROM schedules s
-      JOIN clients c ON s.client_id = c.id
-      WHERE s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
-      GROUP BY c.service_type
-      ORDER BY hours DESC
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT COALESCE(c.service_type, 'unspecified') AS service_type, COALESCE(SUM(occ.hours), 0) AS hours
+      FROM occ JOIN clients c ON c.id = occ.client_id
+      GROUP BY c.service_type ORDER BY hours DESC
     `, [startDate, endDate]);
 
     // Calculate total for percentages
     const totalHours = hoursByTypeQuery.rows.reduce((sum, row) => sum + parseFloat(row.hours || 0), 0);
 
-    // Caregiver breakdown - SCHEDULED hours
+    // Caregiver breakdown — scheduled hours
     const caregiverBreakdownQuery = await db.query(`
-      SELECT 
-        u.id,
-        u.first_name,
-        u.last_name,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
-        COUNT(DISTINCT s.client_id) as client_count,
-        COALESCE(AVG(${SCHEDULE_HOURS_CALC}), 0) as avg_shift_hours
-      FROM users u
-      LEFT JOIN schedules s ON s.caregiver_id = u.id
-        AND s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT u.id, u.first_name, u.last_name,
+        COALESCE(SUM(occ.hours), 0) AS total_hours,
+        COUNT(DISTINCT occ.client_id) AS client_count,
+        COALESCE(AVG(occ.hours), 0) AS avg_shift_hours
+      FROM users u JOIN occ ON occ.caregiver_id = u.id
       WHERE u.role = 'caregiver' AND u.is_active = true
       GROUP BY u.id, u.first_name, u.last_name
-      HAVING SUM(${SCHEDULE_HOURS_CALC}) > 0
+      HAVING SUM(occ.hours) > 0
       ORDER BY total_hours DESC
     `, [startDate, endDate]);
 
@@ -231,14 +182,15 @@ router.post('/performance', auth, async (req, res) => {
   try {
     // Performance by caregiver - scheduled hours + ratings
     const performanceQuery = await db.query(`
-      SELECT 
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT
         u.id,
         u.first_name,
         u.last_name,
         COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
         COUNT(DISTINCT pr.id) as rating_count,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
-        COUNT(DISTINCT s.client_id) as clients_served,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) as total_hours,
+        COALESCE((SELECT COUNT(DISTINCT o.client_id) FROM occ o WHERE o.caregiver_id = u.id), 0) as clients_served,
         COALESCE(
           (SELECT COUNT(*) FROM incident_reports i WHERE i.reported_by = u.id AND i.created_at >= $1 AND i.created_at <= $2),
           0
@@ -246,12 +198,6 @@ router.post('/performance', auth, async (req, res) => {
       FROM users u
       LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id
         AND pr.created_at >= $1 AND pr.created_at <= $2
-      LEFT JOIN schedules s ON s.caregiver_id = u.id
-        AND s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
       WHERE u.role = 'caregiver' AND u.is_active = true
         ${caregiverId ? 'AND u.id = $3' : ''}
       GROUP BY u.id, u.first_name, u.last_name
@@ -410,13 +356,8 @@ router.post('/revenue', auth, async (req, res) => {
 
     // Get billable hours from SCHEDULES (client hours)
     const hoursQuery = await db.query(`
-      SELECT COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as billable_hours
-      FROM schedules s
-      WHERE s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT COALESCE(SUM(occ.hours), 0) as billable_hours FROM occ
     `, [startDate, endDate]);
 
     const totalRevenue = parseFloat(revenueQuery.rows[0]?.total) || 0;
@@ -424,19 +365,12 @@ router.post('/revenue', auth, async (req, res) => {
 
     // Revenue by service type - from SCHEDULES
     const byServiceTypeQuery = await db.query(`
-      SELECT 
-        COALESCE(c.service_type, 'unspecified') as service_type,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as hours,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}) * 25, 0) as revenue
-      FROM schedules s
-      JOIN clients c ON s.client_id = c.id
-      WHERE s.is_active = true
-        AND (
-          (s.date >= $1 AND s.date <= $2)
-          OR (s.day_of_week IS NOT NULL AND s.date IS NULL)
-        )
-      GROUP BY c.service_type
-      ORDER BY revenue DESC
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT COALESCE(c.service_type, 'unspecified') as service_type,
+        COALESCE(SUM(occ.hours), 0) as hours,
+        COALESCE(SUM(occ.hours) * 25, 0) as revenue
+      FROM occ JOIN clients c ON c.id = occ.client_id
+      GROUP BY c.service_type ORDER BY revenue DESC
     `, [startDate, endDate]);
 
     // Revenue by client - from invoices
@@ -744,20 +678,19 @@ router.get('/caregiver-productivity', auth, async (req, res) => {
 
   try {
     const result = await db.query(`
-      SELECT 
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT
         u.id,
         u.first_name,
         u.last_name,
-        COUNT(DISTINCT s.id) as visit_count,
-        COUNT(DISTINCT s.client_id) as client_count,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) as total_hours,
-        COALESCE(AVG(${SCHEDULE_HOURS_CALC}), 0) as avg_hours_per_visit,
+        COUNT(occ.schedule_id) as visit_count,
+        COUNT(DISTINCT occ.client_id) as client_count,
+        COALESCE(SUM(occ.hours), 0) as total_hours,
+        COALESCE(AVG(occ.hours), 0) as avg_hours_per_visit,
         u.default_pay_rate as hourly_rate,
-        COALESCE(SUM(${SCHEDULE_HOURS_CALC}), 0) * COALESCE(u.default_pay_rate, 0) as total_pay
+        COALESCE(SUM(occ.hours), 0) * COALESCE(u.default_pay_rate, 0) as total_pay
       FROM users u
-      LEFT JOIN schedules s ON s.caregiver_id = u.id
-        AND s.is_active = true
-        AND (s.date >= $1 AND s.date <= $2)
+      LEFT JOIN occ ON occ.caregiver_id = u.id
       WHERE u.role = 'caregiver' AND u.is_active = true
       GROUP BY u.id, u.first_name, u.last_name, u.default_pay_rate
       ORDER BY total_hours DESC
@@ -1727,13 +1660,12 @@ router.post('/:type/export-pdf', auth, async (req, res) => {
 
     if (type === 'overview' || type === 'hours') {
       const [summary, caregivers] = await Promise.all([
-        db.query(`SELECT COALESCE(SUM(${HOURS_CALC}), 0) as total_hours, COUNT(DISTINCT s.id) as total_shifts
-          FROM schedules s WHERE s.is_active = true
-          AND ((s.date >= $1 AND s.date <= $2) OR (s.day_of_week IS NOT NULL AND s.date IS NULL))`, [startDate, endDate]),
-        db.query(`SELECT u.first_name || ' ' || u.last_name as name,
-            COALESCE(SUM(${HOURS_CALC}), 0) as hours, COUNT(DISTINCT s.client_id) as clients
-          FROM users u LEFT JOIN schedules s ON s.caregiver_id = u.id AND s.is_active = true
-            AND ((s.date >= $1 AND s.date <= $2) OR s.day_of_week IS NOT NULL)
+        db.query(`WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+          SELECT COALESCE(SUM(occ.hours), 0) as total_hours, COUNT(*) as total_shifts FROM occ`, [startDate, endDate]),
+        db.query(`WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+          SELECT u.first_name || ' ' || u.last_name as name,
+            COALESCE(SUM(occ.hours), 0) as hours, COUNT(DISTINCT occ.client_id) as clients
+          FROM users u LEFT JOIN occ ON occ.caregiver_id = u.id
           WHERE u.role = 'caregiver' AND u.is_active = true
           GROUP BY u.id, u.first_name, u.last_name ORDER BY hours DESC LIMIT 20`, [startDate, endDate])
       ]);

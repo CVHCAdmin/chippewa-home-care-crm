@@ -489,7 +489,7 @@ router.post('/check-weekly-hours', verifyToken, async (req, res) => {
 
     const [oneTime, recurring, avail, cgName] = await Promise.all([
       db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date>=$2 AND date<=$3`, [caregiverId, wsStr, weStr]),
-      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL AND (end_date IS NULL OR end_date >= (now() AT TIME ZONE 'America/Chicago')::date)`, [caregiverId]),
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL AND date IS NULL AND COALESCE(effective_date, created_at::date) <= $3 AND (end_date IS NULL OR end_date >= $2)`, [caregiverId, wsStr, weStr]),
       db.query(`SELECT max_hours_per_week FROM caregiver_availability WHERE caregiver_id=$1`, [caregiverId]),
       db.query(`SELECT first_name, last_name FROM users WHERE id=$1`, [caregiverId]),
     ]);
@@ -692,7 +692,7 @@ router.get('/caregiver-hours/:caregiverId', verifyToken, async (req, res) => {
     const wsStr = weekStart.toISOString().split('T')[0]; const weStr = weekEnd.toISOString().split('T')[0];
     const [oneTime, recurring, avail] = await Promise.all([
       db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND date>=$2 AND date<=$3`, [caregiverId, wsStr, weStr]),
-      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL AND (end_date IS NULL OR end_date >= (now() AT TIME ZONE 'America/Chicago')::date)`, [caregiverId]),
+      db.query(`SELECT SUM(EXTRACT(EPOCH FROM (end_time::time - start_time::time))/3600 + CASE WHEN end_time::time < start_time::time THEN 24 ELSE 0 END) as hours FROM schedules WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL AND date IS NULL AND COALESCE(effective_date, created_at::date) <= $3 AND (end_date IS NULL OR end_date >= $2)`, [caregiverId, wsStr, weStr]),
       db.query(`SELECT max_hours_per_week FROM caregiver_availability WHERE caregiver_id=$1`, [caregiverId]),
     ]);
     const oneTimeHours = parseFloat(oneTime.rows[0]?.hours)||0;
