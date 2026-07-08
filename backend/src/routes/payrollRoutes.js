@@ -63,10 +63,15 @@ router.post('/generate-shifts', auth, async (req, res) => {
     // for cleaning up old reviews first).
     if (!force && req.query.force !== 'true') {
       const overlap = await db.query(
+        // Re-running the EXACT same period is fine — the ON CONFLICT upsert keys
+        // on the same (period, caregiver, date, schedule) and updates in place
+        // (preserving approved/manual rows). Only block a DIFFERENT range that
+        // overlaps, which would create duplicate rows for the shared shifts.
         `SELECT DISTINCT pay_period_start, pay_period_end
          FROM payroll_shift_reviews
          WHERE pay_period_start <= $2::date
            AND pay_period_end   >= $1::date
+           AND NOT (pay_period_start = $1::date AND pay_period_end = $2::date)
          ORDER BY pay_period_start
          LIMIT 10`,
         [startDate, endDate]
