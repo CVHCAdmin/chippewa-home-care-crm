@@ -72,7 +72,9 @@ router.post('/overview', auth, async (req, res) => {
       SELECT
         u.id, u.first_name, u.last_name,
         COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) as total_hours,
-        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) * COALESCE(u.default_pay_rate, 25) as total_revenue,
+        -- Labor COST (scheduled hours x pay rate), not revenue. Renamed so the UI
+        -- stops mislabeling what we pay the caregiver as "revenue".
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) * COALESCE(u.default_pay_rate, 0) as est_labor_cost,
         COALESCE(AVG(pr.satisfaction_score), 0) as avg_satisfaction,
         COALESCE((SELECT COUNT(DISTINCT o.client_id) FROM occ o WHERE o.caregiver_id = u.id), 0) as clients_served
       FROM users u
@@ -84,13 +86,14 @@ router.post('/overview', auth, async (req, res) => {
       LIMIT 10
     `, [startDate, endDate]);
 
-    // Top clients - by SCHEDULED hours
+    // Top clients — scheduled hours + REAL invoiced revenue (was a fake $25/hr estimate)
     const topClientsQuery = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT
         c.id, c.first_name, c.last_name, c.service_type,
         COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.client_id = c.id), 0) as total_hours,
-        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.client_id = c.id), 0) * 25 as total_cost,
+        COALESCE((SELECT SUM(i.total) FROM invoices i WHERE i.client_id = c.id
+                  AND i.billing_period_start >= $1 AND i.billing_period_end <= $2), 0) as revenue,
         COALESCE((SELECT COUNT(DISTINCT o.caregiver_id) FROM occ o WHERE o.client_id = c.id), 0) as caregiver_count
       FROM clients c
       WHERE c.is_active = true
@@ -343,47 +346,77 @@ router.post('/revenue', auth, async (req, res) => {
   const { startDate, endDate, clientId } = req.body;
 
   try {
-    // Overall revenue from invoices
+    const clientFilter = clientId ? 'AND i.client_id = $3' : '';
+    const p = clientId ? [startDate, endDate, clientId] : [startDate, endDate];
+
+    // Overall revenue — REAL, from invoices
     const revenueQuery = await db.query(`
-      SELECT 
+      SELECT
         COALESCE(SUM(i.total), 0) as total,
         COALESCE(SUM(i.amount_paid), 0) as collected,
+        COALESCE(SUM(i.total - COALESCE(i.amount_paid, 0)), 0) as outstanding,
         COUNT(i.id) as invoice_count
       FROM invoices i
-      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
-        ${clientId ? 'AND i.client_id = $3' : ''}
-    `, clientId ? [startDate, endDate, clientId] : [startDate, endDate]);
+      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
+    `, p);
 
-    // Get billable hours from SCHEDULES (client hours)
+    // Scheduled hours for the period (context only — NOT billed hours)
     const hoursQuery = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
-      SELECT COALESCE(SUM(occ.hours), 0) as billable_hours FROM occ
+      SELECT COALESCE(SUM(occ.hours), 0) as scheduled_hours FROM occ
     `, [startDate, endDate]);
 
     const totalRevenue = parseFloat(revenueQuery.rows[0]?.total) || 0;
-    const billableHours = parseFloat(hoursQuery.rows[0]?.billable_hours) || 0;
+    const scheduledHours = parseFloat(hoursQuery.rows[0]?.scheduled_hours) || 0;
 
-    // Revenue by service type - from SCHEDULES
+    // Revenue by service type — REAL invoice revenue (was a fake $25/hr estimate)
     const byServiceTypeQuery = await db.query(`
-      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT COALESCE(c.service_type, 'unspecified') as service_type,
-        COALESCE(SUM(occ.hours), 0) as hours,
-        COALESCE(SUM(occ.hours) * 25, 0) as revenue
-      FROM occ JOIN clients c ON c.id = occ.client_id
+        COALESCE(SUM(i.total), 0) as revenue,
+        COALESCE(SUM(i.amount_paid), 0) as collected
+      FROM invoices i JOIN clients c ON c.id = i.client_id
+      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
       GROUP BY c.service_type ORDER BY revenue DESC
-    `, [startDate, endDate]);
+    `, p);
 
-    // Revenue by client - from invoices
+    // Revenue by payer — REAL invoice revenue
+    const byPayerQuery = await db.query(`
+      SELECT COALESCE(rs.name, CASE WHEN c.is_private_pay THEN 'Private Pay' ELSE 'Unknown' END) as payer,
+        COALESCE(SUM(i.total), 0) as billed,
+        COALESCE(SUM(i.amount_paid), 0) as collected,
+        COALESCE(SUM(i.total - COALESCE(i.amount_paid, 0)), 0) as outstanding
+      FROM invoices i JOIN clients c ON c.id = i.client_id
+      LEFT JOIN referral_sources rs ON rs.id = i.referral_source_id
+      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
+      GROUP BY 1 ORDER BY billed DESC
+    `, p);
+
+    // AR aging — CURRENT snapshot of unpaid balances by days past due (not period-bound)
+    const agingFilter = clientId ? 'AND i.client_id = $1' : '';
+    const agingQuery = await db.query(`
+      SELECT
+        COALESCE(SUM(bal) FILTER (WHERE due >= CURRENT_DATE), 0) as current_not_due,
+        COALESCE(SUM(bal) FILTER (WHERE CURRENT_DATE - due BETWEEN 1 AND 30), 0) as d1_30,
+        COALESCE(SUM(bal) FILTER (WHERE CURRENT_DATE - due BETWEEN 31 AND 60), 0) as d31_60,
+        COALESCE(SUM(bal) FILTER (WHERE CURRENT_DATE - due BETWEEN 61 AND 90), 0) as d61_90,
+        COALESCE(SUM(bal) FILTER (WHERE CURRENT_DATE - due > 90), 0) as d90_plus,
+        COALESCE(SUM(bal), 0) as total_outstanding
+      FROM (
+        SELECT (i.total - COALESCE(i.amount_paid, 0)) as bal,
+               COALESCE(i.payment_due_date, i.billing_period_end + 30) as due
+        FROM invoices i
+        WHERE (i.total - COALESCE(i.amount_paid, 0)) > 0.005 ${agingFilter}
+      ) t
+    `, clientId ? [clientId] : []);
+
+    // Revenue by client — REAL, from invoices
     const byClientQuery = await db.query(`
-      SELECT 
-        c.id,
-        c.first_name,
-        c.last_name,
-        COALESCE(SUM(i.total), 0) as revenue
+      SELECT c.id, c.first_name, c.last_name,
+        COALESCE(SUM(i.total), 0) as revenue,
+        COALESCE(SUM(i.total - COALESCE(i.amount_paid, 0)), 0) as outstanding
       FROM clients c
-      LEFT JOIN invoices i ON i.client_id = c.id
+      JOIN invoices i ON i.client_id = c.id
         AND i.billing_period_start >= $1 AND i.billing_period_end <= $2
-      WHERE c.is_active = true
       GROUP BY c.id, c.first_name, c.last_name
       HAVING SUM(i.total) > 0
       ORDER BY revenue DESC
@@ -394,9 +427,13 @@ router.post('/revenue', auth, async (req, res) => {
       revenue: {
         total: totalRevenue,
         collected: parseFloat(revenueQuery.rows[0]?.collected) || 0,
-        avgPerHour: billableHours > 0 ? (totalRevenue / billableHours).toFixed(2) : 0,
-        billableHours
+        outstanding: parseFloat(revenueQuery.rows[0]?.outstanding) || 0,
+        invoiceCount: parseInt(revenueQuery.rows[0]?.invoice_count) || 0,
+        avgPerScheduledHour: scheduledHours > 0 ? (totalRevenue / scheduledHours).toFixed(2) : 0,
+        scheduledHours
       },
+      ar: agingQuery.rows[0],
+      byPayer: byPayerQuery.rows,
       byServiceType: byServiceTypeQuery.rows,
       byClient: byClientQuery.rows
     });
@@ -634,9 +671,12 @@ router.get('/pnl', auth, async (req, res) => {
     const totalExpenses = expenses.rows.reduce((sum, e) => sum + parseFloat(e.category_total || 0), 0);
 
     // Payroll from TIME_ENTRIES (actual worked hours for caregiver pay)
+    // Use the cleaned/capped billable_minutes, not raw duration — raw is inflated
+    // by missed clock-outs (e.g. a 19-hour punch on a 2-hour shift). This is a
+    // rough estimate; true pay comes from the payroll reconciliation.
     const payroll = await db.query(`
-      SELECT 
-        COALESCE(SUM(te.duration_minutes / 60.0 * COALESCE(u.default_pay_rate, 15)), 0) as gross_payroll
+      SELECT
+        COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes) / 60.0 * COALESCE(u.default_pay_rate, 15)), 0) as gross_payroll
       FROM time_entries te
       JOIN users u ON te.caregiver_id = u.id
       WHERE te.start_time >= $1 AND te.start_time <= ($2::date + interval '1 day')

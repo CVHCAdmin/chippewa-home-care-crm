@@ -48,7 +48,7 @@ const ReportsAnalytics = ({ token }) => {
   };
 
   // New GET-style drill-down reports added later — different endpoint shape
-  const GET_REPORTS = new Set(['hours-by-payer', 'caregiver-utilization', 'client-visits-summary', 'client-revenue-by-month', 'client-incidents']);
+  const GET_REPORTS = new Set(['pnl', 'hours-by-payer', 'caregiver-utilization', 'client-visits-summary', 'client-revenue-by-month', 'client-incidents']);
 
   const generateReport = async () => {
     setLoading(true);
@@ -157,7 +157,7 @@ const ReportsAnalytics = ({ token }) => {
                 <tr>
                   <th>Caregiver</th>
                   <th>Hours</th>
-                  <th>Revenue</th>
+                  <th>Est. Labor Cost</th>
                   <th>Avg Rating</th>
                   <th>Clients</th>
                 </tr>
@@ -167,7 +167,7 @@ const ReportsAnalytics = ({ token }) => {
                   <tr key={cg.id}>
                     <td><strong>{cg.first_name} {cg.last_name}</strong></td>
                     <td>{Number(parseFloat(cg.total_hours || 0)).toFixed(2)} hrs</td>
-                    <td>${Number(parseFloat(cg.total_revenue || 0)).toFixed(2)}</td>
+                    <td>${Number(parseFloat(cg.est_labor_cost || 0)).toFixed(2)}</td>
                     <td>
                       {cg.avg_satisfaction ? (
                         <span>⭐ {Number(parseFloat(cg.avg_satisfaction || 0)).toFixed(2)}</span>
@@ -195,7 +195,7 @@ const ReportsAnalytics = ({ token }) => {
                   <th>Client</th>
                   <th>Service Type</th>
                   <th>Hours</th>
-                  <th>Cost</th>
+                  <th>Revenue (billed)</th>
                   <th>Assigned Caregivers</th>
                 </tr>
               </thead>
@@ -209,7 +209,7 @@ const ReportsAnalytics = ({ token }) => {
                       </span>
                     </td>
                     <td>{Number(parseFloat(cl.total_hours || 0)).toFixed(2)} hrs</td>
-                    <td>${Number(parseFloat(cl.total_cost || 0)).toFixed(2)}</td>
+                    <td>${Number(parseFloat(cl.revenue || 0)).toFixed(2)}</td>
                     <td>{cl.caregiver_count || 0}</td>
                   </tr>
                 ))}
@@ -491,89 +491,204 @@ const ReportsAnalytics = ({ token }) => {
     );
   };
 
+  const money = (n) => `$${Number(parseFloat(n || 0)).toFixed(2)}`;
   const renderRevenueReport = () => {
     if (!reportData) return null;
-    const { revenue = {}, byClient, byServiceType } = reportData;
+    const { revenue = {}, ar = {}, byPayer = [], byClient = [], byServiceType = [] } = reportData;
     const revenueTotal = parseFloat(revenue.total) || 0;
+    const collectionRate = revenueTotal > 0 ? (parseFloat(revenue.collected || 0) / revenueTotal * 100) : 0;
 
     return (
       <div>
-        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+        {/* Billed / collected / outstanding — all from real invoices */}
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <div className="stat-card">
-            <h3>Total Revenue</h3>
-            <div className="value value-success">
-              ${Number(parseFloat(revenueTotal || 0)).toFixed(2)}
-            </div>
+            <h3>Billed</h3>
+            <div className="value">{money(revenue.total)}</div>
+            <div className="stat-subtext">{revenue.invoiceCount || 0} invoices</div>
           </div>
           <div className="stat-card">
-            <h3>Avg Per Hour</h3>
-            <div className="value">
-              ${Number(parseFloat(revenue.avgPerHour || 0)).toFixed(2)}
-            </div>
+            <h3>Collected</h3>
+            <div className="value value-success">{money(revenue.collected)}</div>
+            <div className="stat-subtext">{collectionRate.toFixed(1)}% collected</div>
           </div>
           <div className="stat-card">
-            <h3>Billable Hours</h3>
-            <div className="value">
-              {Number(parseFloat(revenue.billableHours || 0)).toFixed(2)}
-            </div>
+            <h3>Outstanding</h3>
+            <div className="value" style={{ color: parseFloat(revenue.outstanding) > 0 ? '#DC2626' : undefined }}>{money(revenue.outstanding)}</div>
+          </div>
+          <div className="stat-card">
+            <h3>Scheduled Hours</h3>
+            <div className="value">{Number(parseFloat(revenue.scheduledHours || 0)).toFixed(1)}</div>
+            <div className="stat-subtext">{money(revenue.avgPerScheduledHour)}/scheduled hr</div>
           </div>
         </div>
 
+        {/* Accounts Receivable — aging */}
+        <div className="card">
+          <h3>📅 Accounts Receivable — Aging</h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="table">
+              <thead><tr>
+                <th>Current (not due)</th><th>1–30 days</th><th>31–60</th><th>61–90</th><th>90+ days</th><th>Total Outstanding</th>
+              </tr></thead>
+              <tbody><tr>
+                <td>{money(ar.current_not_due)}</td>
+                <td>{money(ar.d1_30)}</td>
+                <td style={{ color: parseFloat(ar.d31_60) > 0 ? '#D97706' : undefined }}>{money(ar.d31_60)}</td>
+                <td style={{ color: parseFloat(ar.d61_90) > 0 ? '#D97706' : undefined }}>{money(ar.d61_90)}</td>
+                <td style={{ color: parseFloat(ar.d90_plus) > 0 ? '#DC2626' : undefined, fontWeight: 700 }}>{money(ar.d90_plus)}</td>
+                <td><strong>{money(ar.total_outstanding)}</strong></td>
+              </tr></tbody>
+            </table>
+          </div>
+          <p style={{ fontSize: '0.8rem', color: '#6B7280', margin: '0.5rem 0 0' }}>Snapshot of all unpaid invoice balances as of today (not limited to the selected period).</p>
+        </div>
+
         <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          {/* Revenue by payer */}
+          <div className="card">
+            <h3>Revenue by Payer</h3>
+            {byPayer.length > 0 ? (
+              <table className="table">
+                <thead><tr><th>Payer</th><th>Billed</th><th>Collected</th><th>Outstanding</th></tr></thead>
+                <tbody>
+                  {byPayer.map((p, i) => (
+                    <tr key={i}>
+                      <td><strong>{p.payer}</strong></td>
+                      <td>{money(p.billed)}</td>
+                      <td>{money(p.collected)}</td>
+                      <td style={{ color: parseFloat(p.outstanding) > 0 ? '#DC2626' : undefined }}>{money(p.outstanding)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <p>No data available</p>}
+          </div>
+
+          {/* Revenue by service type — real invoice revenue */}
           <div className="card">
             <h3>Revenue by Service Type</h3>
-            {byServiceType && byServiceType.length > 0 ? (
+            {byServiceType.length > 0 ? (
               <table className="table">
-                <thead>
-                  <tr>
-                    <th>Service Type</th>
-                    <th>Hours</th>
-                    <th>Revenue</th>
-                    <th>%</th>
-                  </tr>
-                </thead>
+                <thead><tr><th>Service Type</th><th>Revenue</th><th>%</th></tr></thead>
                 <tbody>
                   {byServiceType.map((st, idx) => {
-                    const stRevenue = parseFloat(st.revenue) || 0;
+                    const r = parseFloat(st.revenue) || 0;
                     return (
                       <tr key={idx}>
                         <td>{st.service_type?.replace('_', ' ').toUpperCase() || 'N/A'}</td>
-                        <td>{Number(parseFloat(st.hours || 0)).toFixed(2)}</td>
-                        <td><strong>${Number(parseFloat(stRevenue || 0)).toFixed(2)}</strong></td>
-                        <td>{revenueTotal > 0 ? Number((stRevenue / revenueTotal) * 100).toFixed(2) : 0}%</td>
+                        <td><strong>{money(r)}</strong></td>
+                        <td>{revenueTotal > 0 ? ((r / revenueTotal) * 100).toFixed(1) : 0}%</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-            ) : (
-              <p>No data available</p>
-            )}
+            ) : <p>No data available</p>}
           </div>
+        </div>
 
-          <div className="card">
-            <h3>Top Clients by Revenue</h3>
-            {byClient && byClient.length > 0 ? (
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Client</th>
-                    <th>Revenue</th>
+        {/* Top clients by revenue */}
+        <div className="card">
+          <h3>Top Clients by Revenue</h3>
+          {byClient.length > 0 ? (
+            <table className="table">
+              <thead><tr><th>Client</th><th>Revenue</th><th>Outstanding</th></tr></thead>
+              <tbody>
+                {byClient.slice(0, 15).map(cl => (
+                  <tr key={cl.id}>
+                    <td>{cl.first_name} {cl.last_name}</td>
+                    <td><strong>{money(cl.revenue)}</strong></td>
+                    <td style={{ color: parseFloat(cl.outstanding) > 0 ? '#DC2626' : undefined }}>{money(cl.outstanding)}</td>
                   </tr>
-                </thead>
+                ))}
+              </tbody>
+            </table>
+          ) : <p>No client data available</p>}
+        </div>
+      </div>
+    );
+  };
+
+  const renderPnlReport = () => {
+    if (!reportData) return null;
+    const { revenue = {}, revenueByPayer = [], expenses = {}, payroll = {}, netIncome = 0, margin = 0 } = reportData;
+    const net = parseFloat(netIncome) || 0;
+    return (
+      <div>
+        <div className="card" style={{ background: '#FEF3C7', borderLeft: '4px solid #D97706', marginBottom: '1rem' }}>
+          <strong>⚠️ Revenue is private-pay invoices only.</strong> MCO / Medicaid (My Choice, Inclusa, etc.)
+          revenue is not yet tracked in the system (no claims recorded), so the revenue side is incomplete and
+          <strong> Net Income is understated</strong>. Payroll is an estimate from cleaned clock times, not the
+          finalized payroll run. Use this as a directional view, not a filed P&amp;L.
+        </div>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+          <div className="stat-card">
+            <h3>Revenue (collected)</h3>
+            <div className="value value-success">{money(revenue.total_collected)}</div>
+            <div className="stat-subtext">{money(revenue.total_billed)} billed</div>
+          </div>
+          <div className="stat-card">
+            <h3>Payroll</h3>
+            <div className="value">{money(payroll.total)}</div>
+            <div className="stat-subtext">{money(payroll.gross)} gross + est. tax</div>
+          </div>
+          <div className="stat-card">
+            <h3>Expenses</h3>
+            <div className="value">{money(expenses.total)}</div>
+          </div>
+          <div className="stat-card">
+            <h3>Net Income</h3>
+            <div className="value" style={{ color: net >= 0 ? '#059669' : '#DC2626' }}>{money(net)}</div>
+            <div className="stat-subtext">{parseFloat(margin).toFixed(1)}% margin</div>
+          </div>
+        </div>
+
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          <div className="card">
+            <h3>Revenue by Payer</h3>
+            {revenueByPayer.length > 0 ? (
+              <table className="table">
+                <thead><tr><th>Payer</th><th>Invoices</th><th>Billed</th><th>Collected</th></tr></thead>
                 <tbody>
-                  {byClient.slice(0, 10).map(cl => (
-                    <tr key={cl.id}>
-                      <td>{cl.first_name} {cl.last_name}</td>
-                      <td><strong>${Number(parseFloat(cl.revenue || 0)).toFixed(2)}</strong></td>
-                    </tr>
+                  {revenueByPayer.map((p, i) => (
+                    <tr key={i}><td><strong>{p.payer_name}</strong></td><td>{p.invoice_count}</td><td>{money(p.billed)}</td><td>{money(p.collected)}</td></tr>
                   ))}
                 </tbody>
               </table>
-            ) : (
-              <p>No client data available</p>
-            )}
+            ) : <p>No revenue data</p>}
           </div>
+          <div className="card">
+            <h3>Expenses by Category</h3>
+            {(expenses.byCategory || []).length > 0 ? (
+              <table className="table">
+                <thead><tr><th>Category</th><th>Amount</th></tr></thead>
+                <tbody>
+                  {expenses.byCategory.map((e, i) => (
+                    <tr key={i}><td>{e.category || 'Uncategorized'}</td><td>{money(e.category_total)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <p>No expenses recorded</p>}
+          </div>
+        </div>
+
+        <div className="card">
+          <h3>P&amp;L Summary</h3>
+          <table className="table">
+            <tbody>
+              <tr><td>Revenue (collected)</td><td style={{ textAlign: 'right' }}>{money(revenue.total_collected)}</td></tr>
+              <tr><td>&minus; Payroll (incl. est. taxes)</td><td style={{ textAlign: 'right' }}>&minus;{money(payroll.total)}</td></tr>
+              <tr><td>&minus; Expenses</td><td style={{ textAlign: 'right' }}>&minus;{money(expenses.total)}</td></tr>
+              <tr style={{ fontWeight: 700, borderTop: '2px solid #E5E7EB' }}>
+                <td>Net Income</td>
+                <td style={{ textAlign: 'right', color: net >= 0 ? '#059669' : '#DC2626' }}>{money(net)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style={{ fontSize: '0.8rem', color: '#6B7280', margin: '0.5rem 0 0' }}>
+            Revenue = collections from invoices. Payroll = actual clocked pay from time entries + 7.65% est. employer tax.
+          </p>
         </div>
       </div>
     );
@@ -682,6 +797,8 @@ const ReportsAnalytics = ({ token }) => {
         return renderSatisfactionReport();
       case 'revenue':
         return renderRevenueReport();
+      case 'pnl':
+        return renderPnlReport();
       case 'hours-by-payer':
         return renderHoursByPayer();
       case 'caregiver-utilization':
@@ -712,6 +829,7 @@ const ReportsAnalytics = ({ token }) => {
             { value: 'performance', label: 'Performance' },
             { value: 'satisfaction', label: 'Satisfaction' },
             { value: 'revenue', label: 'Revenue' },
+            { value: 'pnl', label: 'Profit & Loss' },
             { value: 'hours-by-payer', label: 'Hours by Payer' },
             { value: 'caregiver-utilization', label: 'Caregiver Utilization' },
             { value: 'client-visits-summary', label: 'Client Visits Summary' },
