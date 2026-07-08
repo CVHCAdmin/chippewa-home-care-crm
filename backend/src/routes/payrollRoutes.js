@@ -104,7 +104,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
           te.id AS time_entry_id,
           te.start_time AS actual_start,
           te.end_time AS actual_end,
-          COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
+          ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 60)::int AS actual_minutes,
           ABS(EXTRACT(EPOCH FROM ((te.start_time AT TIME ZONE 'America/Chicago')::time - so.scheduled_start))) AS time_diff_secs,
           CASE WHEN te.schedule_id = so.schedule_id THEN 0 ELSE 1 END AS sched_rank
         FROM shift_occurrences so
@@ -150,7 +150,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
           te.id AS time_entry_id,
           te.start_time AS actual_start,
           te.end_time AS actual_end,
-          COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
+          ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 60)::int AS actual_minutes,
           ABS(EXTRACT(EPOCH FROM ((te.start_time AT TIME ZONE 'America/Chicago')::time - so.scheduled_start))) AS time_diff_secs
         FROM shift_occurrences so
         INNER JOIN time_entries te
@@ -199,6 +199,13 @@ router.post('/generate-shifts', auth, async (req, res) => {
           so.scheduled_start, so.scheduled_end, so.scheduled_minutes,
           am.time_entry_id, am.actual_start, am.actual_end, am.actual_minutes,
           CASE
+            -- Never auto-verify a punch the time system already flagged for
+            -- review (time_variance, zero_duration, excessive_duration, missed
+            -- clock-out, etc.) — surface it as pending instead.
+            WHEN am.time_entry_id IS NOT NULL AND te2.needs_approval
+              THEN 'pending'
+            -- Verified only when the RAW clocked duration (end−start, no longer
+            -- the clamped billable_minutes) is within 15 min of scheduled.
             WHEN am.time_entry_id IS NOT NULL AND ABS(COALESCE(am.actual_minutes, 0) - so.scheduled_minutes) <= 15
               THEN 'verified'
             WHEN am.time_entry_id IS NOT NULL
@@ -209,6 +216,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
         LEFT JOIN all_matches am
           ON am.schedule_id = so.schedule_id
           AND am.shift_date = so.shift_date
+        LEFT JOIN time_entries te2 ON te2.id = am.time_entry_id
 
         UNION ALL
 
@@ -224,7 +232,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
           te.id AS time_entry_id,
           te.start_time AS actual_start,
           te.end_time AS actual_end,
-          COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
+          ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 60)::int AS actual_minutes,
           'pending' AS auto_status
         FROM time_entries te
         WHERE DATE(te.start_time AT TIME ZONE 'America/Chicago') >= $1::date
