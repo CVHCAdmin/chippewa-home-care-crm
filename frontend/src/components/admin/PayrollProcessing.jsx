@@ -86,7 +86,17 @@ const PayrollProcessing = ({ token }) => {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ startDate: payPeriod.startDate, endDate: payPeriod.endDate })
       });
-      if (!genResponse.ok) throw new Error('Failed to generate shifts');
+      if (!genResponse.ok) {
+        // Surface the backend's real reason (e.g. 409 overlap guard names the
+        // conflicting pay periods + how to proceed) instead of a generic error.
+        const err = await genResponse.json().catch(() => ({}));
+        let msg = err.error || 'Failed to generate shifts';
+        if (Array.isArray(err.overlapping_periods) && err.overlapping_periods.length) {
+          msg += ` Overlaps: ${err.overlapping_periods.join(', ')}.`;
+        }
+        if (err.hint) msg += ` ${err.hint}`;
+        throw new Error(msg);
+      }
       const genResult = await genResponse.json();
 
       // Step 2: Load shift data

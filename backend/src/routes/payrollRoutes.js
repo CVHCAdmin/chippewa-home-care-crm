@@ -105,14 +105,14 @@ router.post('/generate-shifts', auth, async (req, res) => {
           te.start_time AS actual_start,
           te.end_time AS actual_end,
           COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
-          ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) AS time_diff_secs,
+          ABS(EXTRACT(EPOCH FROM ((te.start_time AT TIME ZONE 'America/Chicago')::time - so.scheduled_start))) AS time_diff_secs,
           CASE WHEN te.schedule_id = so.schedule_id THEN 0 ELSE 1 END AS sched_rank
         FROM shift_occurrences so
         INNER JOIN time_entries te
           ON te.caregiver_id = so.caregiver_id
           AND te.client_id = so.client_id
-          AND DATE(te.start_time) = so.shift_date
-          AND ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) <= 7200
+          AND DATE(te.start_time AT TIME ZONE 'America/Chicago') = so.shift_date
+          AND ABS(EXTRACT(EPOCH FROM ((te.start_time AT TIME ZONE 'America/Chicago')::time - so.scheduled_start))) <= 7200
       ),
 
       tight_punch_best AS (
@@ -151,12 +151,12 @@ router.post('/generate-shifts', auth, async (req, res) => {
           te.start_time AS actual_start,
           te.end_time AS actual_end,
           COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
-          ABS(EXTRACT(EPOCH FROM (te.start_time::time - so.scheduled_start))) AS time_diff_secs
+          ABS(EXTRACT(EPOCH FROM ((te.start_time AT TIME ZONE 'America/Chicago')::time - so.scheduled_start))) AS time_diff_secs
         FROM shift_occurrences so
         INNER JOIN time_entries te
           ON te.caregiver_id = so.caregiver_id
           AND te.client_id = so.client_id
-          AND DATE(te.start_time) = so.shift_date
+          AND DATE(te.start_time AT TIME ZONE 'America/Chicago') = so.shift_date
         WHERE NOT EXISTS (
             SELECT 1 FROM tight_shift_best tsb
             WHERE tsb.schedule_id = so.schedule_id AND tsb.shift_date = so.shift_date
@@ -217,7 +217,7 @@ router.post('/generate-shifts', auth, async (req, res) => {
           NULL AS schedule_id,
           te.caregiver_id,
           te.client_id,
-          DATE(te.start_time) AS shift_date,
+          DATE(te.start_time AT TIME ZONE 'America/Chicago') AS shift_date,
           NULL AS scheduled_start,
           NULL AS scheduled_end,
           NULL AS scheduled_minutes,
@@ -227,8 +227,8 @@ router.post('/generate-shifts', auth, async (req, res) => {
           COALESCE(te.billable_minutes, te.duration_minutes) AS actual_minutes,
           'pending' AS auto_status
         FROM time_entries te
-        WHERE DATE(te.start_time) >= $1::date
-          AND DATE(te.start_time) <= $2::date
+        WHERE DATE(te.start_time AT TIME ZONE 'America/Chicago') >= $1::date
+          AND DATE(te.start_time AT TIME ZONE 'America/Chicago') <= $2::date
           AND NOT EXISTS (
             SELECT 1 FROM all_matches am WHERE am.time_entry_id = te.id
           )
@@ -241,11 +241,28 @@ router.post('/generate-shifts', auth, async (req, res) => {
     // Payable rule: caregivers are paid their SCHEDULED hours; the clock-in is verification
     // that they were actually there. Unscheduled clock-ins have no schedule to pay against,
     // so payable defaults to actual — admin must review and resolve.
+    // Professional exception-based pay rule: pay ACTUAL clocked time, never more
+    // than scheduled (cap prevents missed-clock-out inflation), with a 7-minute
+    // grace — if they worked within 7 min of the full scheduled length (or more),
+    // round up to scheduled instead of docking a few minutes.
+    //   - matched + scheduled  -> LEAST(actual, scheduled) with 7-min grace
+    //   - unscheduled clock-in -> actual (flagged for review; no schedule to cap)
+    //   - missing punch        -> scheduled kept ONLY as a fallback for a manual
+    //                             approval; status stays 'missing_punch' so it is
+    //                             NOT auto-paid (flagged for review per policy).
+    const PAY_GRACE_MIN = 7;
     let created = 0, updated = 0;
     for (const row of matchResult.rows) {
-      const payableMinutes = row.scheduled_minutes != null
-        ? row.scheduled_minutes
-        : row.actual_minutes;
+      let payableMinutes;
+      if (row.time_entry_id != null && row.actual_minutes != null && row.scheduled_minutes != null) {
+        payableMinutes = (row.actual_minutes >= row.scheduled_minutes - PAY_GRACE_MIN)
+          ? row.scheduled_minutes
+          : row.actual_minutes;
+      } else if (row.time_entry_id != null && row.actual_minutes != null) {
+        payableMinutes = row.actual_minutes;
+      } else {
+        payableMinutes = row.scheduled_minutes;
+      }
 
       const result = await db.query(`
         INSERT INTO payroll_shift_reviews (
