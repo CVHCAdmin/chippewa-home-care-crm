@@ -11,6 +11,8 @@ const PayrollProcessing = ({ token }) => {
   });
   const [payrollData, setPayrollData] = useState([]);
   const [shiftData, setShiftData] = useState({ shifts: [], stats: {} });
+  const [analytics, setAnalytics] = useState({ analytics: [], totals: {} });
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [shiftLoading, setShiftLoading] = useState(false);
   const [selectedPayroll, setSelectedPayroll] = useState(null);
@@ -121,6 +123,26 @@ const PayrollProcessing = ({ token }) => {
       console.error('Load shifts error:', e);
     }
   };
+
+  const loadAnalytics = async () => {
+    setAnalyticsLoading(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/payroll/analytics?startDate=${payPeriod.startDate}&endDate=${payPeriod.endDate}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.ok) setAnalytics(await r.json());
+    } catch (e) {
+      console.error('Load analytics error:', e);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
+
+  // Load the attendance report when its tab opens or the pay period changes.
+  useEffect(() => {
+    if (activeTab === 'analytics') loadAnalytics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, payPeriod.startDate, payPeriod.endDate]);
 
   const handleShiftAction = async (shiftId, status, extras = {}) => {
     try {
@@ -427,6 +449,7 @@ const PayrollProcessing = ({ token }) => {
         {[
           ['shifts', 'Shift Review'],
           ['payroll', 'Payroll'],
+          ['analytics', 'Attendance'],
         ].map(([id, label]) => (
           <button key={id} onClick={() => setActiveTab(id)}
             style={{ padding: '0.55rem 1.25rem', border: 'none', background: 'none', cursor: 'pointer',
@@ -601,6 +624,78 @@ const PayrollProcessing = ({ token }) => {
                     );
                   })}
                 </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================== ATTENDANCE / ANALYTICS TAB ==================== */}
+      {activeTab === 'analytics' && (
+        <div>
+          <p style={{ fontSize: '0.85rem', color: '#6B7280', marginBottom: '0.75rem' }}>
+            Scheduled vs. clocked hours and punctuality for {payPeriod.startDate} to {payPeriod.endDate},
+            from reconciled shifts. Run <strong>Reconcile Shifts</strong> first if this is empty.
+          </p>
+          {analyticsLoading ? (
+            <div className="card card-centered"><p>Loading…</p></div>
+          ) : (analytics.analytics || []).length === 0 ? (
+            <div className="card card-centered"><p>No reconciled data for this period. Run "1. Reconcile Shifts" first.</p></div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table" style={{ fontSize: '0.85rem' }}>
+                <thead>
+                  <tr>
+                    <th>Caregiver</th>
+                    <th>Scheduled</th>
+                    <th>Clocked</th>
+                    <th>Payable</th>
+                    <th>Reliability</th>
+                    <th>Missing punch</th>
+                    <th>Late in</th>
+                    <th>Left early</th>
+                    <th>Stayed late</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analytics.analytics.map(r => (
+                    <tr key={r.id}>
+                      <td>{r.first_name} {r.last_name}</td>
+                      <td>{parseFloat(r.scheduled_hours).toFixed(1)}h</td>
+                      <td>{parseFloat(r.clocked_hours).toFixed(1)}h</td>
+                      <td><strong>{parseFloat(r.payable_hours).toFixed(1)}h</strong></td>
+                      <td>
+                        <span style={{ fontWeight: 700, color:
+                          r.reliability_pct == null ? '#9CA3AF'
+                          : r.reliability_pct >= 90 ? '#059669'
+                          : r.reliability_pct >= 70 ? '#D97706' : '#DC2626' }}>
+                          {r.reliability_pct == null ? '—' : `${r.reliability_pct}%`}
+                        </span>
+                      </td>
+                      <td>{parseInt(r.missing_punches) > 0
+                        ? <span style={{ color: '#DC2626', fontWeight: 700 }}>{r.missing_punches}</span>
+                        : '0'}</td>
+                      <td>{parseInt(r.late_arrivals) > 0
+                        ? `${r.late_arrivals}${r.avg_late_minutes ? ` (avg ${r.avg_late_minutes}m)` : ''}`
+                        : '0'}</td>
+                      <td>{r.early_departures}</td>
+                      <td>{r.late_departures}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ fontWeight: 700, borderTop: '2px solid #E5E7EB' }}>
+                    <td>Total</td>
+                    <td>{analytics.totals.scheduled_hours}h</td>
+                    <td>{analytics.totals.clocked_hours}h</td>
+                    <td>{analytics.totals.payable_hours}h</td>
+                    <td></td>
+                    <td>{analytics.totals.missing_punches}</td>
+                    <td>{analytics.totals.late_arrivals}</td>
+                    <td>{analytics.totals.early_departures}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}

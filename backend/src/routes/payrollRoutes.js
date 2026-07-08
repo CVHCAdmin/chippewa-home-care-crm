@@ -402,6 +402,75 @@ router.get('/shifts', auth, async (req, res) => {
   }
 });
 
+// ==================== PAYROLL ANALYTICS ====================
+// GET /api/payroll/analytics?startDate=&endDate=
+// Per-caregiver punctuality + hours report for the pay period, computed from the
+// reconciled shift reviews. Read-only. Times compared in America/Chicago with a
+// 7-minute grace, matching the pay rule. (Overnight shifts — scheduled_end <
+// scheduled_start — are excluded from the late/early tallies to avoid time-of-day
+// wraparound; they still count in the hour totals.)
+router.get('/analytics', auth, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate required' });
+  try {
+    const result = await db.query(`
+      SELECT
+        u.id, u.first_name, u.last_name,
+        ROUND(COALESCE(SUM(psr.scheduled_minutes),0)::numeric/60, 1) AS scheduled_hours,
+        ROUND(COALESCE(SUM(psr.actual_minutes) FILTER (WHERE psr.time_entry_id IS NOT NULL),0)::numeric/60, 1) AS clocked_hours,
+        ROUND(COALESCE(SUM(psr.payable_minutes) FILTER (WHERE psr.status IN ('verified','approved','manual_entry')),0)::numeric/60, 1) AS payable_hours,
+        COUNT(*) FILTER (WHERE psr.schedule_id IS NOT NULL) AS shifts_scheduled,
+        COUNT(*) FILTER (WHERE psr.schedule_id IS NOT NULL AND psr.time_entry_id IS NOT NULL) AS shifts_worked,
+        COUNT(*) FILTER (WHERE psr.status = 'missing_punch') AS missing_punches,
+        COUNT(*) FILTER (WHERE psr.schedule_id IS NULL AND psr.time_entry_id IS NOT NULL) AS unscheduled_punches,
+        COUNT(*) FILTER (
+          WHERE psr.time_entry_id IS NOT NULL AND psr.actual_start IS NOT NULL AND psr.scheduled_start IS NOT NULL
+            AND psr.scheduled_end > psr.scheduled_start
+            AND (psr.actual_start AT TIME ZONE 'America/Chicago')::time > psr.scheduled_start + interval '7 minutes'
+        ) AS late_arrivals,
+        COUNT(*) FILTER (
+          WHERE psr.time_entry_id IS NOT NULL AND psr.actual_end IS NOT NULL AND psr.scheduled_end IS NOT NULL
+            AND psr.scheduled_end > psr.scheduled_start
+            AND (psr.actual_end AT TIME ZONE 'America/Chicago')::time < psr.scheduled_end - interval '7 minutes'
+        ) AS early_departures,
+        COUNT(*) FILTER (
+          WHERE psr.time_entry_id IS NOT NULL AND psr.actual_end IS NOT NULL AND psr.scheduled_end IS NOT NULL
+            AND psr.scheduled_end > psr.scheduled_start
+            AND (psr.actual_end AT TIME ZONE 'America/Chicago')::time > psr.scheduled_end + interval '7 minutes'
+        ) AS late_departures,
+        ROUND(AVG(EXTRACT(EPOCH FROM ((psr.actual_start AT TIME ZONE 'America/Chicago')::time - psr.scheduled_start))/60)
+          FILTER (WHERE psr.time_entry_id IS NOT NULL AND psr.actual_start IS NOT NULL AND psr.scheduled_start IS NOT NULL
+            AND psr.scheduled_end > psr.scheduled_start
+            AND (psr.actual_start AT TIME ZONE 'America/Chicago')::time > psr.scheduled_start + interval '7 minutes')::numeric, 0) AS avg_late_minutes
+      FROM payroll_shift_reviews psr
+      JOIN users u ON u.id = psr.caregiver_id
+      WHERE psr.pay_period_start = $1 AND psr.pay_period_end = $2
+      GROUP BY u.id, u.first_name, u.last_name
+      HAVING COUNT(*) FILTER (WHERE psr.schedule_id IS NOT NULL) > 0 OR COUNT(*) > 0
+      ORDER BY u.last_name, u.first_name
+    `, [startDate, endDate]);
+
+    const rows = result.rows.map(r => {
+      const sched = parseInt(r.shifts_scheduled) || 0;
+      const worked = parseInt(r.shifts_worked) || 0;
+      return { ...r, reliability_pct: sched > 0 ? Math.round((worked / sched) * 100) : null };
+    });
+
+    const totals = {
+      scheduled_hours: rows.reduce((s, r) => s + parseFloat(r.scheduled_hours || 0), 0).toFixed(1),
+      clocked_hours:   rows.reduce((s, r) => s + parseFloat(r.clocked_hours || 0), 0).toFixed(1),
+      payable_hours:   rows.reduce((s, r) => s + parseFloat(r.payable_hours || 0), 0).toFixed(1),
+      missing_punches: rows.reduce((s, r) => s + parseInt(r.missing_punches || 0), 0),
+      late_arrivals:   rows.reduce((s, r) => s + parseInt(r.late_arrivals || 0), 0),
+      early_departures: rows.reduce((s, r) => s + parseInt(r.early_departures || 0), 0),
+    };
+    res.json({ analytics: rows, totals });
+  } catch (error) {
+    console.error('Payroll analytics error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== UPDATE SHIFT REVIEW ====================
 // PATCH /api/payroll/shifts/:id
 // Approve, flag, resolve, or set manual hours on a single shift
