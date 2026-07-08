@@ -346,10 +346,15 @@ router.post('/revenue', auth, async (req, res) => {
   const { startDate, endDate, clientId } = req.body;
 
   try {
+    // Two disjoint billing tracks: private/self-pay bills via INVOICES; MCO/
+    // Medicaid/VA bills via CLAIMS (charge_amount billed, paid_amount collected).
+    // Revenue unions both. MCO clients have no invoices today, so no double-count;
+    // claims filter by service_date, invoices by billing period.
     const clientFilter = clientId ? 'AND i.client_id = $3' : '';
+    const claimClientFilter = clientId ? 'AND cl.client_id = $3' : '';
     const p = clientId ? [startDate, endDate, clientId] : [startDate, endDate];
 
-    // Overall revenue — REAL, from invoices
+    // Overall revenue — invoices
     const revenueQuery = await db.query(`
       SELECT
         COALESCE(SUM(i.total), 0) as total,
@@ -360,39 +365,78 @@ router.post('/revenue', auth, async (req, res) => {
       WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
     `, p);
 
+    // Overall revenue — claims (MCO/Medicaid/VA), excludes voided
+    const claimsRevQuery = await db.query(`
+      SELECT
+        COALESCE(SUM(cl.charge_amount), 0) as total,
+        COALESCE(SUM(cl.paid_amount), 0) as collected,
+        COALESCE(SUM(COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount, 0)), 0) as outstanding,
+        COUNT(cl.id) as claim_count
+      FROM claims cl
+      WHERE cl.service_date >= $1 AND cl.service_date <= $2
+        AND COALESCE(cl.status,'') <> 'voided' ${claimClientFilter}
+    `, p);
+
     // Scheduled hours for the period (context only — NOT billed hours)
     const hoursQuery = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT COALESCE(SUM(occ.hours), 0) as scheduled_hours FROM occ
     `, [startDate, endDate]);
 
-    const totalRevenue = parseFloat(revenueQuery.rows[0]?.total) || 0;
+    const invTotal = parseFloat(revenueQuery.rows[0]?.total) || 0;
+    const claimTotal = parseFloat(claimsRevQuery.rows[0]?.total) || 0;
+    const totalRevenue = invTotal + claimTotal;
+    const totalCollected = (parseFloat(revenueQuery.rows[0]?.collected) || 0) + (parseFloat(claimsRevQuery.rows[0]?.collected) || 0);
+    const totalOutstanding = (parseFloat(revenueQuery.rows[0]?.outstanding) || 0) + (parseFloat(claimsRevQuery.rows[0]?.outstanding) || 0);
     const scheduledHours = parseFloat(hoursQuery.rows[0]?.scheduled_hours) || 0;
 
-    // Revenue by service type — REAL invoice revenue (was a fake $25/hr estimate)
+    // Revenue by service type — invoices + claims, keyed on client.service_type
     const byServiceTypeQuery = await db.query(`
-      SELECT COALESCE(c.service_type, 'unspecified') as service_type,
-        COALESCE(SUM(i.total), 0) as revenue,
-        COALESCE(SUM(i.amount_paid), 0) as collected
-      FROM invoices i JOIN clients c ON c.id = i.client_id
-      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
-      GROUP BY c.service_type ORDER BY revenue DESC
+      SELECT service_type,
+        COALESCE(SUM(revenue), 0) as revenue,
+        COALESCE(SUM(collected), 0) as collected
+      FROM (
+        SELECT COALESCE(c.service_type, 'unspecified') as service_type,
+          i.total as revenue, COALESCE(i.amount_paid,0) as collected
+        FROM invoices i JOIN clients c ON c.id = i.client_id
+        WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
+        UNION ALL
+        SELECT COALESCE(c.service_type, 'unspecified') as service_type,
+          cl.charge_amount as revenue, COALESCE(cl.paid_amount,0) as collected
+        FROM claims cl JOIN clients c ON c.id = cl.client_id
+        WHERE cl.service_date >= $1 AND cl.service_date <= $2
+          AND COALESCE(cl.status,'') <> 'voided' ${claimClientFilter}
+      ) u
+      GROUP BY service_type ORDER BY revenue DESC
     `, p);
 
-    // Revenue by payer — REAL invoice revenue
+    // Revenue by payer — invoices (private) + claims (MCO)
     const byPayerQuery = await db.query(`
-      SELECT COALESCE(rs.name, CASE WHEN c.is_private_pay THEN 'Private Pay' ELSE 'Unknown' END) as payer,
-        COALESCE(SUM(i.total), 0) as billed,
-        COALESCE(SUM(i.amount_paid), 0) as collected,
-        COALESCE(SUM(i.total - COALESCE(i.amount_paid, 0)), 0) as outstanding
-      FROM invoices i JOIN clients c ON c.id = i.client_id
-      LEFT JOIN referral_sources rs ON rs.id = i.referral_source_id
-      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
-      GROUP BY 1 ORDER BY billed DESC
+      SELECT payer,
+        COALESCE(SUM(billed), 0) as billed,
+        COALESCE(SUM(collected), 0) as collected,
+        COALESCE(SUM(billed - collected), 0) as outstanding
+      FROM (
+        SELECT COALESCE(rs.name, CASE WHEN c.is_private_pay THEN 'Private Pay' ELSE 'Unknown' END) as payer,
+          i.total as billed, COALESCE(i.amount_paid,0) as collected
+        FROM invoices i JOIN clients c ON c.id = i.client_id
+        LEFT JOIN referral_sources rs ON rs.id = i.referral_source_id
+        WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
+        UNION ALL
+        SELECT COALESCE(rs.name, 'Unknown Payer') as payer,
+          cl.charge_amount as billed, COALESCE(cl.paid_amount,0) as collected
+        FROM claims cl
+        LEFT JOIN referral_sources rs ON rs.id = cl.payer_id
+        WHERE cl.service_date >= $1 AND cl.service_date <= $2
+          AND COALESCE(cl.status,'') <> 'voided' ${claimClientFilter}
+      ) u
+      GROUP BY payer ORDER BY billed DESC
     `, p);
 
-    // AR aging — CURRENT snapshot of unpaid balances by days past due (not period-bound)
-    const agingFilter = clientId ? 'AND i.client_id = $1' : '';
+    // AR aging — CURRENT snapshot of unpaid balances by days past due (invoices +
+    // unpaid claims). Claim due = submission/service date + payer expected_pay_days.
+    const agingInvFilter = clientId ? 'AND i.client_id = $1' : '';
+    const agingClaimFilter = clientId ? 'AND cl.client_id = $1' : '';
     const agingQuery = await db.query(`
       SELECT
         COALESCE(SUM(bal) FILTER (WHERE due >= CURRENT_DATE), 0) as current_not_due,
@@ -405,20 +449,36 @@ router.post('/revenue', auth, async (req, res) => {
         SELECT (i.total - COALESCE(i.amount_paid, 0)) as bal,
                COALESCE(i.payment_due_date, i.billing_period_end + 30) as due
         FROM invoices i
-        WHERE (i.total - COALESCE(i.amount_paid, 0)) > 0.005 ${agingFilter}
+        WHERE (i.total - COALESCE(i.amount_paid, 0)) > 0.005 ${agingInvFilter}
+        UNION ALL
+        SELECT (COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount, 0)) as bal,
+               (COALESCE(cl.submission_date, cl.service_date) + COALESCE(rs.expected_pay_days, 30)) as due
+        FROM claims cl
+        LEFT JOIN referral_sources rs ON rs.id = cl.payer_id
+        WHERE (COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount, 0)) > 0.005
+          AND COALESCE(cl.status,'') NOT IN ('voided','draft') ${agingClaimFilter}
       ) t
     `, clientId ? [clientId] : []);
 
-    // Revenue by client — REAL, from invoices
+    // Revenue by client — invoices + claims
     const byClientQuery = await db.query(`
-      SELECT c.id, c.first_name, c.last_name,
-        COALESCE(SUM(i.total), 0) as revenue,
-        COALESCE(SUM(i.total - COALESCE(i.amount_paid, 0)), 0) as outstanding
-      FROM clients c
-      JOIN invoices i ON i.client_id = c.id
-        AND i.billing_period_start >= $1 AND i.billing_period_end <= $2
-      GROUP BY c.id, c.first_name, c.last_name
-      HAVING SUM(i.total) > 0
+      SELECT id, first_name, last_name,
+        COALESCE(SUM(revenue), 0) as revenue,
+        COALESCE(SUM(outstanding), 0) as outstanding
+      FROM (
+        SELECT c.id, c.first_name, c.last_name,
+          i.total as revenue, (i.total - COALESCE(i.amount_paid,0)) as outstanding
+        FROM clients c JOIN invoices i ON i.client_id = c.id
+          AND i.billing_period_start >= $1 AND i.billing_period_end <= $2
+        UNION ALL
+        SELECT c.id, c.first_name, c.last_name,
+          cl.charge_amount as revenue, (COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount,0)) as outstanding
+        FROM clients c JOIN claims cl ON cl.client_id = c.id
+          AND cl.service_date >= $1 AND cl.service_date <= $2
+          AND COALESCE(cl.status,'') <> 'voided'
+      ) u
+      GROUP BY id, first_name, last_name
+      HAVING SUM(revenue) > 0
       ORDER BY revenue DESC
       LIMIT 15
     `, [startDate, endDate]);
@@ -426,9 +486,9 @@ router.post('/revenue', auth, async (req, res) => {
     res.json({
       revenue: {
         total: totalRevenue,
-        collected: parseFloat(revenueQuery.rows[0]?.collected) || 0,
-        outstanding: parseFloat(revenueQuery.rows[0]?.outstanding) || 0,
-        invoiceCount: parseInt(revenueQuery.rows[0]?.invoice_count) || 0,
+        collected: totalCollected,
+        outstanding: totalOutstanding,
+        invoiceCount: (parseInt(revenueQuery.rows[0]?.invoice_count) || 0) + (parseInt(claimsRevQuery.rows[0]?.claim_count) || 0),
         avgPerScheduledHour: scheduledHours > 0 ? (totalRevenue / scheduledHours).toFixed(2) : 0,
         scheduledHours
       },
@@ -632,28 +692,45 @@ router.get('/pnl', auth, async (req, res) => {
   const end = endDate || new Date().toISOString().split('T')[0];
 
   try {
-    // Revenue from invoices
+    // Revenue = invoices (private/self-pay) + claims (MCO/Medicaid/VA). Claims
+    // carry the payer-billed side that never touches the invoices table.
     const revenue = await db.query(`
-      SELECT 
-        COALESCE(SUM(total), 0) as total_billed,
-        COALESCE(SUM(amount_paid), 0) as total_collected,
-        COALESCE(SUM(total) - SUM(COALESCE(amount_paid, 0)), 0) as outstanding
-      FROM invoices
-      WHERE billing_period_start >= $1 AND billing_period_end <= $2
+      SELECT
+        COALESCE(SUM(billed), 0) as total_billed,
+        COALESCE(SUM(collected), 0) as total_collected,
+        COALESCE(SUM(billed) - SUM(collected), 0) as outstanding
+      FROM (
+        SELECT total as billed, COALESCE(amount_paid,0) as collected
+        FROM invoices
+        WHERE billing_period_start >= $1 AND billing_period_end <= $2
+        UNION ALL
+        SELECT COALESCE(charge_amount,0) as billed, COALESCE(paid_amount,0) as collected
+        FROM claims
+        WHERE service_date >= $1 AND service_date <= $2 AND COALESCE(status,'') <> 'voided'
+      ) u
     `, [start, end]);
 
-    // Revenue by payer
+    // Revenue by payer — invoices + claims
     const revenueByPayer = await db.query(`
-      SELECT 
-        COALESCE(rs.name, 'Private Pay') as payer_name,
-        COUNT(*) as invoice_count,
-        COALESCE(SUM(i.total), 0) as billed,
-        COALESCE(SUM(i.amount_paid), 0) as collected
-      FROM invoices i
-      LEFT JOIN clients c ON i.client_id = c.id
-      LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
-      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
-      GROUP BY rs.id, rs.name
+      SELECT payer_name,
+        SUM(cnt) as invoice_count,
+        COALESCE(SUM(billed), 0) as billed,
+        COALESCE(SUM(collected), 0) as collected
+      FROM (
+        SELECT COALESCE(rs.name, 'Private Pay') as payer_name, 1 as cnt,
+          i.total as billed, COALESCE(i.amount_paid,0) as collected
+        FROM invoices i
+        LEFT JOIN clients c ON i.client_id = c.id
+        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+        WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
+        UNION ALL
+        SELECT COALESCE(rs.name, 'Unknown Payer') as payer_name, 1 as cnt,
+          cl.charge_amount as billed, COALESCE(cl.paid_amount,0) as collected
+        FROM claims cl
+        LEFT JOIN referral_sources rs ON cl.payer_id = rs.id
+        WHERE cl.service_date >= $1 AND cl.service_date <= $2 AND COALESCE(cl.status,'') <> 'voided'
+      ) u
+      GROUP BY payer_name
       ORDER BY billed DESC
     `, [start, end]);
 

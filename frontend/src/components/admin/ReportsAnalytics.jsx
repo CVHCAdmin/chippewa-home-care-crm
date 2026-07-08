@@ -617,10 +617,11 @@ const ReportsAnalytics = ({ token }) => {
     return (
       <div>
         <div className="card" style={{ background: '#FEF3C7', borderLeft: '4px solid #D97706', marginBottom: '1rem' }}>
-          <strong>⚠️ Revenue is private-pay invoices only.</strong> MCO / Medicaid (My Choice, Inclusa, etc.)
-          revenue is not yet tracked in the system (no claims recorded), so the revenue side is incomplete and
-          <strong> Net Income is understated</strong>. Payroll is an estimate from cleaned clock times, not the
-          finalized payroll run. Use this as a directional view, not a filed P&amp;L.
+          <strong>⚠️ Revenue = private-pay invoices + MCO/Medicaid claims recorded in the system.</strong> MCO
+          revenue (My Choice, etc.) only appears once claims are generated for the period in the Claims &amp; EVV
+          Engine — if claims haven&apos;t been entered, that revenue is <strong>missing here</strong> and Net
+          Income is understated. Payroll is an estimate from cleaned clock times, not the finalized payroll run.
+          Directional view, not a filed P&amp;L.
         </div>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <div className="stat-card">

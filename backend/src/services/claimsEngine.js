@@ -25,6 +25,7 @@ async function generateClaimFromEVV(evvVisitId, userId) {
       cp.npi_number as caregiver_npi, cp.taxonomy_code,
       a.auth_number, a.authorized_units, a.used_units, a.end_date as auth_end_date,
       a.low_units_alert_threshold,
+      te.billable_minutes, te.duration_minutes, te.allotted_minutes,
       rs.name as payer_name, rs.payer_type, rs.payer_id_number,
       rs.edi_payer_id, rs.fea_organization, rs.submission_method
     FROM evv_visits ev
@@ -33,6 +34,7 @@ async function generateClaimFromEVV(evvVisitId, userId) {
     LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
     LEFT JOIN authorizations a ON ev.authorization_id = a.id
     LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
+    LEFT JOIN time_entries te ON te.id = ev.time_entry_id
     WHERE ev.id = $1
   `, [evvVisitId]);
 
@@ -59,14 +61,25 @@ async function generateClaimFromEVV(evvVisitId, userId) {
     submission_method: visit.submission_method,
   });
 
-  // Calculate charge amount from units and rate
-  const units = parseFloat(visit.units_of_service || 0);
+  // Calculate units to BILL from the cleaned/capped billable minutes, NOT the
+  // raw units_of_service. units_of_service = raw clocked minutes / 15, which is
+  // inflated by missed clock-outs (a 2h visit left open for days bills hundreds
+  // of units). billable_minutes is the billing-clean figure (capped at
+  // scheduled/authorized for MCO, same basis payroll uses). Fall back to raw
+  // duration only if billable is somehow absent. Units are 15-minute units.
+  const billableMinutes = visit.billable_minutes != null
+    ? parseFloat(visit.billable_minutes)
+    : parseFloat(visit.duration_minutes || visit.units_of_service * 15 || 0);
+  const units = Math.round((billableMinutes / 15.0) * 100) / 100; // 15-min units, 2dp
   let chargeAmount = 0;
 
-  // Look up rate from referral_source_rates
+  // Rate lookup: referral_source_rates is authoritative and date-aware (picks the
+  // rate effective on the service date). Rates are stored HOURLY; a 15-minute unit
+  // is one quarter of the hourly rate. Convert per rate_type so we never bill a
+  // 15-min unit at the full hourly amount (the old bug: units * hourly = 4x).
   if (visit.referral_source_id) {
     const rateResult = await db.query(`
-      SELECT rate_amount FROM referral_source_rates
+      SELECT rate_amount, rate_type FROM referral_source_rates
       WHERE referral_source_id = $1
         AND (is_active = true OR is_active IS NULL)
         AND (effective_date IS NULL OR effective_date <= $2)
@@ -76,11 +89,13 @@ async function generateClaimFromEVV(evvVisitId, userId) {
     `, [visit.referral_source_id, visit.service_date]);
 
     if (rateResult.rows.length) {
-      chargeAmount = units * parseFloat(rateResult.rows[0].rate_amount);
+      const rate = parseFloat(rateResult.rows[0].rate_amount);
+      const perUnit = (rateResult.rows[0].rate_type || 'hourly') === 'hourly' ? rate / 4.0 : rate;
+      chargeAmount = units * perUnit;
     }
   }
 
-  // If no rate found, try service_codes table
+  // If no payer rate found, try service_codes (already a per-unit rate)
   if (chargeAmount === 0) {
     const scResult = await db.query(`
       SELECT rate_per_unit FROM service_codes
@@ -92,6 +107,7 @@ async function generateClaimFromEVV(evvVisitId, userId) {
       chargeAmount = units * parseFloat(scResult.rows[0].rate_per_unit);
     }
   }
+  chargeAmount = Math.round(chargeAmount * 100) / 100;
 
   const claimNumber = `CLM-${Date.now().toString(36).toUpperCase()}`;
 
