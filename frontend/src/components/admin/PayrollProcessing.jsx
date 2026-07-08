@@ -5,9 +5,15 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 
 const PayrollProcessing = ({ token }) => {
-  const [payPeriod, setPayPeriod] = useState({
-    startDate: new Date(new Date().setDate(new Date().getDate() - 14)).toISOString().split('T')[0],
-    endDate: new Date().toISOString().split('T')[0]
+  const [payPeriod, setPayPeriod] = useState(() => {
+    // Pay periods are weekly Sun–Sat. Default to the last COMPLETED week so the
+    // screen lands on a real, consistent period (and matches reconciled data)
+    // instead of a rolling 14-day window whose dates never line up with a week.
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const end = new Date(t); end.setDate(t.getDate() - t.getDay() - 1); // last Saturday
+    const start = new Date(end); start.setDate(end.getDate() - 6);       // its Sunday
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { startDate: fmt(start), endDate: fmt(end) };
   });
   const [payrollData, setPayrollData] = useState([]);
   const [shiftData, setShiftData] = useState({ shifts: [], stats: {} });
