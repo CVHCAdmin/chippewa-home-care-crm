@@ -521,11 +521,26 @@ const ClientsManagement = ({ token }) => {
 
             <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>💰 Billing Information</h4>
             <div className="form-grid">
-              <div className="form-group">
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input type="checkbox" checked={formData.isPrivatePay} onChange={(e) => setFormData({ ...formData, isPrivatePay: e.target.checked })} style={{ width: 'auto' }} />
-                  Private Pay Client
-                </label>
+              <div className="form-group" style={{ gridColumn: isMobile ? 'span 1' : 'span 2' }}>
+                <label>Billing Type *</label>
+                <select
+                  value={formData.isPrivatePay ? 'private' : 'insurance'}
+                  onChange={(e) => {
+                    const priv = e.target.value === 'private';
+                    setFormData({
+                      ...formData,
+                      isPrivatePay: priv,
+                      // pre-fill the standard $33/hr private-pay rate so the required
+                      // Rate field isn't a silent blocker (editable; Carol Thompson = $28)
+                      privatePayRate: priv && !formData.privatePayRate ? '33' : formData.privatePayRate,
+                      // clear the payer dropdown when switching to private pay
+                      referralSourceId: priv ? '' : formData.referralSourceId,
+                    });
+                  }}
+                >
+                  <option value="insurance">Insurance / Payer (Medicaid, MCO, VA)</option>
+                  <option value="private">Private Pay (self-pay)</option>
+                </select>
               </div>
               
               {!formData.isPrivatePay ? (
