@@ -215,6 +215,9 @@ const PaymentPage = () => {
         <div style={styles.footer}>
           <p>Questions about this invoice? Contact us at:</p>
           <p><strong>support@chippewavalleyhomecare.com</strong></p>
+          <p style={{ marginTop: '0.5rem' }}>
+            Site by <a href="https://twomiah.com" target="_blank" rel="noopener noreferrer" style={{ color: '#3498db' }}>Twomiah</a>
+          </p>
         </div>
       </div>
     </div>

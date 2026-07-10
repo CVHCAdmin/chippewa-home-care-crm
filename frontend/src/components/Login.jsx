@@ -304,6 +304,9 @@ const Login = ({ onLogin }) => {
         <p className="login-footer">
           HIPAA-compliant system. Authorized personnel only.
         </p>
+        <p className="login-footer" style={{ marginTop: '0.5rem' }}>
+          Site by <a href="https://twomiah.com" target="_blank" rel="noopener noreferrer" style={{ color: '#0066cc' }}>Twomiah</a>
+        </p>
       </div>
     </div>
   );
