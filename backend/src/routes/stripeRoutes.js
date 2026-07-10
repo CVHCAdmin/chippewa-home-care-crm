@@ -21,6 +21,53 @@ const requireStripe = (req, res, next) => {
   next();
 };
 
+// Card processing fee passed through to the payer: Stripe's 2.9% + $0.30.
+// ACH/bank debit is charged at the plain invoice amount with NO pass-through fee
+// (its ~0.8%/$5-cap cost is small enough that we absorb it — this is the whole
+// reason to steer people to ACH first).
+const CARD_FEE_PCT = 0.029;
+const CARD_FEE_FLAT = 0.30;
+const round2 = (n) => Math.round(n * 100) / 100;
+const cardFeeFor = (amountDue) => round2(amountDue * CARD_FEE_PCT + CARD_FEE_FLAT);
+
+// Build the method-locked Checkout params (allowed methods + line items).
+// Stripe fixes the total when the session is CREATED — before the payer picks
+// card vs bank — so each method needs its own session at the right amount. Card
+// sessions carry the fee as its own visible line item; ACH sessions don't.
+// Anything other than an explicit 'ach' defaults to card+fee so the business
+// never silently eats the card cost.
+const buildMethodParams = (invoice, amountDue, method) => {
+  const baseLine = {
+    price_data: {
+      currency: 'usd',
+      product_data: {
+        name: `Invoice #${invoice.invoice_number || invoice.id.slice(0, 8)}`,
+        description: `Chippewa Valley Home Care - ${invoice.first_name} ${invoice.last_name}`,
+      },
+      unit_amount: Math.round(amountDue * 100),
+    },
+    quantity: 1,
+  };
+  if (method === 'ach') {
+    return { payment_method_types: ['us_bank_account'], line_items: [baseLine] };
+  }
+  const fee = cardFeeFor(amountDue);
+  return {
+    payment_method_types: ['card'],
+    line_items: [
+      baseLine,
+      {
+        price_data: {
+          currency: 'usd',
+          product_data: { name: 'Card processing fee (2.9% + $0.30)' },
+          unit_amount: Math.round(fee * 100),
+        },
+        quantity: 1,
+      },
+    ],
+  };
+};
+
 // ==================== CREATE CHECKOUT SESSION ====================
 // POST /api/stripe/create-checkout-session
 // Creates a Stripe checkout session for an invoice
@@ -57,25 +104,11 @@ router.post('/create-checkout-session', auth, requireStripe, async (req, res) =>
       return res.status(400).json({ error: 'No amount due' });
     }
 
-    // Create Stripe checkout session
+    // Create Stripe checkout session (method-locked: 'ach' = bank debit no fee,
+    // else card with the 2.9% + $0.30 processing fee). See buildMethodParams.
+    const method = req.body?.method === 'ach' ? 'ach' : 'card';
     const session = await stripe.checkout.sessions.create({
-      // Payment methods are controlled in the Stripe Dashboard (card + ACH bank
-      // debit). Omitting payment_method_types lets Checkout show whatever is
-      // enabled there, so ACH appears automatically. (The earlier "invalid pay"
-      // was a blank customer_email, not ACH — fixed separately.)
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: `Invoice #${invoice.invoice_number || invoice.id.slice(0, 8)}`,
-              description: `Home Care Services - ${invoice.first_name} ${invoice.last_name}`,
-            },
-            unit_amount: Math.round(amountDue * 100), // Stripe uses cents
-          },
-          quantity: 1,
-        },
-      ],
+      ...buildMethodParams(invoice, amountDue, method),
       mode: 'payment',
       success_url: `${FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}&invoice_id=${invoiceId}`,
       cancel_url: `${FRONTEND_URL}/payment-cancelled?invoice_id=${invoiceId}`,
@@ -135,41 +168,18 @@ router.post('/create-payment-link', auth, requireStripe, async (req, res) => {
       return res.status(400).json({ error: 'No amount due' });
     }
 
-    // Create a Stripe Price for this invoice
-    const price = await stripe.prices.create({
-      currency: 'usd',
-      unit_amount: Math.round(amountDue * 100),
-      product_data: {
-        name: `Invoice #${invoice.invoice_number || invoice.id.slice(0, 8)}`,
-      },
-    });
+    // Point the shareable link at OUR pay page (not a raw Stripe link) so every
+    // payer goes through the same ACH-free / card-with-fee method choice. A raw
+    // Stripe Payment Link has one fixed amount and can't price per method.
+    const paymentLink = `${FRONTEND_URL}/pay/${invoiceId}`;
 
-    // Create payment link
-    const paymentLink = await stripe.paymentLinks.create({
-      line_items: [{ price: price.id, quantity: 1 }],
-      metadata: {
-        invoice_id: invoiceId,
-        client_name: `${invoice.first_name} ${invoice.last_name}`,
-      },
-      after_completion: {
-        type: 'redirect',
-        redirect: {
-          url: `${FRONTEND_URL}/payment-success?invoice_id=${invoiceId}`,
-        },
-      },
-    });
-
-    // Store the payment link on the invoice
     await db.query(`
-      UPDATE invoices 
+      UPDATE invoices
       SET stripe_payment_link = $1, updated_at = NOW()
       WHERE id = $2
-    `, [paymentLink.url, invoiceId]);
+    `, [paymentLink, invoiceId]);
 
-    res.json({ 
-      paymentLink: paymentLink.url,
-      linkId: paymentLink.id
-    });
+    res.json({ paymentLink });
   } catch (error) {
     console.error('Payment link error:', error);
     res.status(500).json({ error: error.message });
@@ -211,12 +221,18 @@ router.get('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
       ORDER BY COALESCE(ili.service_date, DATE(te.start_time)) NULLS LAST, ili.created_at
     `, [invoiceId]);
 
+    const cardFee = cardFeeFor(amountDue);
     res.json({
       invoiceNumber: invoice.invoice_number || invoice.id.slice(0, 8),
       clientName: `${invoice.first_name} ${invoice.last_name}`,
       total: invoice.total,
       amountPaid: invoice.amount_paid || 0,
       amountDue,
+      // Payment-method breakdown for the pay page: bank debit is free, card adds
+      // the 2.9% + $0.30 processing fee.
+      achTotal: round2(amountDue),
+      cardFee,
+      cardTotal: round2(amountDue + cardFee),
       status: invoice.payment_status,
       billingPeriod: {
         start: invoice.billing_period_start,
@@ -230,9 +246,12 @@ router.get('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
 });
 
 // POST /api/stripe/invoice/:invoiceId/pay - Create session for public payment
+// Body: { method: 'ach' | 'card' } — 'ach' = bank debit, no fee; anything else
+// = card with the 2.9% + $0.30 processing fee added as a line item.
 router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
   try {
     const { invoiceId } = req.params;
+    const method = req.body?.method === 'ach' ? 'ach' : 'card';
 
     const invoiceResult = await db.query(`
       SELECT i.*, c.first_name, c.last_name, c.email as client_email
@@ -254,23 +273,9 @@ router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
     const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0);
 
     const session = await stripe.checkout.sessions.create({
-      // Payment methods are controlled in the Stripe Dashboard (card + ACH bank
-      // debit). Omitting payment_method_types lets Checkout show whatever is
-      // enabled there, so ACH appears automatically. (The earlier "invalid pay"
-      // was a blank customer_email, not ACH — fixed separately.)
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: `Invoice #${invoice.invoice_number || invoice.id.slice(0, 8)}`,
-              description: `Chippewa Valley Home Care - ${invoice.first_name} ${invoice.last_name}`,
-            },
-            unit_amount: Math.round(amountDue * 100),
-          },
-          quantity: 1,
-        },
-      ],
+      // Method-locked: ACH (bank debit) at the invoice amount, or card with the
+      // pass-through processing fee. See buildMethodParams above.
+      ...buildMethodParams(invoice, amountDue, method),
       mode: 'payment',
       success_url: `${FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}&invoice_id=${invoiceId}`,
       cancel_url: `${FRONTEND_URL}/pay/${invoiceId}?cancelled=true`,

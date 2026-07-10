@@ -44,14 +44,15 @@ const PaymentPage = () => {
     }
   };
 
-  const handlePayment = async () => {
+  const handlePayment = async (method) => {
     setProcessing(true);
     setError(null);
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/stripe/invoice/${invoiceId}/pay`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method })
       });
 
       if (!response.ok) throw new Error('Payment request failed');
@@ -178,16 +179,34 @@ const PaymentPage = () => {
           </div>
         )}
 
+        {/* Bank transfer first — no fee. Card adds the 2.9% + $0.30 processing fee. */}
         <button
-          onClick={handlePayment}
+          onClick={() => handlePayment('ach')}
           disabled={processing}
           style={{
             ...styles.payButton,
             ...(processing ? styles.payButtonDisabled : {})
           }}
         >
-          {processing ? 'Processing...' : `Pay $${Number(parseFloat(invoice?.amountDue || 0)).toFixed(2)}`}
+          {processing ? 'Processing...' : `Pay by Bank (ACH) — $${Number(parseFloat(invoice?.achTotal ?? invoice?.amountDue ?? 0)).toFixed(2)}`}
         </button>
+        <div style={styles.noFeeNote}>✓ No processing fee</div>
+
+        <button
+          onClick={() => handlePayment('card')}
+          disabled={processing}
+          style={{
+            ...styles.payButton,
+            ...styles.cardButton,
+            ...(processing ? styles.payButtonDisabled : {})
+          }}
+        >
+          {processing ? 'Processing...' : `Pay by Card — $${Number(parseFloat(invoice?.cardTotal ?? invoice?.amountDue ?? 0)).toFixed(2)}`}
+        </button>
+        <div style={styles.feeNote}>
+          Includes a ${Number(parseFloat(invoice?.cardFee || 0)).toFixed(2)} card processing fee (2.9% + $0.30).
+          Choose Bank (ACH) to avoid it.
+        </div>
 
         <div style={styles.secureNotice}>
           <span>🔒</span> Secure payment powered by Stripe
@@ -332,6 +351,21 @@ const styles = {
   payButtonDisabled: {
     backgroundColor: '#95a5a6',
     cursor: 'not-allowed'
+  },
+  cardButton: {
+    backgroundColor: '#2c3e50',
+    marginTop: '0.75rem'
+  },
+  noFeeNote: {
+    color: '#27ae60',
+    fontSize: '0.85rem',
+    fontWeight: 600,
+    marginTop: '0.35rem'
+  },
+  feeNote: {
+    color: '#666',
+    fontSize: '0.8rem',
+    marginTop: '0.35rem'
   },
   secureNotice: {
     marginTop: '1rem',
