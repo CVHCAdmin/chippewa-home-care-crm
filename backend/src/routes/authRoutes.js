@@ -66,7 +66,10 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: `${user.first_name} ${user.last_name}` },
       process.env.JWT_SECRET,
-      { expiresIn: '8h' }
+      // 30 days: an 8h token logged caregivers out of the clock-in app roughly
+      // every day, so they'd hit "can't clock in" until they logged in again.
+      // Server-side logout (last_logout_at) still revokes on demand.
+      { expiresIn: '30d' }
     );
     res.json({
       token,
