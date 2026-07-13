@@ -988,6 +988,15 @@ function getCurrentPayPeriod(today = new Date()) {
 // Returns { pending: {...} } if the caregiver has an unverified pay period, else { pending: null }.
 router.get('/caregiver/me/pending-verification', auth, async (req, res) => {
   try {
+    // DISABLED (per request): the payday "confirm your hours" modal is persistent
+    // until the caregiver confirms/disputes, and it was blocking people from
+    // clocking in/out. Always return nothing-pending so the modal never appears.
+    // The caregiver app is a frozen bundle that calls this endpoint, so disabling
+    // it here is what actually removes the requirement on their phones. Payroll
+    // calculation and the /verify endpoint are untouched; remove this early
+    // return to re-enable the prompt.
+    return res.json({ pending: null });
+
     if (req.user.role !== 'caregiver') return res.json({ pending: null });
     const period = getCurrentPayPeriod();
     if (!period) return res.json({ pending: null });
