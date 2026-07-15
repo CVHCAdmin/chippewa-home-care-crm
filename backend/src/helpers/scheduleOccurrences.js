@@ -96,6 +96,10 @@ const SCHEDULE_OCCURRENCES_CTE = (name = 'schedule_occurrences') => `
       -- A cancelled occurrence does not exist. Nothing may pay it, bill it, remind
       -- for it, alert on it, or auto-clock-in against it.
       AND (se.id IS NULL OR se.exception_type <> 'cancelled')
+      -- Suspended service: the schedule is paused from suspended_from onward. Occurrences
+      -- on/after that date stop generating (so billing/payroll/reminders/no-show all stop),
+      -- while earlier already-worked occurrences still generate. Resume clears the date.
+      AND (s.suspended_from IS NULL OR d.dt::date < s.suspended_from)
   )
 `;
 

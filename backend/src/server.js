@@ -277,7 +277,7 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
       `SELECT s.id, s.caregiver_id, s.client_id, s.schedule_type,
               s.day_of_week, s.date, s.start_time, s.end_time,
               s.notes, s.is_active, s.status, s.created_at, s.updated_at,
-              s.frequency, s.effective_date, s.anchor_date,
+              s.frequency, s.effective_date, s.anchor_date, s.suspended_from,
               ${hasEndDate ? `s.end_date,` : `NULL::date AS end_date,`}
               ${hasTraining ? `s.is_training,` : `false AS is_training,`}
               ${hasSplitCols

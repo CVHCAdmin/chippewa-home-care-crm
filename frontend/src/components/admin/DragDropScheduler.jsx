@@ -168,6 +168,8 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         // produced an Invalid Date and NEVER filtered — leaving deleted/ended
         // recurring shifts painted on the grid. Compare by calendar date.
         if (s.end_date && dateStr > s.end_date.slice(0, 10)) return;
+        // Suspended service: hide occurrences on/after the suspend date (matches the server).
+        if (s.suspended_from && dateStr >= s.suspended_from.slice(0, 10)) return;
 
         // Biweekly check
         if (s.frequency === 'biweekly' && s.anchor_date) {
@@ -1388,7 +1390,7 @@ function Modal({ title, onClose, children }) {
       <div style={{ background:'#fff', borderRadius:12, width:'100%', maxWidth:460, boxShadow:'0 20px 60px rgba(0,0,0,0.2)', maxHeight:'90vh', overflowY:'auto' }}>
         <div style={{ padding:'14px 20px', borderBottom:'1px solid #E5E7EB', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <h3 style={{ margin:0, fontSize:15, fontWeight:700, color:'#111827' }}>{title}</h3>
-          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20, color:'#9CA3AF', lineHeight:1 }}>\u00D7</button>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20, color:'#9CA3AF', lineHeight:1 }}>×</button>
         </div>
         <div style={{ padding:20 }}>{children}</div>
       </div>

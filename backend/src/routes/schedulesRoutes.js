@@ -389,4 +389,72 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
   }
 });
 
+// ── SUSPEND / RESUME SERVICE ────────────────────────────────────────────────
+// Pause a client's service without deleting anything. Sets schedules.suspended_from;
+// the occurrence engine then stops generating visits on/after that date (so billing,
+// payroll, reminders and no-show all stop), while already-worked visits before it stay.
+// Reversible: resume clears the date and the schedule returns exactly as it was.
+//
+//   scope='this'   — just this one schedule (the clicked shift's weekday).
+//   scope='client' — every active schedule for this shift's client (all their days).
+// fromDate defaults to today (America/Chicago). A future date lets you suspend starting
+// later (e.g. tomorrow) so a visit already worked today is kept.
+
+// Resolve the set of schedule ids a suspend/resume applies to, given a scope.
+async function resolveScopeIds(scheduleId, scope) {
+  const cur = await db.query(`SELECT id, client_id FROM schedules WHERE id=$1 AND is_active=true`, [scheduleId]);
+  if (cur.rows.length === 0) return null;
+  if (scope === 'client') {
+    const all = await db.query(`SELECT id FROM schedules WHERE client_id=$1 AND is_active=true`, [cur.rows[0].client_id]);
+    return { clientId: cur.rows[0].client_id, ids: all.rows.map(r => r.id) };
+  }
+  return { clientId: cur.rows[0].client_id, ids: [scheduleId] };
+}
+
+router.post('/:id/suspend', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const scope = String(req.body.scope || 'this').toLowerCase();
+    if (!['this', 'client'].includes(scope)) return res.status(400).json({ error: "scope must be 'this' or 'client'." });
+
+    // Default the start date to today in Chicago; accept an explicit YYYY-MM-DD.
+    const fromDate = req.body.fromDate
+      || (await db.query(`SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date,'YYYY-MM-DD') AS d`)).rows[0].d;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) return res.status(400).json({ error: 'fromDate must be YYYY-MM-DD.' });
+
+    const scoped = await resolveScopeIds(req.params.id, scope);
+    if (!scoped) return res.status(404).json({ error: 'Schedule not found' });
+
+    const result = await db.query(
+      `UPDATE schedules SET suspended_from=$2::date, updated_at=NOW()
+       WHERE id = ANY($1) AND is_active=true RETURNING id, suspended_from`,
+      [scoped.ids, fromDate]
+    );
+    for (const row of result.rows) {
+      await auditLog(req.user.id, 'SUSPEND', 'schedules', row.id, null, { scope, suspended_from: fromDate }, req.body.reason || null);
+    }
+    res.json({ suspended: result.rows.length, scope, fromDate, clientId: scoped.clientId, scheduleIds: result.rows.map(r => r.id) });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+router.post('/:id/resume', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const scope = String(req.body.scope || 'this').toLowerCase();
+    if (!['this', 'client'].includes(scope)) return res.status(400).json({ error: "scope must be 'this' or 'client'." });
+
+    const scoped = await resolveScopeIds(req.params.id, scope);
+    if (!scoped) return res.status(404).json({ error: 'Schedule not found' });
+
+    // Only touch rows that are actually suspended, so resume is a clean no-op otherwise.
+    const result = await db.query(
+      `UPDATE schedules SET suspended_from=NULL, updated_at=NOW()
+       WHERE id = ANY($1) AND is_active=true AND suspended_from IS NOT NULL RETURNING id`,
+      [scoped.ids]
+    );
+    for (const row of result.rows) {
+      await auditLog(req.user.id, 'RESUME', 'schedules', row.id, null, { scope }, req.body.reason || null);
+    }
+    res.json({ resumed: result.rows.length, scope, clientId: scoped.clientId, scheduleIds: result.rows.map(r => r.id) });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 module.exports = router;

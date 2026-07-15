@@ -66,6 +66,7 @@ const SchedulingHub = ({ token }) => {
   const [editModal, setEditModal]   = useState(null);
   const [makeAvailableModal, setMakeAvailableModal] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [suspendBusy, setSuspendBusy] = useState(false);
 
   // ── Week View state ──
   const [weekOf, setWeekOf]               = useState(getWeekStart(new Date()).toISOString().split('T')[0]);
@@ -541,7 +542,39 @@ const SchedulingHub = ({ token }) => {
       // every edit silently rewrote every week already worked.
       scope: isRecurring ? 'this' : undefined,
       editDate: isRecurring ? lastOccurrenceOnOrBefore(schedule.day_of_week) : '',
+      suspendedFrom: schedule.suspended_from ? schedule.suspended_from.split('T')[0] : null,
     });
+  };
+
+  // Suspend / resume a client's service. `scope` = 'this' (just this weekday) or 'client'
+  // (all of the client's scheduled days). Nothing is deleted — the schedule is paused from
+  // a date and resumes exactly as it was.
+  const handleSuspend = async (scope) => {
+    if (!editModal) return;
+    const today = new Date(); today.setHours(12, 0, 0, 0);
+    const fromDate = editModal.suspendFromDate
+      || `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    setSuspendBusy(true);
+    try {
+      const r = await api(`/api/schedules/${editModal.id}/suspend`, { method: 'POST', body: JSON.stringify({ scope, fromDate }) });
+      const who = scope === 'client' ? `all of ${getClientName(editModal.clientId)}'s days` : `${getDayName(parseInt(editModal.dayOfWeek))}s`;
+      showMsg(`Service suspended for ${who} starting ${new Date(fromDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} (${r.suspended} shift${r.suspended !== 1 ? 's' : ''})`);
+      setEditModal(null);
+      loadCaregiverSchedules(selectedCaregiverId); loadCalendarData(); loadWeekView();
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+    finally { setSuspendBusy(false); }
+  };
+
+  const handleResume = async (scope) => {
+    if (!editModal) return;
+    setSuspendBusy(true);
+    try {
+      const r = await api(`/api/schedules/${editModal.id}/resume`, { method: 'POST', body: JSON.stringify({ scope }) });
+      showMsg(`Service resumed (${r.resumed} shift${r.resumed !== 1 ? 's' : ''})`);
+      setEditModal(null);
+      loadCaregiverSchedules(selectedCaregiverId); loadCalendarData(); loadWeekView();
+    } catch (e) { showMsg('Error: ' + e.message, 'error'); }
+    finally { setSuspendBusy(false); }
   };
 
   const handleSaveEdit = async () => {
@@ -614,6 +647,10 @@ const SchedulingHub = ({ token }) => {
         const startsOn = (s.effective_date || s.anchor_date || s.created_at || '').slice(0, 10);
         if (startsOn && dateStr < startsOn) return;
         if (s.end_date && dateStr > s.end_date.slice(0, 10)) return;
+        // Suspended service: hide occurrences on/after the suspend date, matching the
+        // server engine (so the calendar agrees with payroll/billing). The pattern still
+        // shows in the schedule list with a Suspended badge so it can be resumed.
+        if (s.suspended_from && dateStr >= s.suspended_from.slice(0, 10)) return;
         if (s.frequency === 'biweekly' && s.anchor_date) {
           const diffWeeks = Math.floor((target - new Date(s.anchor_date)) / (7*24*60*60*1000));
           if (diffWeeks % 2 !== 0) return;
@@ -1694,6 +1731,7 @@ const SchedulingHub = ({ token }) => {
                           <span style={{ fontWeight: '600' }}>{getClientName(s.client_id)}</span>
                           <span style={{ color: '#6B7280', marginLeft: '0.75rem' }}>{formatTime(s.start_time)} – {formatTime(s.end_time)}</span>
                           {s.frequency === 'biweekly' && <span style={{ marginLeft: '0.5rem', padding: '0.15rem 0.4rem', background: '#FFEDD5', color: '#C2410C', borderRadius: '4px', fontSize: '0.72rem' }}>Bi-Wk</span>}
+                          {s.suspended_from && <span title={`Suspended from ${s.suspended_from.slice(0,10)}`} style={{ marginLeft: '0.5rem', padding: '0.15rem 0.4rem', background: '#FEF3C7', color: '#92400E', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 700 }}>⏸ Suspended</span>}
                         </div>
                         <button onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(s.id); }} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '1rem' }}>🗑</button>
                       </div>
@@ -1935,6 +1973,54 @@ const SchedulingHub = ({ token }) => {
               <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Notes</label>
               <textarea value={editModal.notes} onChange={(e) => setEditModal(prev => ({ ...prev, notes: e.target.value }))} placeholder='Optional notes...' rows={2} style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem', resize: 'vertical' }} />
             </div>
+            {/* Suspend / resume service — pause visits without deleting the schedule */}
+            {editModal.scheduleType === 'recurring' && (
+              <div style={{ marginBottom: '1.25rem', padding: '0.85rem', borderRadius: '8px',
+                background: editModal.suspendedFrom ? '#FEF3C7' : '#F9FAFB',
+                border: `1px solid ${editModal.suspendedFrom ? '#FCD34D' : '#E5E7EB'}` }}>
+                {editModal.suspendedFrom ? (
+                  <>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#92400E', marginBottom: '0.5rem' }}>
+                      ⏸ Service suspended from {new Date(editModal.suspendedFrom + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <button type='button' disabled={suspendBusy} onClick={() => handleResume('this')}
+                        className='btn btn-secondary' style={{ flex: 1, minWidth: '140px' }}>
+                        ▶ Resume {getDayName(parseInt(editModal.dayOfWeek))}s
+                      </button>
+                      <button type='button' disabled={suspendBusy} onClick={() => handleResume('client')}
+                        className='btn btn-secondary' style={{ flex: 1, minWidth: '140px' }}>
+                        ▶ Resume all {getClientName(editModal.clientId)}’s days
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', color: '#111827', marginBottom: '0.5rem' }}>Suspend service</label>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.8rem', color: '#374151' }}>Starting</span>
+                      <input type='date'
+                        value={editModal.suspendFromDate || new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setEditModal(prev => ({ ...prev, suspendFromDate: e.target.value }))}
+                        style={{ padding: '0.4rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.85rem' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <button type='button' disabled={suspendBusy} onClick={() => handleSuspend('this')}
+                        className='btn btn-secondary' style={{ flex: 1, minWidth: '140px' }}>
+                        ⏸ Just {getDayName(parseInt(editModal.dayOfWeek))}s
+                      </button>
+                      <button type='button' disabled={suspendBusy} onClick={() => handleSuspend('client')}
+                        className='btn btn-secondary' style={{ flex: 1, minWidth: '140px', borderColor: '#F59E0B', color: '#92400E' }}>
+                        ⏸ All {getClientName(editModal.clientId)}’s days
+                      </button>
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: '#6B7280', marginTop: '0.4rem' }}>
+                      Pauses visits from that date on. Nothing is deleted — past visits stay, and you can resume anytime.
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
               <button onClick={handleSaveEdit} disabled={editSaving} className='btn btn-primary' style={{ flex: 1, minWidth: '160px' }}>{editSaving ? 'Saving...' : '✓ Save Changes'}</button>
               <button
