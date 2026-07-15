@@ -65,6 +65,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [visitNote, setVisitNote] = useState('');
   const [showNoteModal, setShowNoteModal] = useState(false);
+  // Set when the server rejects a clock-out because a note is required (VA clients). Keeps
+  // the note modal open with a clear message instead of closing on a generic error toast.
+  const [noteError, setNoteError] = useState('');
   // Visit photos staged for upload on clock-out
   const [pendingPhotos, setPendingPhotos] = useState([]); // [{ dataUri, caption, category, sizeBytes }]
   const [photoUploading, setPhotoUploading] = useState(false);
@@ -826,7 +829,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           setActiveSession(null);
           setSelectedClient('');
           setVisitNote('');
+          setNoteError('');
           setShowNoteModal(false);
+          return;
+        }
+        // VA client with no note: keep the modal open so they can add one and retry,
+        // rather than closing on a toast and making them start over.
+        if (data.code === 'va_note_required') {
+          await hapticNotify('warning');
+          setNoteError(data.error || 'A visit note is required for this client.');
           return;
         }
         throw new Error(data.error || 'Failed');
@@ -854,6 +865,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       setActiveSession(null);
       setSelectedClient('');
       setVisitNote('');
+      setNoteError('');
       setPendingPhotos([]);
       setShowNoteModal(false);
       loadData();
@@ -2111,9 +2123,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       {showNoteModal && (
         <div className="modal active">
           <div className="modal-content">
-            <div className="modal-header"><h2>Visit Notes</h2><button className="close-btn" onClick={() => setShowNoteModal(false)}>×</button></div>
-            <p className="text-muted">Add notes (optional)</p>
-            <div className="form-group"><textarea value={visitNote} onChange={(e) => setVisitNote(e.target.value)} placeholder="How did the visit go?" rows={4} /></div>
+            <div className="modal-header"><h2>Visit Notes</h2><button className="close-btn" onClick={() => { setShowNoteModal(false); setNoteError(''); }}>×</button></div>
+            <p className={noteError ? 'text-danger' : 'text-muted'} style={noteError ? { color: '#DC2626', fontWeight: 600 } : undefined}>
+              {noteError || 'Add notes (optional)'}
+            </p>
+            <div className="form-group">
+              <textarea
+                value={visitNote}
+                onChange={(e) => { setVisitNote(e.target.value); if (noteError) setNoteError(''); }}
+                placeholder="How did the visit go?"
+                rows={4}
+                style={noteError ? { borderColor: '#DC2626' } : undefined}
+              />
+            </div>
 
             {/* Visit photos — proof-of-care */}
             <div className="form-group">
@@ -2148,7 +2170,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             </div>
 
             <div className="form-actions">
-              <button className="btn btn-secondary" onClick={() => setShowNoteModal(false)}>Cancel</button>
+              <button className="btn btn-secondary" onClick={() => { setShowNoteModal(false); setNoteError(''); }}>Cancel</button>
               <button className="btn btn-primary" onClick={completeClockOut}>Clock Out</button>
             </div>
           </div>

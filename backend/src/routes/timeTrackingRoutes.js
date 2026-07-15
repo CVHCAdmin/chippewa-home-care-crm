@@ -406,6 +406,19 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
     if (timeEntry.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
     const entry = timeEntry.rows[0];
 
+    // VA clients require a visit note to clock out (VA documentation rule). Everyone else's
+    // note stays optional. Enforced here on the server because the caregiver app is a frozen
+    // APK — a client-side check wouldn't reach the phones already in the field. The app shows
+    // this `error` string on a failed clock-out, so the caregiver sees why. Admins can still
+    // close a stuck VA entry via /admin-force-clockout, which does not go through this path.
+    const isVaClient = entry.referral_payer_type === 'va';
+    if (isVaClient && !String(notes || '').trim()) {
+      return res.status(400).json({
+        error: 'This is a VA client — a visit note is required to clock out. Please add a short note about the visit.',
+        code: 'va_note_required',
+      });
+    }
+
     const durationSeconds = (new Date() - new Date(entry.start_time)) / 1000;
     const durationMinutes = Math.round(durationSeconds / 60);
     const allottedMinutes = entry.allotted_minutes;
