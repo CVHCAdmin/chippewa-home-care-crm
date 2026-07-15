@@ -73,18 +73,40 @@ app.use(cors({
 
 // Rate limiters
 //
-// Global cap (per IP) intentionally generous: an admin loading the dashboard
-// fires 20+ parallel requests, then polls a few of them every few seconds for
-// freshness. 500/15min works out to ~33/min — easy to trip during normal use
-// and the lockout is opaque (15-min IP ban). 2000/15min ≈ ~130/min, which
-// still blocks scraping but covers a real admin session.
+// KEYING (the important part): Render terminates the connection at its edge and forwards
+// the request, so every request's socket address (Express's default `req.ip`) is the SAME
+// upstream proxy address for ALL clients. Keying the limiter on that put the entire company
+// in ONE bucket — once everyone together made 2000 requests in 15 minutes, every caregiver
+// was locked out at the same instant with "Too many requests from this device," which is
+// exactly the meaning the message never actually had. Key on the REAL client instead: the
+// left-most X-Forwarded-For entry is the original caller, so each device gets its own bucket.
+// (`trust proxy` is set to 1 above, but Render's hop count made req.ip unreliable; reading
+// the header directly is robust regardless of how many proxies sit in front.)
+const clientKey = (req) => {
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) {
+    const first = String(xff).split(',')[0].trim();
+    if (first) return first;
+  }
+  return req.ip;
+};
+
+// Global cap, now genuinely PER DEVICE. Generous because an admin loading the dashboard
+// fires 20+ parallel requests and then polls. 2000/15min ≈ ~130/min covers a real session
+// while still blocking scraping. Mobile carriers can put several caregivers behind one NAT
+// IP, so this headroom also absorbs a handful of clients sharing an address.
 //
 // Always send a JSON body so the frontend can show a real message instead of
 // JSON.parse-ing plain text and rendering "Unexpected token 'T'".
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 2000, standardHeaders: true, legacyHeaders: false,
+  keyGenerator: clientKey,
   message: { error: 'Too many requests from this device. Please wait a minute and try again.' },
-  skip: (req) => req.path.includes('/api/messages/unread-count') || req.path.includes('/api/push/unread-count')
+  // /health must never be rate-limited — it's how uptime monitoring and Render's own health
+  // checks probe the service; a 429 there reads as an outage.
+  skip: (req) => req.path === '/health'
+    || req.path.includes('/api/messages/unread-count')
+    || req.path.includes('/api/push/unread-count')
 });
 app.use(limiter);
 // Stripe webhook needs the raw body for signature verification — skip the
@@ -95,8 +117,12 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+// Login limiter. Per real device now. Raised 15 -> 50 because several caregivers can share
+// one mobile-carrier NAT IP; 50/15min still stops password brute-forcing (which needs
+// thousands of tries) while not locking out a carrier's worth of legitimate users.
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 15,
+  windowMs: 15 * 60 * 1000, max: 50,
+  keyGenerator: clientKey,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' }
 });
 app.use('/api/auth/login', authLimiter);
@@ -104,7 +130,8 @@ app.use('/api/auth/register-caregiver', authLimiter);
 app.use('/api/auth/register-admin', authLimiter);
 
 const portalLoginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 10,
+  windowMs: 15 * 60 * 1000, max: 30,
+  keyGenerator: clientKey,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' }
 });
 app.use('/api/client-portal/login', portalLoginLimiter);
