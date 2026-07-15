@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const db = require('../db');
+const { clientIp } = require('../helpers/clientIp');
 const { encrypt, normalizeSSN, validateSSN } = require('../services/encryptionService');
 const { submitBackgroundCheck } = require('../services/worcsService');
 const { sendOnboardingPacketInvite } = require('../services/emailService');
@@ -49,16 +50,17 @@ By signing below I certify that all information I have provided in this
 packet is true and complete.
 `.trim();
 
-// Rate limiter for unauthenticated public access
+// Rate limiter for unauthenticated public access. keyGenerator so a burst from one device
+// can't lock every applicant out (all requests share one proxy IP without it).
 const publicLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIp,
 });
 
 const newToken = () => crypto.randomBytes(48).toString('hex'); // 96 chars
-const clientIp = (req) => (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
 const logEvent = async (packetId, eventType, req, metadata = null) => {
   try {
     await db.query(

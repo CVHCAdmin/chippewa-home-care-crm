@@ -3,15 +3,19 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const db = require('../db');
+const { clientIp } = require('../helpers/clientIp');
 
 const router = express.Router();
 
-// Per-IP throttle to keep bots from flooding the CRM prospects table.
+// Per-IP throttle to keep bots from flooding the CRM prospects table. keyGenerator is what
+// makes it actually per-IP: behind Render's proxy req.ip is one shared address, so without
+// it a single bot would use up the whole limit and block every real lead form submission.
 const leadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIp,
   message: { error: 'Too many submissions from this address. Please try again later or call (715) 491-1254.' }
 });
 
@@ -22,6 +26,7 @@ const readLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIp,
 });
 
 router.post('/prospects', leadLimiter, async (req, res) => {
