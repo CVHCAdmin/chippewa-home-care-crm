@@ -12,36 +12,25 @@ const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 // ==================== SCHEDULE EXPANSION HELPER ====================
 // Shared SQL fragment to expand schedules into individual shift occurrences
 
+// Payroll used to carry a hand-copied twin of the occurrence expansion, which had
+// drifted from every other copy (it expanded bi-weekly shifts every week, so
+// caregivers were paid twice as often as they worked). It now reads from the one
+// shared engine; this shim only renames the columns to the names the reconciliation
+// query below already uses.
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
+
 const SCHEDULE_EXPANSION_CTE = `
+  ${SCHEDULE_OCCURRENCES_CTE('_schedule_occ')},
   shift_occurrences AS (
     SELECT
-      s.id AS schedule_id,
-      s.caregiver_id,
-      s.client_id,
-      d.dt::date AS shift_date,
-      COALESCE(se.override_start_time, s.start_time) AS scheduled_start,
-      COALESCE(se.override_end_time, s.end_time) AS scheduled_end,
-      (ROUND(EXTRACT(EPOCH FROM (COALESCE(se.override_end_time, s.end_time) - COALESCE(se.override_start_time, s.start_time))) / 60)::int
-        + CASE WHEN COALESCE(se.override_end_time, s.end_time) < COALESCE(se.override_start_time, s.start_time) THEN 1440 ELSE 0 END) AS scheduled_minutes
-    FROM schedules s
-    CROSS JOIN generate_series($1::date, $2::date, '1 day'::interval) AS d(dt)
-    LEFT JOIN schedule_exceptions se
-      ON se.schedule_id = s.id AND se.exception_date = d.dt::date
-    WHERE s.is_active = true
-      AND (
-        (s.schedule_type = 'one-time' AND s.date = d.dt::date)
-        OR (s.schedule_type = 'recurring' AND s.day_of_week = EXTRACT(DOW FROM d.dt)::int)
-        OR (s.schedule_type = 'bi-weekly' AND s.day_of_week = EXTRACT(DOW FROM d.dt)::int
-            AND MOD(((d.dt::date - COALESCE(s.anchor_date, s.effective_date, s.created_at::date))::int / 7), 2) = 0)
-        OR (s.schedule_type = 'multi-day' AND s.date IS NOT NULL AND s.date = d.dt::date)
-      )
-      -- Hard lower bound: never expand a recurring shift backwards past the
-      -- date it was actually entered. effective_date is authoritative; we
-      -- fall back to created_at for any legacy row that escaped the v36
-      -- backfill. Anything without either is refused.
-      AND d.dt::date >= COALESCE(s.effective_date, s.created_at::date)
-      AND (s.end_date IS NULL OR d.dt::date <= s.end_date)
-      AND (se.id IS NULL OR se.exception_type != 'cancelled')
+      schedule_id,
+      caregiver_id,
+      client_id,
+      occ_date   AS shift_date,
+      start_time AS scheduled_start,
+      end_time   AS scheduled_end,
+      minutes    AS scheduled_minutes
+    FROM _schedule_occ
   )
 `;
 

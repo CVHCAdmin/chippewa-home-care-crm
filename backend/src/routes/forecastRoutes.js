@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
 // GET revenue forecast — projected vs actual by week/month
 router.get('/revenue', auth, async (req, res) => {
@@ -43,28 +44,25 @@ router.get('/revenue', auth, async (req, res) => {
       ORDER BY projected_remaining_revenue DESC
     `);
 
-    // Weekly scheduled hours (current + next 4 weeks)
+    // Weekly scheduled hours (current + next 4 weeks). Via the shared engine, so the
+    // forecast matches what payroll/billing actually see: the old query had no
+    // effective_date/end_date bound (it forecast revenue for terminated clients forever),
+    // no cancellations, and expanded bi-weekly EVERY week (double revenue).
+    const win = await db.query(
+      `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS a,
+              to_char(((NOW() AT TIME ZONE 'America/Chicago')::date + 27), 'YYYY-MM-DD') AS b`
+    );
     const weekly = await db.query(`
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT
-        DATE_TRUNC('week', gs.dt) AS week_start,
-        COUNT(DISTINCT s.caregiver_id) AS caregiver_count,
+        DATE_TRUNC('week', occ.occ_date) AS week_start,
+        COUNT(DISTINCT occ.caregiver_id) AS caregiver_count,
         COUNT(*) AS shift_count,
-        SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
-        ) AS scheduled_hours,
-        SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
-        ) * 18.50 AS estimated_revenue
-      FROM schedules s
-      CROSS JOIN LATERAL generate_series(CURRENT_DATE, CURRENT_DATE + 27, '1 day') AS gs(dt)
-      WHERE s.is_active = TRUE
-        AND (
-          (s.schedule_type = 'recurring' AND s.day_of_week = EXTRACT(DOW FROM gs.dt)::int)
-          OR (s.schedule_type = 'one-time' AND s.date = gs.dt)
-          OR (s.schedule_type = 'bi-weekly' AND s.day_of_week = EXTRACT(DOW FROM gs.dt)::int)
-        )
+        SUM(occ.hours) AS scheduled_hours,
+        SUM(occ.hours) * 18.50 AS estimated_revenue
+      FROM occ
       GROUP BY 1 ORDER BY 1
-    `);
+    `, [win.rows[0].a, win.rows[0].b]);
 
     // Top clients by revenue (last 90 days)
     const topClients = await db.query(`
@@ -107,27 +105,29 @@ router.get('/revenue', auth, async (req, res) => {
 // GET caregiver utilization
 router.get('/caregiver-utilization', auth, async (req, res) => {
   try {
+    // Each caregiver's actual scheduled hours over the next 7 days, via the shared engine.
+    // The old query matched "any of the last 7 weekdays" — i.e. every recurring shift once,
+    // with no effective/end/exception/bi-weekly handling — so ended patterns and cancelled
+    // days inflated the numbers and bi-weekly shifts were counted as weekly.
+    const win = await db.query(
+      `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS a,
+              to_char(((NOW() AT TIME ZONE 'America/Chicago')::date + 6), 'YYYY-MM-DD') AS b`
+    );
     const result = await db.query(`
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT
         u.id,
         u.first_name || ' ' || u.last_name AS caregiver_name,
-        COUNT(DISTINCT s.client_id) AS client_count,
-        SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
-        ) AS weekly_hours,
-        SUM(
-          EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END
-        ) * 18.50 AS weekly_revenue,
+        COUNT(DISTINCT occ.client_id) AS client_count,
+        COALESCE(SUM(occ.hours), 0) AS weekly_hours,
+        COALESCE(SUM(occ.hours), 0) * 18.50 AS weekly_revenue,
         u.employment_type
       FROM users u
-      LEFT JOIN schedules s ON s.caregiver_id = u.id AND s.is_active = TRUE
-        AND s.day_of_week IN (
-          SELECT EXTRACT(DOW FROM CURRENT_DATE - i)::int FROM generate_series(0,6) i
-        )
+      LEFT JOIN occ ON occ.caregiver_id = u.id
       WHERE u.role = 'caregiver' AND u.is_active = TRUE
       GROUP BY u.id, u.first_name, u.last_name, u.employment_type
       ORDER BY weekly_hours DESC NULLS LAST
-    `);
+    `, [win.rows[0].a, win.rows[0].b]);
     res.json(result.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

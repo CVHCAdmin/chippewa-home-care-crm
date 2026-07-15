@@ -4,6 +4,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
 // A single shift longer than this is almost certainly a missed clock-out, not
 // real worked time. Past this ceiling we refuse to silently auto-bill the full
@@ -207,6 +208,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     const { clientId, latitude, longitude, scheduleId, autoTransition } = req.body;
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
+    let hasLiveOccurrenceNow = false;
 
     // Fetch existing open entries (if any) for this caregiver, joined with
     // client/referral-source so we can apply the correct billing rule when
@@ -300,22 +302,67 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       try { const { createEVVFromTimeEntry } = require('./sandataRoutes'); createEVVFromTimeEntry(openEntry.id).catch(e => console.error('[EVV auto-close]', e.message)); } catch(e) {}
     }
     try {
-      const today = new Date();
-      const sched = await db.query(`
-        SELECT id, start_time, end_time FROM schedules
-        WHERE caregiver_id=$1 AND client_id=$2 AND is_active=true
-          AND (day_of_week=$3 OR (date IS NOT NULL AND date::date=$4::date))
-        ORDER BY date DESC NULLS LAST LIMIT 1
-      `, [req.user.id, clientId, today.getDay(), today.toISOString().split('T')[0]]);
+      // Which shift is this punch for? This decides `allotted_minutes`, which becomes
+      // `billable_minutes` on clock-out and therefore the units on the payer's claim —
+      // so getting it wrong bills the wrong amount.
+      //
+      // The old lookup matched on caregiver+client+day_of_week with no date bounds and
+      // `ORDER BY date DESC NULLS LAST LIMIT 1`. Recurring rows all have a NULL date, so
+      // that ORDER BY is a TIE: when a client has more than one visit on the same weekday
+      // (Terri Tranel has three with Linda Johnson — two 90-minute and one 60-minute), or
+      // when a pattern has been end-dated and replaced, Postgres returned whichever row it
+      // felt like. It also matched cancelled occurrences and expired patterns.
+      //
+      // Now: expand through the one shared engine (honors effective/end dates, skips
+      // cancelled occurrences, applies per-day overrides) and pick the occurrence whose
+      // start time is NEAREST the actual punch — the same rule payroll's reconciliation
+      // uses to pair a punch with a shift. Deterministic, and correct for multi-visit days.
+      //
+      // Dates come from the DB in America/Chicago, not from the Node process: Postgres runs
+      // UTC, so `new Date().getDay()` was already tomorrow's weekday after 19:00 Chicago.
+      const nowCt = await db.query(
+        `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d,
+                to_char((NOW() AT TIME ZONE 'America/Chicago')::time, 'HH24:MI:SS') AS t`
+      );
+      const { d: todayCt, t: nowTimeCt } = nowCt.rows[0];
+      const sched = await db.query(
+        `WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+         SELECT occ.schedule_id AS id, occ.start_time, occ.end_time, occ.minutes,
+                CASE WHEN occ.end_time < occ.start_time
+                     -- overnight shift: the window wraps past midnight
+                     THEN ($5::time >= (occ.start_time - INTERVAL '15 minutes')::time OR $5::time <= occ.end_time)
+                     ELSE ($5::time >= (occ.start_time - INTERVAL '15 minutes')::time AND $5::time <= occ.end_time)
+                END AS active_now
+         FROM occ
+         WHERE occ.caregiver_id = $3 AND occ.client_id = $4
+         ORDER BY ABS(EXTRACT(EPOCH FROM ($5::time - occ.start_time))) ASC, occ.start_time ASC
+         LIMIT 1`,
+        [todayCt, todayCt, req.user.id, clientId, nowTimeCt]
+      );
       if (sched.rows[0]) {
         linkedScheduleId = linkedScheduleId || sched.rows[0].id;
-        if (sched.rows[0].start_time && sched.rows[0].end_time) {
-          const [sh, sm] = sched.rows[0].start_time.split(':').map(Number);
-          const [eh, em] = sched.rows[0].end_time.split(':').map(Number);
-          allottedMinutes = (eh*60+em) - (sh*60+sm);
-        }
+        if (sched.rows[0].minutes != null) allottedMinutes = sched.rows[0].minutes;
+        hasLiveOccurrenceNow = sched.rows[0].active_now === true;
       }
-    } catch(e) {}
+    } catch(e) { console.error('[clock-in] schedule match failed:', e.message); }
+
+    // The caregiver app auto-clocks people in when they arrive at a client's address. It
+    // decides "is there a shift right now?" on the phone — from data that never included
+    // cancellations, because /api/schedules/:id didn't return them. So a visit the office
+    // had CANCELLED could still auto-clock a caregiver in, creating a real time entry that
+    // flowed into payroll and billing.
+    //
+    // The app ships as a frozen APK, so that check cannot be fixed on the phone. Refuse the
+    // automatic clock-in here instead, where it takes effect immediately.
+    //
+    // A MANUAL clock-in is never blocked: the caregiver may have gone to the visit anyway,
+    // and that entry correctly surfaces as unscheduled for admin review.
+    if (req.body.autoClockIn && !hasLiveOccurrenceNow) {
+      return res.status(409).json({
+        error: 'No active scheduled visit right now — automatic clock-in skipped. Clock in manually if you are on site.',
+        code: 'no_active_occurrence',
+      });
+    }
     const result = await db.query(
       `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, clock_in_location, schedule_id, allotted_minutes)
        VALUES ($1,$2,$3,NOW(),$4,$5,$6) RETURNING *`,

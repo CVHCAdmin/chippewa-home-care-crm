@@ -515,6 +515,16 @@ const SchedulingHub = ({ token }) => {
     catch (e) { showMsg('Error: ' + e.message, 'error'); }
   };
 
+  // The most recent date this weekday came round, today included. When the back office
+  // opens a repeating shift to fix it at payday, the day they mean is almost always the
+  // last time it actually ran — so that is what the date field starts on.
+  const lastOccurrenceOnOrBefore = (dow) => {
+    const t = new Date();
+    t.setHours(12, 0, 0, 0);
+    t.setDate(t.getDate() - ((t.getDay() - Number(dow) + 7) % 7));
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+  };
+
   const openEditModal = (schedule) => {
     const isRecurring = schedule.day_of_week !== null && schedule.day_of_week !== undefined;
     setEditModal({
@@ -525,23 +535,47 @@ const SchedulingHub = ({ token }) => {
       startTime: schedule.start_time || '09:00', endTime: schedule.end_time || '13:00',
       notes: schedule.notes || '', scheduleType: isRecurring ? 'recurring' : 'one-time',
       frequency: schedule.frequency || 'weekly',
-      anchorDate: schedule.anchor_date ? schedule.anchor_date.split('T')[0] : ''
+      anchorDate: schedule.anchor_date ? schedule.anchor_date.split('T')[0] : '',
+      // A repeating shift is ONE row that every week is re-derived from, so an edit has to
+      // say which weeks it means. This screen used to send nothing at all, which meant
+      // every edit silently rewrote every week already worked.
+      scope: isRecurring ? 'this' : undefined,
+      editDate: isRecurring ? lastOccurrenceOnOrBefore(schedule.day_of_week) : '',
     });
   };
 
   const handleSaveEdit = async () => {
     if (!editModal) return;
     if (editModal.startTime === editModal.endTime) { showMsg('Start and end time cannot be the same', 'error'); return; }
+    const isRecurring = editModal.scheduleType === 'recurring';
+    if (isRecurring && editModal.scope !== 'all' && !editModal.editDate) {
+      showMsg('Pick which date this change applies to', 'error'); return;
+    }
     setEditSaving(true);
     try {
       await api(`/api/schedules-all/${editModal.id}`, { method: 'PUT', body: JSON.stringify({
+        scope: isRecurring ? editModal.scope : undefined,
+        editDate: isRecurring && editModal.scope !== 'all' ? editModal.editDate : undefined,
         clientId: editModal.clientId,
-        dayOfWeek: editModal.scheduleType === 'recurring' ? parseInt(editModal.dayOfWeek) : null,
-        date: editModal.scheduleType === 'one-time' ? editModal.date : null,
+        dayOfWeek: isRecurring ? parseInt(editModal.dayOfWeek) : null,
+        date: !isRecurring ? editModal.date : null,
         startTime: editModal.startTime, endTime: editModal.endTime, notes: editModal.notes,
         frequency: editModal.frequency || 'weekly', anchorDate: editModal.anchorDate || null
       })});
-      showMsg('Schedule updated!'); setEditModal(null); loadCaregiverSchedules(selectedCaregiverId);
+      const pretty = editModal.editDate
+        ? new Date(editModal.editDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+        : '';
+      if (!isRecurring) showMsg('Schedule updated');
+      else if (editModal.scope === 'this') showMsg(`Changed ${pretty} only`);
+      else if (editModal.scope === 'following') showMsg(`Changed from ${pretty} onward`);
+      else showMsg('Changed every occurrence, past weeks included');
+      setEditModal(null);
+      // Refresh EVERY view. This used to reload only the caregiver's list, so the Month and
+      // Week tabs kept showing the pre-edit time until you switched tabs — which looked
+      // exactly like the edit hadn't saved.
+      loadCaregiverSchedules(selectedCaregiverId);
+      loadCalendarData();
+      loadWeekView();
     } catch (e) { showMsg('Error: ' + e.message, 'error'); }
     finally { setEditSaving(false); }
   };
@@ -570,10 +604,15 @@ const SchedulingHub = ({ token }) => {
       }
       if (s.day_of_week !== null && s.day_of_week !== undefined) {
         if (s.day_of_week !== dow) return;
-        // Do NOT gate on effective_date: recurring patterns must stay visible in
-        // PAST weeks so prior schedules can be reviewed and past shifts added.
-        // Only end_date matters — hide a deleted (ended) pattern from its end date
-        // forward. end_date is a full ISO timestamp, so compare by date string.
+        // A pattern only exists from its effective_date onward. This month view used to
+        // skip that check deliberately, which meant a shift created today was painted onto
+        // every matching weekday going back through every past month — and it disagreed
+        // with the week grid, which does check. Worse, once an edit splits a pattern in two
+        // (old row ends, new row begins), an ungated view draws BOTH on every past date, so
+        // the same shift appears twice: once at the old time, once at the new one.
+        // Dates arrive as full ISO timestamps, so compare by date string.
+        const startsOn = (s.effective_date || s.anchor_date || s.created_at || '').slice(0, 10);
+        if (startsOn && dateStr < startsOn) return;
         if (s.end_date && dateStr > s.end_date.slice(0, 10)) return;
         if (s.frequency === 'biweekly' && s.anchor_date) {
           const diffWeeks = Math.floor((target - new Date(s.anchor_date)) / (7*24*60*60*1000));
@@ -589,6 +628,10 @@ const SchedulingHub = ({ token }) => {
             start_time: exc.override_start_time || s.start_time,
             end_time: exc.override_end_time || s.end_time,
             client_id: exc.override_client_id || s.client_id,
+            // A visit covered by someone else for one day must show THAT caregiver. Without
+            // this the month view kept the original name and colour, and filtering by the
+            // covering caregiver made the shift disappear entirely.
+            caregiver_id: exc.override_caregiver_id || s.caregiver_id,
             notes: exc.override_notes != null ? exc.override_notes : s.notes,
           });
           return;
@@ -1803,6 +1846,55 @@ const SchedulingHub = ({ token }) => {
                 </div>
               )}
             </div>
+            {/* A repeating shift is ONE row that every week is re-derived from, so an edit
+                has to say which weeks it means. Without this picker every edit here was
+                silently an "every occurrence" edit — the reason changing one shift changed
+                weeks that had already been worked. */}
+            {editModal.scheduleType === 'recurring' && (() => {
+              const dayName = getDayName(parseInt(editModal.dayOfWeek));
+              const opts = [
+                { key: 'this',      label: 'Just this day',                       hint: 'Only the date below changes. Every other week stays as it is.' },
+                { key: 'following', label: `This day and all future ${dayName}s`, hint: 'Use when the shift changed for good. Weeks before the date below are left alone.' },
+                { key: 'all',       label: `Every ${dayName} — past and future`,  hint: 'Also changes weeks already worked, including ones payroll has been run on.', warn: true },
+              ];
+              return (
+                <div style={{ marginBottom: '1.25rem', padding: '0.85rem', background: '#F9FAFB', borderRadius: '8px', border: '1px solid #E5E7EB' }}>
+                  <label style={{ display: 'block', marginBottom: '0.6rem', fontWeight: '700', fontSize: '0.9rem', color: '#111827' }}>Apply this change to</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {opts.map(o => {
+                      const on = editModal.scope === o.key;
+                      return (
+                        <button key={o.key} type='button'
+                          onClick={() => setEditModal(prev => ({ ...prev, scope: o.key }))}
+                          style={{
+                            textAlign: 'left', padding: '0.6rem 0.7rem', borderRadius: '6px', cursor: 'pointer',
+                            border: on ? `2px solid ${o.warn ? '#DC2626' : '#3B82F6'}` : '2px solid #E5E7EB',
+                            background: on ? (o.warn ? '#FEF2F2' : '#EFF6FF') : '#fff',
+                          }}>
+                          <div style={{ fontWeight: '600', fontSize: '0.88rem', color: on && o.warn ? '#991B1B' : '#111827' }}>
+                            {on ? '● ' : '○ '}{o.label}{o.warn ? '  ⚠️' : ''}
+                          </div>
+                          <div style={{ fontSize: '0.76rem', color: on && o.warn ? '#B91C1C' : '#6B7280', marginTop: '0.15rem', paddingLeft: '1rem' }}>{o.hint}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {editModal.scope !== 'all' && (
+                    <div style={{ marginTop: '0.7rem' }}>
+                      <label style={{ display: 'block', marginBottom: '0.3rem', fontWeight: '600', fontSize: '0.8rem', color: '#374151' }}>
+                        {editModal.scope === 'this' ? 'Which day?' : 'Changed as of'}
+                      </label>
+                      <input type='date' value={editModal.editDate || ''}
+                        onChange={e => setEditModal(prev => ({ ...prev, editDate: e.target.value }))}
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.88rem' }} />
+                      <div style={{ fontSize: '0.74rem', color: '#6B7280', marginTop: '0.25rem' }}>
+                        A past date is fine — that is how you correct a week before running payroll.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.4rem', fontWeight: '600', fontSize: '0.9rem' }}>Client</label>
               <select value={editModal.clientId} onChange={(e) => setEditModal(prev => ({ ...prev, clientId: e.target.value }))} style={{ width: '100%', padding: '0.6rem', borderRadius: '8px', border: '2px solid #E5E7EB', fontSize: '0.95rem' }}>

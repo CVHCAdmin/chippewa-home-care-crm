@@ -89,7 +89,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   // ── Drag & drop ──
   const [dragShift, setDragShift]   = useState(null); // { shift, fromDate }
   const [dropTarget, setDropTarget] = useState(null); // { shift, fromDate, toCaregiverId, toDate, toDayIndex }
-  const [dropScope, setDropScope]   = useState('all');
+  const [dropScope, setDropScope]   = useState('this');
   const [dragOverKey, setDragOverKey] = useState(null); // `${caregiverId}:${dayIndex}` for hover highlight
 
   const clientMap = Object.fromEntries(clients.map(c => [c.id, c]));
@@ -438,7 +438,9 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   function openEditShift(s, cellDate) {
     setEditShift(s);
     setEditDate(cellDate || '');
-    setEditScope('all');
+    // Default to the narrowest, safest scope. This used to open on 'all', so the quickest
+    // path through the modal rewrote every week the shift had ever run.
+    setEditScope('this');
     setEditShiftForm({
       caregiverId: s.caregiver_id || '',
       clientId:  s.client_id || '',
@@ -456,103 +458,42 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     try {
       const isRecurring = editShift.day_of_week !== null && editShift.day_of_week !== undefined;
 
-      const caregiverChanged = editShiftForm.caregiverId && editShiftForm.caregiverId !== editShift.caregiver_id;
-
-      if (isRecurring && editScope === 'this') {
-        // Create a modified exception for just this date
-        await fetch(`${API_BASE_URL}/api/schedule-exceptions`, {
-          method: 'POST',
-          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-          body: JSON.stringify({
-            scheduleId: editShift.id,
-            exceptionDate: editDate,
-            exceptionType: 'modified',
-            overrideStartTime: editShiftForm.startTime,
-            overrideEndTime: editShiftForm.endTime,
-            overrideClientId: editShiftForm.clientId,
-            overrideCaregiverId: caregiverChanged ? editShiftForm.caregiverId : null,
-            overrideNotes: editShiftForm.notes,
-          }),
-        });
-        showToast(`Modified ${new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })} only`);
-
-      } else if (isRecurring && editScope === 'following') {
-        // End current pattern the day before this date, create new pattern from this date
-        const endDate = new Date(editDate + 'T12:00:00');
-        endDate.setDate(endDate.getDate() - 1);
-        const endDateStr = endDate.toISOString().split('T')[0];
-
-        // Set end_date on old pattern
-        await fetch(`${API_BASE_URL}/api/schedules-all/${editShift.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-          body: JSON.stringify({
-            clientId: editShift.client_id,
-            startTime: editShift.start_time,
-            endTime: editShift.end_time,
-            notes: editShift.notes,
-            dayOfWeek: editShift.day_of_week,
-            frequency: editShift.frequency || 'weekly',
-            anchorDate: editShift.anchor_date || null,
-          }),
-        });
-        // Then set end_date directly
-        await fetch(`${API_BASE_URL}/api/schedules/${editShift.id}?scope=following&date=${editDate}`, {
-          method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
-        });
-
-        // Create new pattern from this date with updated values
-        await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
-          method: 'POST',
-          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-          body: JSON.stringify({
-            caregiverId: editShiftForm.caregiverId || editShift.caregiver_id,
-            clientId: editShiftForm.clientId,
-            scheduleType: 'recurring',
-            dayOfWeek: editShift.day_of_week,
-            date: null,
-            startTime: editShiftForm.startTime,
-            endTime: editShiftForm.endTime,
-            notes: editShiftForm.notes,
-            frequency: editShift.frequency || 'weekly',
-            effectiveDate: editDate,
-            anchorDate: editShift.anchor_date || null,
-          }),
-        });
-        showToast('Updated from this date forward');
-
-      } else {
-        // Update the recurring/one-time schedule itself (all occurrences)
-        const res = await fetch(`${API_BASE_URL}/api/schedules-all/${editShift.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-          body: JSON.stringify({
-            clientId:   editShiftForm.clientId,
-            startTime:  editShiftForm.startTime,
-            endTime:    editShiftForm.endTime,
-            notes:      editShiftForm.notes,
-            isTraining: editShiftForm.isTraining,
-            dayOfWeek:  editShift.day_of_week,
-            date:       editShift.date ? editShift.date.slice(0,10) : null,
-            frequency:  editShift.frequency || 'weekly',
-            anchorDate: editShift.anchor_date || null,
-          }),
-        });
-        if (!res.ok) throw new Error('Failed to save');
-
-        if (caregiverChanged) {
-          const rRes = await fetch(`${API_BASE_URL}/api/schedules/${editShift.id}/reassign`, {
-            method: 'PUT',
-            headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-            body: JSON.stringify({ newCaregiverId: editShiftForm.caregiverId, reason: 'admin_decision' }),
-          });
-          if (!rRes.ok) {
-            const errBody = await rRes.json().catch(() => ({}));
-            throw new Error(errBody.error || 'Reassignment failed');
-          }
-        }
-        showToast('Shift updated');
+      // ONE atomic call. This used to be three unchecked fetches for "this & following"
+      // (a PUT that split the pattern, a DELETE that end-dated it again, and a POST that
+      // created a third row) which could leave a ghost shift behind, and a separate
+      // /reassign call for "all occurrences" that landed on the row the PUT had just
+      // retired — so changing the caregiver silently did nothing. The server now does the
+      // whole thing in one transaction, and the response IS the live row.
+      const res = await fetch(`${API_BASE_URL}/api/schedules-all/${editShift.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          scope:      isRecurring ? editScope : undefined,
+          editDate:   isRecurring ? editDate : undefined,
+          caregiverId: editShiftForm.caregiverId || undefined,
+          clientId:   editShiftForm.clientId,
+          startTime:  editShiftForm.startTime,
+          endTime:    editShiftForm.endTime,
+          notes:      editShiftForm.notes,
+          isTraining: editShiftForm.isTraining,
+          dayOfWeek:  editShift.day_of_week,
+          date:       editShift.date ? editShift.date.slice(0, 10) : null,
+          frequency:  editShift.frequency || 'weekly',
+          anchorDate: editShift.anchor_date || null,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || 'Failed to save');
       }
+
+      const when = editDate
+        ? new Date(editDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+        : 'this shift';
+      if (!isRecurring) showToast('Shift updated');
+      else if (editScope === 'this') showToast(`Changed ${when} only`);
+      else if (editScope === 'following') showToast(`Changed from ${when} onward`);
+      else showToast('Changed every occurrence, including past weeks');
 
       setEditShift(null);
       await loadAll();
@@ -637,40 +578,39 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         showToast('Moved from this date forward');
 
       } else if (isRecurring) {
-        // scope === 'all'
-        if (dayChanged) {
-          await fetch(`${API_BASE_URL}/api/schedules-all/${shift.id}`, {
-            method:'PUT', headers: hdrs,
-            body: JSON.stringify({
-              clientId: shift.client_id,
-              startTime: shift.start_time,
-              endTime: shift.end_time,
-              notes: shift.notes,
-              dayOfWeek: toDayIndex,
-              date: null,
-              frequency: shift.frequency || 'weekly',
-              anchorDate: shift.anchor_date || null,
-            }),
-          });
+        // scope === 'all' — moves the day and/or caregiver on EVERY occurrence, past included.
+        // This used to be a scope-less PUT followed by a separate /reassign call. The PUT
+        // moved the live pattern to a new row, so /reassign then updated the row that had
+        // just been retired: the toast said "moved", the grid reloaded, and the shift was
+        // still under the OLD caregiver. One call now does both, on the same row.
+        const res = await fetch(`${API_BASE_URL}/api/schedules-all/${shift.id}`, {
+          method: 'PUT', headers: hdrs,
+          body: JSON.stringify({
+            scope: 'all',
+            caregiverId: caregiverChanged ? toCaregiverId : undefined,
+            clientId: shift.client_id,
+            startTime: shift.start_time,
+            endTime: shift.end_time,
+            notes: shift.notes,
+            dayOfWeek: toDayIndex,
+            date: null,
+            frequency: shift.frequency || 'weekly',
+            anchorDate: shift.anchor_date || null,
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || 'Could not move the shift');
         }
-        if (caregiverChanged) {
-          const rRes = await fetch(`${API_BASE_URL}/api/schedules/${shift.id}/reassign`, {
-            method:'PUT', headers: hdrs,
-            body: JSON.stringify({ newCaregiverId: toCaregiverId, reason: 'admin_decision' }),
-          });
-          if (!rRes.ok) {
-            const errBody = await rRes.json().catch(() => ({}));
-            throw new Error(errBody.error || 'Reassignment failed');
-          }
-        }
-        showToast('Recurring shift moved');
+        showToast('Moved every occurrence, including past weeks');
 
       } else {
-        // One-time shift
-        if (dayChanged) {
-          await fetch(`${API_BASE_URL}/api/schedules-all/${shift.id}`, {
-            method:'PUT', headers: hdrs,
+        // One-time shift — a single occurrence, so day and caregiver move together in one call.
+        if (dayChanged || caregiverChanged) {
+          const res = await fetch(`${API_BASE_URL}/api/schedules-all/${shift.id}`, {
+            method: 'PUT', headers: hdrs,
             body: JSON.stringify({
+              caregiverId: caregiverChanged ? toCaregiverId : undefined,
               clientId: shift.client_id,
               startTime: shift.start_time,
               endTime: shift.end_time,
@@ -681,15 +621,9 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               anchorDate: shift.anchor_date || null,
             }),
           });
-        }
-        if (caregiverChanged) {
-          const rRes = await fetch(`${API_BASE_URL}/api/schedules/${shift.id}/reassign`, {
-            method:'PUT', headers: hdrs,
-            body: JSON.stringify({ newCaregiverId: toCaregiverId, reason: 'admin_decision' }),
-          });
-          if (!rRes.ok) {
-            const errBody = await rRes.json().catch(() => ({}));
-            throw new Error(errBody.error || 'Reassignment failed');
+          if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw new Error(errBody.error || 'Could not move the shift');
           }
         }
         showToast('Shift moved');
@@ -1005,7 +939,9 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                           toDate,
                           toDayIndex: dayIndex,
                         });
-                        setDropScope('all');
+                        // Narrowest scope by default — moving ONE occurrence must not
+                        // silently rewrite every week the shift has ever run.
+                        setDropScope('this');
                         setDragShift(null);
                       }}
                       style={{

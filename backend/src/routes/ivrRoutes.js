@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
 // POST /api/ivr/voice — Twilio voice webhook (incoming call)
 // Returns TwiML to greet and gather caregiver PIN
@@ -123,26 +124,44 @@ router.post('/clock-in', async (req, res) => {
       );
     }
 
-    // Find matching schedule for allotted minutes
+    // Find the matching occurrence. Same rules as the app clock-in
+    // (timeTrackingRoutes) — one shared engine, nearest start time wins — so a phone
+    // punch and an app punch for the same visit produce the same allotted minutes and
+    // therefore the same billed units.
+    //
+    // The old query used EXTRACT(DOW FROM NOW()) and CURRENT_DATE, which are UTC on this
+    // server: after 19:00 Chicago it matched TOMORROW's weekday. It also had no date
+    // bounds, ignored cancellations, and tie-broke at random across multi-visit days.
     let allottedMinutes = null;
+    let linkedScheduleId = null;
     try {
-      const sched = await db.query(`
-        SELECT id, start_time, end_time FROM schedules
-        WHERE caregiver_id=$1 AND client_id=$2 AND is_active=true
-          AND (day_of_week=EXTRACT(DOW FROM NOW())::int OR date=CURRENT_DATE)
-        ORDER BY date DESC NULLS LAST LIMIT 1
-      `, [caregiverId, cl.id]);
-      if (sched.rows[0]?.start_time && sched.rows[0]?.end_time) {
-        const [sh, sm] = sched.rows[0].start_time.split(':').map(Number);
-        const [eh, em] = sched.rows[0].end_time.split(':').map(Number);
-        allottedMinutes = (eh * 60 + em) - (sh * 60 + sm);
+      const nowCt = await db.query(
+        `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d,
+                to_char((NOW() AT TIME ZONE 'America/Chicago')::time, 'HH24:MI:SS') AS t`
+      );
+      const { d: todayCt, t: nowTimeCt } = nowCt.rows[0];
+      const sched = await db.query(
+        `WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+         SELECT occ.schedule_id AS id, occ.minutes
+         FROM occ
+         WHERE occ.caregiver_id = $3 AND occ.client_id = $4
+         ORDER BY ABS(EXTRACT(EPOCH FROM ($5::time - occ.start_time))) ASC, occ.start_time ASC
+         LIMIT 1`,
+        [todayCt, todayCt, caregiverId, cl.id, nowTimeCt]
+      );
+      if (sched.rows[0]) {
+        linkedScheduleId = sched.rows[0].id;
+        if (sched.rows[0].minutes != null) allottedMinutes = sched.rows[0].minutes;
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) { console.error('[IVR clock-in] schedule match failed:', e.message); }
 
+    // schedule_id was never stored on IVR punches, so every phone clock-in was invisible
+    // to anything joining time_entries -> schedules (payroll's tight match, the late-arrival
+    // analytics). Store it.
     await db.query(
-      `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, allotted_minutes, notes)
-       VALUES ($1, $2, $3, NOW(), $4, 'Clocked in via IVR phone call')`,
-      [entryId, caregiverId, cl.id, allottedMinutes]
+      `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, allotted_minutes, schedule_id, notes)
+       VALUES ($1, $2, $3, NOW(), $4, $5, 'Clocked in via IVR phone call')`,
+      [entryId, caregiverId, cl.id, allottedMinutes, linkedScheduleId]
     );
 
     res.type('text/xml');

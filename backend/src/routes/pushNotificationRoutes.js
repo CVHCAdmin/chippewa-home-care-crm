@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 const { v4: uuidv4 } = require('uuid');
 let webpush;
 try { webpush = require('web-push'); } catch (e) {
@@ -250,21 +251,33 @@ router.post('/mark-read', auth, async (req, res) => {
 // Designed to be called by external cron every 15 minutes
 router.post('/shift-reminder-1hr', auth, async (req, res) => {
   try {
-    // Find shifts starting in 45-75 minutes from now
+    // Find occurrences starting in 45-75 minutes from now.
+    //
+    // This is a second, independent reminder path (external cron) alongside
+    // jobs/shiftReminders.js. It had the same defects and then some: it never checked
+    // schedule_exceptions (cancelled visits were reminded), never checked
+    // effective_date/end_date (terminated patterns were reminded forever), and compared
+    // a Chicago wall-clock start_time against NOW()::time / EXTRACT(DOW FROM NOW()),
+    // which are UTC here — so after 19:00 Chicago it was matching TOMORROW's weekday.
+    // It now expands through the same shared engine as everything else, on Chicago time.
+    const nowCt = await db.query(
+      `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d,
+              to_char((NOW() AT TIME ZONE 'America/Chicago')::time, 'HH24:MI:SS') AS t`
+    );
+    const { d: todayCt, t: nowTimeCt } = nowCt.rows[0];
+
     const result = await db.query(`
-      WITH upcoming AS (
-        SELECT s.id, s.caregiver_id, s.client_id, s.start_time, s.end_time,
-          c.first_name AS client_first, c.last_name AS client_last,
-          u.first_name AS cg_first, u.last_name AS cg_last
-        FROM schedules s
-        JOIN clients c ON s.client_id = c.id
-        JOIN users u ON s.caregiver_id = u.id
-        WHERE s.is_active = true
-          AND (
-            (s.date = CURRENT_DATE AND s.start_time BETWEEN (NOW()::time + INTERVAL '45 minutes') AND (NOW()::time + INTERVAL '75 minutes'))
-            OR (s.day_of_week = EXTRACT(DOW FROM NOW())::int AND s.date IS NULL
-                AND s.start_time BETWEEN (NOW()::time + INTERVAL '45 minutes') AND (NOW()::time + INTERVAL '75 minutes'))
-          )
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')},
+      upcoming AS (
+        SELECT occ.schedule_id AS id, occ.caregiver_id, occ.client_id,
+               occ.start_time, occ.end_time,
+               c.first_name AS client_first, c.last_name AS client_last,
+               u.first_name AS cg_first, u.last_name AS cg_last
+        FROM occ
+        JOIN clients c ON c.id = occ.client_id
+        JOIN users u   ON u.id = occ.caregiver_id
+        WHERE occ.start_time >= ($3::time + INTERVAL '45 minutes')::time
+          AND occ.start_time <= ($3::time + INTERVAL '75 minutes')::time
       )
       SELECT * FROM upcoming
       WHERE NOT EXISTS (
@@ -274,7 +287,7 @@ router.post('/shift-reminder-1hr', auth, async (req, res) => {
           AND n.created_at::date = CURRENT_DATE
           AND n.message LIKE '%' || upcoming.client_first || ' ' || upcoming.client_last || '%'
       )
-    `);
+    `, [todayCt, todayCt, nowTimeCt]);
 
     let sent = 0;
     for (const shift of result.rows) {

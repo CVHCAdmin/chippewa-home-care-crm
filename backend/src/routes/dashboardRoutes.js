@@ -4,10 +4,19 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
+
+// Today's date on the Chicago clock. Postgres runs UTC here, so CURRENT_DATE is already
+// tomorrow from 19:00 Chicago onward — which silently rolled the dashboard over to the next
+// day every evening.
+const todayChicago = async () => (await db.query(
+  `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d`
+)).rows[0].d;
 
 // GET /api/dashboard/summary
 router.get('/summary', verifyToken, requireAdmin, async (req, res) => {
   try {
+    const TODAY_CT = await todayChicago();
     const [totalClients, activeCaregivers, pendingInvoices, thisMonthRevenue, clockedInNow, todayShifts, remainingShifts] = await Promise.all([
       db.query('SELECT COUNT(*) as count FROM clients WHERE is_active = true'),
       db.query("SELECT COUNT(*) as count FROM users WHERE role = 'caregiver' AND is_active = true"),
@@ -23,15 +32,21 @@ router.get('/summary', verifyToken, requireAdmin, async (req, res) => {
                    AND payment_date <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'`),
       // Caregivers currently clocked in (open time entry today)
       db.query(`SELECT COUNT(DISTINCT caregiver_id) as count FROM time_entries WHERE end_time IS NULL AND DATE(start_time) = CURRENT_DATE`),
-      // Shifts today
-      db.query(`SELECT COUNT(*) as count FROM schedules WHERE is_active = true AND
-        (date = CURRENT_DATE OR 
-         (day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::integer AND
-          (effective_date IS NULL OR effective_date <= CURRENT_DATE)))`),
-      // Remaining shifts today (not yet clocked in)
-      db.query(`SELECT COUNT(*) as count FROM schedules s WHERE s.is_active = true AND
-        (s.date = CURRENT_DATE OR (s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::integer AND (s.effective_date IS NULL OR s.effective_date <= CURRENT_DATE)))
-        AND NOT EXISTS (SELECT 1 FROM time_entries te WHERE te.caregiver_id = s.caregiver_id AND DATE(te.start_time) = CURRENT_DATE AND te.end_time IS NULL)`),
+      // Shifts today. Counted off the shared engine so the number matches what payroll,
+      // billing and the calendar think is happening today. The old count checked neither
+      // end_date nor cancellations, so it included visits the office had cancelled and
+      // visits from patterns that had already ended.
+      db.query(`WITH ${SCHEDULE_OCCURRENCES_CTE('occ')} SELECT COUNT(*) as count FROM occ`,
+        [TODAY_CT, TODAY_CT]),
+      // Remaining shifts today (nobody clocked in yet)
+      db.query(`WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+        SELECT COUNT(*) as count FROM occ
+        WHERE NOT EXISTS (
+          SELECT 1 FROM time_entries te
+          WHERE te.caregiver_id = occ.caregiver_id
+            AND DATE(te.start_time AT TIME ZONE 'America/Chicago') = occ.occ_date
+            AND te.end_time IS NULL)`,
+        [TODAY_CT, TODAY_CT]),
     ]);
     res.json({
       totalClients: parseInt(totalClients.rows[0].count),
@@ -112,13 +127,20 @@ router.get('/caregiver-hours', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/dashboard/live-board — Real-time shift status for today
 router.get('/live-board', verifyToken, requireAdmin, async (req, res) => {
   try {
+    // Driven by the shared engine. The old query checked neither end_date nor
+    // schedule_exceptions, so the board showed CANCELLED visits sitting there as "not
+    // clocked in yet" — and the office rang caregivers about visits that weren't happening.
+    // It also compared a Chicago start_time against NOW()::time (UTC), so "late" was five
+    // hours out.
+    const TODAY_CT = await todayChicago();
     const result = await db.query(`
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT
-        s.id AS schedule_id,
-        s.caregiver_id,
-        s.client_id,
-        s.start_time AS scheduled_start,
-        s.end_time AS scheduled_end,
+        occ.schedule_id,
+        occ.caregiver_id,
+        occ.client_id,
+        occ.start_time AS scheduled_start,
+        occ.end_time AS scheduled_end,
         u.first_name AS caregiver_first,
         u.last_name AS caregiver_last,
         u.phone AS caregiver_phone,
@@ -139,8 +161,12 @@ router.get('/live-board', verifyToken, requireAdmin, async (req, res) => {
         CASE
           WHEN te.end_time IS NOT NULL THEN 'completed'
           WHEN te.start_time IS NOT NULL AND te.end_time IS NULL THEN 'clocked_in'
-          WHEN s.start_time <= NOW()::time AND (NOW()::time - s.start_time) > INTERVAL '15 minutes' AND te.id IS NULL THEN 'late'
-          WHEN s.start_time <= NOW()::time AND te.id IS NULL THEN 'starting'
+          -- Compare against the CHICAGO clock. NOW()::time is UTC on this server, so a 9am
+          -- visit read as five hours overdue the moment the board loaded.
+          WHEN occ.start_time <= (NOW() AT TIME ZONE 'America/Chicago')::time
+               AND ((NOW() AT TIME ZONE 'America/Chicago')::time - occ.start_time) > INTERVAL '15 minutes'
+               AND te.id IS NULL THEN 'late'
+          WHEN occ.start_time <= (NOW() AT TIME ZONE 'America/Chicago')::time AND te.id IS NULL THEN 'starting'
           ELSE 'upcoming'
         END AS shift_status,
         CASE
@@ -149,29 +175,28 @@ router.get('/live-board', verifyToken, requireAdmin, async (req, res) => {
           ELSE NULL
         END AS minutes_elapsed,
         (
-          SELECT jsonb_agg(jsonb_build_object('lat', gt.latitude, 'lng', gt.longitude, 'ts', gt.timestamp))
-          FROM gps_tracking gt
-          WHERE gt.time_entry_id = te.id
-          ORDER BY gt.timestamp DESC
-          LIMIT 20
+          -- Last 20 GPS points, newest first. jsonb_agg is an aggregate, so the ORDER BY /
+          -- LIMIT that selects "the last 20" has to happen in an inner subquery first —
+          -- putting them at the aggregate's own level is a GROUP BY error (42803).
+          SELECT jsonb_agg(pt) FROM (
+            SELECT jsonb_build_object('lat', gt.latitude, 'lng', gt.longitude, 'ts', gt.timestamp) AS pt
+            FROM gps_tracking gt
+            WHERE gt.time_entry_id = te.id
+            ORDER BY gt.timestamp DESC
+            LIMIT 20
+          ) recent
         ) AS gps_trail
-      FROM schedules s
-      JOIN users u ON s.caregiver_id = u.id
-      JOIN clients c ON s.client_id = c.id
+      FROM occ
+      JOIN schedules s ON s.id = occ.schedule_id
+      JOIN users u   ON u.id = occ.caregiver_id
+      JOIN clients c ON c.id = occ.client_id
       LEFT JOIN time_entries te
-        ON te.caregiver_id = s.caregiver_id
-        AND te.client_id = s.client_id
-        AND DATE(te.start_time) = CURRENT_DATE
-      WHERE s.is_active = true
-        AND u.is_active = true
-        AND (
-          s.date = CURRENT_DATE
-          OR (s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::int
-              AND s.date IS NULL
-              AND (s.effective_date IS NULL OR s.effective_date <= CURRENT_DATE))
-        )
-      ORDER BY s.start_time ASC
-    `);
+        ON te.caregiver_id = occ.caregiver_id
+        AND te.client_id = occ.client_id
+        AND DATE(te.start_time AT TIME ZONE 'America/Chicago') = occ.occ_date
+      WHERE u.is_active = true
+      ORDER BY occ.start_time ASC
+    `, [TODAY_CT, TODAY_CT]);
 
     const shifts = result.rows;
     const stats = {

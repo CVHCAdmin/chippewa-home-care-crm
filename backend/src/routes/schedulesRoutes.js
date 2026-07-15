@@ -37,6 +37,29 @@ const auditLog = async (userId, action, tableName, recordId, oldData, newData) =
 
 // GET /api/schedules/caregiver/:caregiverId - alias used by SchedulingHub
 // NOTE: Must be registered BEFORE /:caregiverId to avoid being shadowed
+// Attach each recurring pattern's per-date exceptions so the client expanding it can tell
+// that an occurrence was cancelled or rescheduled. Without this the consumer only sees the
+// pattern and has no way to know a given day is different.
+async function attachExceptions(rows) {
+  const recurringIds = rows
+    .filter(s => s.day_of_week !== null && s.day_of_week !== undefined)
+    .map(s => s.id);
+  if (recurringIds.length === 0) return rows.map(s => ({ ...s, exceptions: [] }));
+  let exceptions = [];
+  try {
+    const r = await db.query(
+      `SELECT * FROM schedule_exceptions WHERE schedule_id = ANY($1) ORDER BY exception_date`,
+      [recurringIds]
+    );
+    exceptions = r.rows;
+  } catch (e) {
+    if (!e.message.includes('does not exist')) throw e;
+  }
+  const byId = {};
+  exceptions.forEach(ex => { (byId[ex.schedule_id] ||= []).push(ex); });
+  return rows.map(s => ({ ...s, exceptions: byId[s.id] || [] }));
+}
+
 router.get('/caregiver/:caregiverId', verifyToken, async (req, res) => {
   try {
     const result = await db.query(`
@@ -49,7 +72,7 @@ router.get('/caregiver/:caregiverId', verifyToken, async (req, res) => {
              OR s.end_date >= (now() AT TIME ZONE 'America/Chicago')::date)
       ORDER BY s.day_of_week, s.date, s.start_time
     `, [req.params.caregiverId]);
-    res.json(result.rows);
+    res.json(await attachExceptions(result.rows));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -73,7 +96,13 @@ router.get('/:caregiverId', verifyToken, async (req, res) => {
              OR s.end_date >= (now() AT TIME ZONE 'America/Chicago')::date)
       ORDER BY s.day_of_week, s.date, s.start_time
     `, [req.params.caregiverId]);
-    res.json(result.rows);
+    // This feeds the caregiver's phone, which expands the pattern client-side. It used to
+    // return the pattern with NO exceptions attached, so the app could not know a visit had
+    // been cancelled or rescheduled: a cancelled shift still showed on "My Schedule", a
+    // rescheduled one showed its OLD time, and — worst — the geofence auto-clock-in
+    // (CaregiverDashboard "hasScheduledShiftNow") would clock somebody in to a visit the
+    // office had cancelled, creating a real time entry that flowed into pay and billing.
+    res.json(await attachExceptions(result.rows));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

@@ -4,6 +4,7 @@
 // shift_reminder_sent_at column on schedules to prevent duplicates.
 
 const db = require('../db');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 let timer = null;
@@ -26,24 +27,38 @@ async function ensureColumn() {
 
 async function scanOnce() {
   try {
-    const now = new Date();
-    const dow = now.getDay();
-    const todayStr = now.toISOString().slice(0, 10);
-    // Window: shifts starting between 55 and 65 minutes from now, today.
+    // Two bugs lived in the old version of this query:
+    //
+    //  1. It never looked at schedule_exceptions, so a CANCELLED visit still pushed
+    //     "Shift in 1 hour" to the caregiver, and a RESCHEDULED visit was announced at
+    //     its old time and never at its new one. It now expands through the shared
+    //     engine, which drops cancellations and applies per-day overrides.
+    //
+    //  2. It compared `start_time` — a Chicago wall-clock time — against CURRENT_TIME,
+    //     which is UTC on this server. A 09:00 shift was therefore "one hour away" when
+    //     the UTC clock read 08:00, i.e. 03:00 in Chicago. Reminders fired five hours
+    //     early, in the middle of the night, where quiet-hours almost certainly swallowed
+    //     them — so caregivers got no reminder at all. Both the date and the clock now
+    //     come from the database in America/Chicago.
+    const nowCt = await db.query(
+      `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d,
+              to_char((NOW() AT TIME ZONE 'America/Chicago')::time, 'HH24:MI:SS') AS t`
+    );
+    const todayStr = nowCt.rows[0].d;
+    const nowTime = nowCt.rows[0].t;
+
+    // Window: occurrences starting between 55 and 65 minutes from now, today.
     // The cron runs every 5 min so any given shift gets exactly one chance.
     const upcoming = await db.query(`
-      SELECT s.id, s.caregiver_id, s.client_id, s.start_time, s.end_time, s.date,
-        c.first_name AS client_first, c.last_name AS client_last
-      FROM schedules s
-      JOIN clients c ON s.client_id = c.id
-      WHERE s.is_active = true
-        AND (
-          (s.date IS NOT NULL AND s.date = CURRENT_DATE)
-          OR (s.day_of_week = $1 AND (s.effective_date IS NULL OR s.effective_date <= CURRENT_DATE)
-              AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE))
-        )
-        AND s.start_time::time BETWEEN (CURRENT_TIME + INTERVAL '55 minutes')::time AND (CURRENT_TIME + INTERVAL '65 minutes')::time
-    `, [dow]);
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT occ.schedule_id AS id, occ.caregiver_id, occ.client_id,
+             occ.start_time, occ.end_time, occ.occ_date AS date,
+             c.first_name AS client_first, c.last_name AS client_last
+      FROM occ
+      JOIN clients c ON c.id = occ.client_id
+      WHERE occ.start_time >= ($3::time + INTERVAL '55 minutes')::time
+        AND occ.start_time <= ($3::time + INTERVAL '65 minutes')::time
+    `, [todayStr, todayStr, nowTime]);
 
     if (upcoming.rows.length === 0) return;
 

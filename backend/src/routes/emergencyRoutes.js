@@ -73,6 +73,31 @@ router.post('/miss-report', auth, async (req, res) => {
       [JSON.stringify({ scheduleId, scheduleInfo: scheduleInfo ? { clientName: `${scheduleInfo.client_first_name} ${scheduleInfo.client_last_name}`, startTime: scheduleInfo.start_time, endTime: scheduleInfo.end_time } : null, alternativeContact }), reportId]
     );
 
+    // ── CANCEL THE OCCURRENCE ────────────────────────────────────────────────
+    // Reporting a miss never actually cancelled the visit — the occurrence stayed live in
+    // the schedule, so the system went on treating it as happening: it pushed the caregiver
+    // a "shift in 1 hour" reminder for a shift they'd just called out of, raised a no-show
+    // alert against them (texting the client and family "your caregiver is running late"),
+    // counted the visit in today's totals, and would still have paid and billed it. And when
+    // coverage was assigned, a SECOND schedule row was created for the replacement — so the
+    // same visit existed twice.
+    //
+    // Writing the cancellation makes the occurrence stop existing for every one of those.
+    if (scheduleId && date) {
+      try {
+        await db.query(
+          `INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_notes, created_by)
+           VALUES ($1, $2, 'cancelled', $3, $4)
+           ON CONFLICT (schedule_id, exception_date) DO UPDATE SET
+             exception_type = 'cancelled',
+             override_notes = EXCLUDED.override_notes`,
+          [scheduleId, date, `Called out: ${reason || 'no reason given'}`, caregiverId]
+        );
+      } catch (e) {
+        console.error('[miss-report] could not cancel the occurrence:', e.message);
+      }
+    }
+
     // ── AUTO-CREATE OPEN SHIFT ────────────────────────────────────────────────
     let openShiftId = null;
     let notifiedCount = 0;

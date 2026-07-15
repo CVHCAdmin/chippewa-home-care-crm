@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 const auth = require('../middleware/auth');
 
 // Lazy-load to avoid circular requires; sendPushToUser is exported from
@@ -236,16 +237,24 @@ router.post('/:id/claim', auth, async (req, res) => {
       return res.status(400).json({ error: 'Shift is no longer available' });
     }
 
-    // Check caregiver availability — must also filter is_active = true so
-    // soft-deleted schedules don't falsely block a legitimate claim.
+    // Does the caregiver already have a visit at this time?
+    //
+    // This used to read `FROM schedules WHERE date = $2`, which only ever matches ONE-TIME
+    // rows — a recurring shift has a NULL date. So the caregiver's regular weekly visits
+    // did not block a claim at all, and they could be double-booked onto an open shift they
+    // were already working. Expanding through the shared engine checks the occurrences that
+    // actually fall on that date, recurring ones included, and skips cancelled ones (which
+    // must NOT block a legitimate claim).
+    const shiftDate = shift.rows[0].shift_date;
     const conflicts = await db.query(`
-      SELECT id FROM schedules
-      WHERE caregiver_id = $1
-      AND date = $2
-      AND ((start_time, end_time) OVERLAPS ($3::time, $4::time))
-      AND is_active = true
-      AND COALESCE(status, '') != 'cancelled'
-    `, [caregiverId, shift.rows[0].shift_date, shift.rows[0].start_time, shift.rows[0].end_time]);
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT occ.schedule_id
+      FROM occ
+      JOIN schedules s ON s.id = occ.schedule_id
+      WHERE occ.caregiver_id = $3
+        AND (occ.start_time, occ.end_time) OVERLAPS ($4::time, $5::time)
+        AND COALESCE(s.status, '') != 'cancelled'
+    `, [shiftDate, shiftDate, caregiverId, shift.rows[0].start_time, shift.rows[0].end_time]);
 
     if (conflicts.rows.length > 0) {
       return res.status(400).json({ error: 'You have a conflicting shift at this time' });

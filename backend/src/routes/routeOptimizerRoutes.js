@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 const { v4: uuidv4 } = require('uuid');
 const { shiftHours } = require('../helpers/shiftHours');
 
@@ -716,23 +717,28 @@ router.get('/hours-summary', verifyToken, async (req, res) => {
 router.get('/daily/:date', verifyToken, async (req, res) => {
   try {
     const { date } = req.params;
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
 
+    // Only route to visits that ACTUALLY happen on this date. The old query matched any
+    // recurring shift on the weekday with no end_date/effective_date/exception/bi-weekly
+    // handling, so it sent caregivers to cancelled visits and to clients on terminated
+    // patterns. The engine resolves those, plus the override caregiver/client/time for a
+    // covered or rescheduled day — so we route the person who's actually going.
     const schedulesResult = await db.query(`
-      SELECT s.*, 
-             u.first_name as cg_first, u.last_name as cg_last, 
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT occ.schedule_id AS id, occ.caregiver_id, occ.client_id,
+             occ.start_time, occ.end_time,
+             u.first_name as cg_first, u.last_name as cg_last,
              u.latitude as cg_lat, u.longitude as cg_lng,
              u.address as cg_address, u.city as cg_city, u.state as cg_state, u.zip as cg_zip,
              c.first_name as cl_first, c.last_name as cl_last,
              c.latitude as cl_lat, c.longitude as cl_lng,
              c.address as cl_address, c.city as cl_city, c.state as cl_state, c.zip as cl_zip,
              c.weekly_authorized_units
-      FROM schedules s
-      JOIN users u ON s.caregiver_id = u.id
-      JOIN clients c ON s.client_id = c.id
-      WHERE s.is_active = true AND (s.date = $1 OR s.day_of_week = $2)
-      ORDER BY u.first_name, s.start_time
-    `, [date, dayOfWeek]);
+      FROM occ
+      JOIN users u   ON u.id = occ.caregiver_id
+      JOIN clients c ON c.id = occ.client_id
+      ORDER BY u.first_name, occ.start_time
+    `, [date, date]);
 
     // Group by caregiver
     const caregiverMap = {};
@@ -1016,18 +1022,21 @@ router.get('/config-status', verifyToken, requireAdmin, async (req, res) => {
 router.get('/load-schedule/:caregiverId/:date', verifyToken, async (req, res) => {
   try {
     const { caregiverId, date } = req.params;
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
 
+    // One caregiver's actual stops for the date, via the engine (skips cancelled/ended,
+    // handles bi-weekly, resolves a covered day to whoever is actually going). Filter on the
+    // engine's resolved caregiver_id so a day this caregiver is COVERING for someone else
+    // shows up, and a day their own visit was handed off does not.
     const result = await db.query(`
-      SELECT s.id, s.client_id, s.start_time, s.end_time,
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT occ.schedule_id AS id, occ.client_id, occ.start_time, occ.end_time,
              c.first_name, c.last_name, c.latitude, c.longitude,
              c.address, c.city, c.state, c.zip, c.weekly_authorized_units
-      FROM schedules s
-      JOIN clients c ON s.client_id = c.id
-      WHERE s.caregiver_id = $1 AND s.is_active = true 
-        AND (s.date = $2 OR s.day_of_week = $3)
-      ORDER BY s.start_time
-    `, [caregiverId, date, dayOfWeek]);
+      FROM occ
+      JOIN clients c ON c.id = occ.client_id
+      WHERE occ.caregiver_id = $3
+      ORDER BY occ.start_time
+    `, [date, date, caregiverId]);
 
     const stops = result.rows.map(r => {
       const serviceMinutes = shiftHours(r.start_time, r.end_time) * 60;

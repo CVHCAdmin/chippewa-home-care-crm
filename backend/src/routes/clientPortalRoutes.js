@@ -5,6 +5,7 @@
 const express = require('express');
 const router  = express.Router();
 const db      = require('../db');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 const auth    = require('../middleware/auth');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
@@ -302,96 +303,62 @@ router.get('/portal/visits', clientAuth, async (req, res) => {
         AND sv.status != 'cancelled'
     `, [req.clientId]);
 
-    // 2. Active schedules from the main scheduler
-    const schResult = await db.query(`
-      SELECT
-        s.id, s.caregiver_id, s.schedule_type, s.day_of_week, s.date,
-        s.start_time::text, s.end_time::text, s.notes,
-        u.first_name as caregiver_first_name,
-        u.last_name  as caregiver_last_name,
-        u.phone      as caregiver_phone
-      FROM schedules s
-      JOIN users u ON s.caregiver_id = u.id
-      WHERE s.client_id = $1
-        AND s.is_active = true
+    // 2. Expand the client's schedule into concrete visits (4 weeks back / 4 weeks out).
+    //
+    // This was a hand-rolled loop with three bugs the family could see:
+    //  - it collected EVERY exception key without reading `exception_type`, then skipped
+    //    that date — so a RESCHEDULED ('modified') visit DISAPPEARED from the portal
+    //    instead of moving to its new time. Families rang the office to ask why their
+    //    visit had been cancelled when it hadn't.
+    //  - it never checked effective_date/end_date, so a terminated pattern kept showing
+    //    four weeks of phantom future visits.
+    //  - it expanded bi-weekly patterns every week.
+    //
+    // The shared engine resolves all three, and resolves the caregiver through
+    // override_caregiver_id so a covered visit shows who is ACTUALLY coming.
+    const win = await db.query(
+      `SELECT to_char(((NOW() AT TIME ZONE 'America/Chicago')::date - 28), 'YYYY-MM-DD') AS from_d,
+              to_char(((NOW() AT TIME ZONE 'America/Chicago')::date + 28), 'YYYY-MM-DD') AS to_d,
+              to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD')        AS today`
+    );
+    const { from_d, to_d, today: todayStr } = win.rows[0];
+
+    const occResult = await db.query(`
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT occ.schedule_id, occ.caregiver_id,
+             to_char(occ.occ_date, 'YYYY-MM-DD') AS scheduled_date,
+             occ.start_time::text AS start_time,
+             occ.end_time::text   AS end_time,
+             s.notes,
+             u.first_name AS caregiver_first_name,
+             u.last_name  AS caregiver_last_name,
+             u.phone      AS caregiver_phone
+      FROM occ
+      JOIN schedules s ON s.id = occ.schedule_id
+      JOIN users u     ON u.id = occ.caregiver_id
+      WHERE occ.client_id = $3
         AND (s.status IS NULL OR s.status = 'active')
-    `, [req.clientId]);
+        AND ( ($4::boolean IS TRUE  AND occ.occ_date <  $5::date)
+           OR ($4::boolean IS FALSE AND occ.occ_date >= $5::date) )
+      ORDER BY occ.occ_date, occ.start_time
+    `, [from_d, to_d, req.clientId, !!past, todayStr]);
 
-    // 3. Load schedule exceptions (cancelled/modified occurrences) to skip them
-    const scheduleIds = schResult.rows.map(s => s.id);
-    let exceptionKeys = new Set();
-    if (scheduleIds.length > 0) {
-      const exResult = await db.query(`
-        SELECT schedule_id, exception_date::text
-        FROM schedule_exceptions
-        WHERE schedule_id = ANY($1)
-      `, [scheduleIds]);
-      exResult.rows.forEach(e => exceptionKeys.add(`${e.schedule_id}|${e.exception_date}`));
-    }
-
-    // Expand recurring schedules into concrete dates (next 4 weeks / past 4 weeks)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const weeksOut = 4;
-    const expanded = [];
-
-    for (const sch of schResult.rows) {
-      if (sch.schedule_type === 'recurring' && sch.day_of_week != null) {
-        // Generate dates for the next (or past) 4 weeks matching this day_of_week
-        for (let w = 0; w < weeksOut; w++) {
-          const d = new Date(today);
-          // Find the next occurrence of day_of_week from today + w weeks
-          const diff = (sch.day_of_week - d.getDay() + 7) % 7;
-          d.setDate(d.getDate() + diff + (w * 7));
-          const dateStr = d.toISOString().split('T')[0];
-
-          // Skip if there's an exception for this date
-          if (exceptionKeys.has(`${sch.id}|${dateStr}`)) continue;
-
-          const isFuture = d >= today;
-          if ((past && !isFuture) || (!past && isFuture)) {
-            expanded.push({
-              id: `${sch.id}-${dateStr}`,
-              scheduled_date: dateStr,
-              start_time: sch.start_time,
-              end_time: sch.end_time,
-              status: 'scheduled',
-              notes: sch.notes,
-              client_notes: null,
-              cancelled_reason: null,
-              caregiver_id: sch.caregiver_id,
-              schedule_id: sch.id,
-              caregiver_first_name: sch.caregiver_first_name,
-              caregiver_last_name: sch.caregiver_last_name,
-              caregiver_phone: sch.caregiver_phone,
-              source: 'schedule',
-            });
-          }
-        }
-      } else if (sch.date) {
-        // One-off schedule entry
-        const schDate = new Date(sch.date + 'T00:00:00');
-        const isFuture = schDate >= today;
-        if ((past && !isFuture) || (!past && isFuture)) {
-          expanded.push({
-            id: sch.id,
-            scheduled_date: sch.date,
-            start_time: sch.start_time,
-            end_time: sch.end_time,
-            status: 'scheduled',
-            notes: sch.notes,
-            client_notes: null,
-            cancelled_reason: null,
-            caregiver_id: sch.caregiver_id,
-            schedule_id: sch.id,
-            caregiver_first_name: sch.caregiver_first_name,
-            caregiver_last_name: sch.caregiver_last_name,
-            caregiver_phone: sch.caregiver_phone,
-            source: 'schedule',
-          });
-        }
-      }
-    }
+    const expanded = occResult.rows.map(r => ({
+      id: `${r.schedule_id}-${r.scheduled_date}`,
+      scheduled_date: r.scheduled_date,
+      start_time: r.start_time,
+      end_time: r.end_time,
+      status: 'scheduled',
+      notes: r.notes,
+      client_notes: null,
+      cancelled_reason: null,
+      caregiver_id: r.caregiver_id,
+      schedule_id: r.schedule_id,
+      caregiver_first_name: r.caregiver_first_name,
+      caregiver_last_name: r.caregiver_last_name,
+      caregiver_phone: r.caregiver_phone,
+      source: 'schedule',
+    }));
 
     // Merge, deduplicate by date+time+caregiver, sort, paginate
     const all = [...svResult.rows, ...expanded];

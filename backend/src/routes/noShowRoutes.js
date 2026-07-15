@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 const auth = require('../middleware/auth');
 
 let twilioClient = null;
@@ -93,47 +94,60 @@ router.post('/run-check', auth, async (req, res) => {
     const grace = config.grace_minutes || 15;
 
     // Find schedules that started more than grace_minutes ago today with no time_tracking entry
+    // This check texts the caregiver, the admin, the CLIENT and every FAMILY MEMBER
+    // ("your caregiver is running late"). It had two bugs that between them inverted it:
+    //
+    //  1. It never looked at schedule_exceptions or end_date — so a CANCELLED visit, or
+    //     one from a terminated pattern, still raised an alert and sent those texts.
+    //
+    //  2. It compared `CURRENT_TIME` (UTC on this server) against `start_time` (a Chicago
+    //     wall clock). With Chicago at UTC-5, the "started more than grace ago, less than
+    //     4 hours ago" window actually selected shifts starting 1 to 4.75 hours in the
+    //     FUTURE. It alerted on visits that had not begun and never caught a real no-show.
+    //
+    // Now: expand through the shared engine (no cancelled/expired occurrences) and compare
+    // against the Chicago clock, so "late" means late.
+    const nowCt = await db.query(
+      `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d,
+              to_char((NOW() AT TIME ZONE 'America/Chicago')::time, 'HH24:MI:SS') AS t`
+    );
+    const { d: todayCt, t: nowTimeCt } = nowCt.rows[0];
+
     const overdue = await db.query(`
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT
-        s.id AS schedule_id,
-        s.caregiver_id,
-        s.client_id,
-        CURRENT_DATE AS shift_date,
-        s.start_time AS expected_start,
+        occ.schedule_id,
+        occ.caregiver_id,
+        occ.client_id,
+        occ.occ_date AS shift_date,
+        occ.start_time AS expected_start,
         u.first_name || ' ' || u.last_name AS caregiver_name,
         u.phone AS caregiver_phone,
         c.first_name || ' ' || c.last_name AS client_name
-      FROM schedules s
-      JOIN users u ON s.caregiver_id = u.id
-      JOIN clients c ON s.client_id = c.id
-      WHERE s.is_active = TRUE
-        AND (
-          -- recurring: day_of_week matches today
-          (s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::int AND s.schedule_type = 'recurring')
-          OR
-          -- one-time: date is today
-          (s.schedule_type = 'one-time' AND s.date = CURRENT_DATE)
-        )
-        -- started more than grace_minutes ago
-        AND (CURRENT_TIME - s.start_time) > ($1 * INTERVAL '1 minute')
-        AND (CURRENT_TIME - s.start_time) < INTERVAL '4 hours'
+      FROM occ
+      JOIN users u   ON u.id = occ.caregiver_id
+      JOIN clients c ON c.id = occ.client_id
+      WHERE
+        -- started more than grace_minutes ago, on the Chicago clock
+        ($4::time - occ.start_time) > ($3 * INTERVAL '1 minute')
+        AND ($4::time - occ.start_time) < INTERVAL '4 hours'
         -- no clock-in today
         AND NOT EXISTS (
           SELECT 1 FROM time_entries tt
-          WHERE tt.caregiver_id = s.caregiver_id
-            AND tt.client_id = s.client_id
-            AND DATE(tt.start_time) = CURRENT_DATE
-            AND ABS(EXTRACT(EPOCH FROM (tt.start_time::time - s.start_time)) / 60) < 120
+          WHERE tt.caregiver_id = occ.caregiver_id
+            AND tt.client_id = occ.client_id
+            AND DATE(tt.start_time AT TIME ZONE 'America/Chicago') = occ.occ_date
+            AND ABS(EXTRACT(EPOCH FROM ((tt.start_time AT TIME ZONE 'America/Chicago')::time - occ.start_time)) / 60) < 120
         )
         -- not already alerted today
         AND NOT EXISTS (
           SELECT 1 FROM noshow_alerts na
-          WHERE na.caregiver_id = s.caregiver_id
-            AND na.client_id = s.client_id
-            AND na.shift_date = CURRENT_DATE
+          WHERE na.caregiver_id = occ.caregiver_id
+            AND na.client_id = occ.client_id
+            AND na.shift_date = occ.occ_date
             AND na.status = 'open'
         )
-    `, [grace]);
+    `, [todayCt, todayCt, grace, nowTimeCt]);
 
     let alertsCreated = 0;
     for (const row of overdue.rows) {

@@ -8,6 +8,7 @@ const db = require('../db');
 const auth = require('../middleware/auth');
 const { requireAdmin } = require('../middleware/shared');
 const { sendInvoiceEmail, sendInvoiceReminder, isConfigured: emailConfigured } = require('../services/emailService');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -26,7 +27,6 @@ const reformatTimesIn = (text) => {
 };
 
 // ── Helpers for schedule expansion ─────────────────────────────────────────
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const toDateOnly = (d) => {
   const x = new Date(d);
@@ -36,24 +36,9 @@ const toDateOnly = (d) => {
 
 const ymd = (d) => toDateOnly(d).toISOString().slice(0, 10);
 
-// Returns true if a recurring schedule should produce an occurrence on `target`
-function isRecurringActiveOn(schedule, target) {
-  // Hard lower bound: never expand a recurring shift to a date BEFORE it was
-  // entered. effective_date is the source of truth; created_at is the fallback
-  // for any legacy row that slipped through without one. No effective_date
-  // AND no created_at → refuse to expand at all.
-  const lowerBound = schedule.effective_date || schedule.created_at;
-  if (!lowerBound) return false;
-  if (toDateOnly(target) < toDateOnly(lowerBound)) return false;
-  if (schedule.end_date) {
-    if (toDateOnly(target) > toDateOnly(schedule.end_date)) return false;
-  }
-  if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
-    const diffDays = Math.round((toDateOnly(target) - toDateOnly(schedule.anchor_date)) / DAY_MS);
-    if (Math.floor(diffDays / 7) % 2 !== 0) return false;
-  }
-  return true;
-}
+// (The old isRecurringActiveOn lived here. Billing now expands schedules through the one
+// shared engine in helpers/scheduleOccurrences.js, so this local copy — which disagreed
+// with payroll's about bi-weekly and about which overrides to honour — is gone.)
 
 // "HH:MM[:SS]" + "YYYY-MM-DD" → JS Date
 function combineDateAndTime(dateOnly, hms) {
@@ -167,87 +152,47 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     ORDER BY te.start_time
   `, [clientId, billingPeriodStart, billingPeriodEnd]);
 
-  // ── Pull schedules that could produce occurrences in the period ──────────
-  // is_training shifts are excluded — those are shadow shifts for training a
-  // new caregiver and don't bill the client (the primary caregiver bills).
-  const schedulesResult = await db.query(`
-    SELECT s.*,
-      u.first_name as caregiver_first_name,
-      u.last_name  as caregiver_last_name
-    FROM schedules s
-    JOIN users u ON s.caregiver_id = u.id
-    WHERE s.client_id = $1
-      AND (s.is_active = true OR s.is_active IS NULL)
-      ${trainingScheduleFilter}
-      AND (
-        (s.date IS NOT NULL AND s.date BETWEEN $2 AND $3)
-        OR (s.day_of_week IS NOT NULL)
-      )
-  `, [clientId, billingPeriodStart, billingPeriodEnd]);
-
-  // ── Pull exceptions for those schedules in range ─────────────────────────
-  let exceptionsByScheduleDate = new Map(); // key: `${schedule_id}|${YYYY-MM-DD}`
-  if (schedulesResult.rows.length > 0) {
-    const scheduleIds = schedulesResult.rows.map(s => s.id);
-    const excResult = await db.query(`
-      SELECT * FROM schedule_exceptions
-      WHERE schedule_id = ANY($1::uuid[])
-        AND exception_date BETWEEN $2 AND $3
-    `, [scheduleIds, billingPeriodStart, billingPeriodEnd]);
-    for (const ex of excResult.rows) {
-      exceptionsByScheduleDate.set(`${ex.schedule_id}|${ymd(ex.exception_date)}`, ex);
-    }
-  }
-
   // ── Expand schedules → expected visits per date ──────────────────────────
-  // Each visit: { date, caregiver_id, caregiver_first/last, start_time, end_time, schedule_id }
-  const expectedVisits = [];
-  const periodStart = toDateOnly(billingPeriodStart);
-  const periodEnd   = toDateOnly(billingPeriodEnd);
+  //
+  // Billing used to expand recurring schedules with its own hand-rolled JS loop, which
+  // disagreed with payroll's SQL about the same shift: payroll expanded bi-weekly shifts
+  // every week (paying twice what was worked) while billing correctly charged every other
+  // week, and each honoured a different subset of the per-day overrides. That divergence —
+  // one shift, several different answers depending on who was asking — is the reason the
+  // numbers never reconciled.
+  //
+  // It now reads the one shared engine, like payroll, reports, reminders and clock-in.
+  //
+  // Note `occ.client_id` is RESOLVED through override_client_id, so filtering on it does
+  // the right thing in BOTH directions: a visit moved off this client for one day drops off
+  // their invoice, and a visit moved ONTO them appears on it. The old loop could do neither.
+  // is_training shifts are excluded — shadow shifts for training a new caregiver don't bill.
+  const occResult = await db.query(`
+    WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+    SELECT occ.schedule_id, occ.occ_date, occ.caregiver_id,
+           occ.start_time::text AS start_time,
+           occ.end_time::text   AS end_time,
+           s.notes,
+           u.first_name AS caregiver_first_name,
+           u.last_name  AS caregiver_last_name
+    FROM occ
+    JOIN schedules s ON s.id = occ.schedule_id
+    JOIN users u     ON u.id = occ.caregiver_id
+    WHERE occ.client_id = $3
+      ${trainingScheduleFilter}
+    ORDER BY occ.occ_date, occ.start_time
+  `, [billingPeriodStart, billingPeriodEnd, clientId]);
 
-  for (const sched of schedulesResult.rows) {
-    // One-time schedule
-    if (sched.date) {
-      const occDate = toDateOnly(sched.date);
-      if (occDate < periodStart || occDate > periodEnd) continue;
-      const exc = exceptionsByScheduleDate.get(`${sched.id}|${ymd(occDate)}`);
-      if (exc && exc.exception_type === 'cancelled') continue;
-      const startHms = (exc && exc.override_start_time) ? exc.override_start_time : sched.start_time;
-      const endHms   = (exc && exc.override_end_time)   ? exc.override_end_time   : sched.end_time;
-      expectedVisits.push({
-        date: occDate,
-        caregiver_id: (exc && exc.override_caregiver_id) ? exc.override_caregiver_id : sched.caregiver_id,
-        caregiver_first_name: sched.caregiver_first_name,
-        caregiver_last_name: sched.caregiver_last_name,
-        start_time: startHms,
-        end_time: endHms,
-        schedule_id: sched.id,
-        notes: sched.notes,
-      });
-      continue;
-    }
-
-    // Recurring schedule → expand across the period
-    if (sched.day_of_week === null || sched.day_of_week === undefined) continue;
-    for (let d = new Date(periodStart); d <= periodEnd; d = new Date(d.getTime() + DAY_MS)) {
-      if (d.getDay() !== sched.day_of_week) continue;
-      if (!isRecurringActiveOn(sched, d)) continue;
-      const exc = exceptionsByScheduleDate.get(`${sched.id}|${ymd(d)}`);
-      if (exc && exc.exception_type === 'cancelled') continue;
-      const startHms = (exc && exc.override_start_time) ? exc.override_start_time : sched.start_time;
-      const endHms   = (exc && exc.override_end_time)   ? exc.override_end_time   : sched.end_time;
-      expectedVisits.push({
-        date: new Date(d),
-        caregiver_id: (exc && exc.override_caregiver_id) ? exc.override_caregiver_id : sched.caregiver_id,
-        caregiver_first_name: sched.caregiver_first_name,
-        caregiver_last_name: sched.caregiver_last_name,
-        start_time: startHms,
-        end_time: endHms,
-        schedule_id: sched.id,
-        notes: sched.notes,
-      });
-    }
-  }
+  const expectedVisits = occResult.rows.map(r => ({
+    date: toDateOnly(r.occ_date),
+    caregiver_id: r.caregiver_id,
+    caregiver_first_name: r.caregiver_first_name,
+    caregiver_last_name: r.caregiver_last_name,
+    start_time: r.start_time,
+    end_time: r.end_time,
+    schedule_id: r.schedule_id,
+    notes: r.notes,
+  }));
 
   // ── Match time entries to expected visits (by caregiver + date) ─────────
   const unmatchedEntries = [...entriesResult.rows];

@@ -311,57 +311,211 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
   }
 });
 
+// Editing a RECURRING shift used to rewrite history: the pattern is a single row and
+// every past occurrence is re-derived from it, so changing the time silently changed
+// every week already worked. That is the bug behind "she changed one shift and it
+// changed multiple weeks."
+//
+// An edit must therefore say WHICH occurrences it means. Three scopes:
+//
+//   scope=this      — override that ONE date via a 'modified' schedule_exceptions row.
+//     The pattern is untouched, so next week is unaffected. This is what the back office
+//     does at payday: the visit really did run at a different time that one day, and the
+//     schedule needs to say so before payroll reconciles against it. Requires editDate.
+//     A PAST editDate is explicitly allowed — correcting the past IS the workflow.
+//
+//   scope=following — the shift changed permanently as of editDate. End the old pattern
+//     the day before and start a new one carrying the edits. Weeks BEFORE editDate keep
+//     generating from the old row, so history before the change is preserved. editDate may
+//     be in the past ("as of two Mondays ago it moved to 10am") — that is a legitimate
+//     effective-dated correction, not a history rewrite.
+//
+//   scope=all       — rewrite the pattern in place, changing every occurrence ever. Real
+//     history rewriting. Allowed, but only when explicitly asked for.
+//
+// There is NO default. A recurring edit without a scope is rejected, because every silent
+// default here is wrong for somebody: defaulting to 'all' is the original bug, and
+// defaulting to 'following' quietly breaks callers that expect an in-place update. Fail
+// loudly instead of corrupting the schedule.
+//
+// One-time shifts are a single occurrence, so they are always edited in place.
 app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
+  const { scheduleId } = req.params;
+  const { clientId, caregiverId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, endDate, isTraining } = req.body;
+  const scope = String(req.body.scope || req.query.scope || '').toLowerCase();
+  const editDate = req.body.editDate || req.query.editDate || null;
+
+  const normalize = t => String(t).split(':').map(n => n.padStart(2, '0')).join(':');
+  if (startTime && endTime && normalize(startTime) === normalize(endTime)) return res.status(400).json({ error: 'Start and end time cannot be the same' });
+  if (scope && !['this', 'following', 'all'].includes(scope)) return res.status(400).json({ error: `Invalid scope '${scope}'. Use this | following | all.` });
+
+  const client = await db.pool.connect();
   try {
-    const { scheduleId } = req.params;
-    const { clientId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, endDate, isTraining } = req.body;
-    const normalize = t => String(t).split(':').map(n => n.padStart(2, '0')).join(':');
-    if (startTime && endTime && normalize(startTime) === normalize(endTime)) return res.status(400).json({ error: 'Start and end time cannot be the same' });
-
-    // Check optional columns exist
-    const colCheck = await db.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'schedules' AND column_name IN ('end_date','is_training')`
+    const cur = await client.query(
+      `SELECT *, to_char(effective_date,'YYYY-MM-DD') AS eff_str FROM schedules WHERE id=$1 AND is_active=true`,
+      [scheduleId]
     );
-    const cols = new Set(colCheck.rows.map(r => r.column_name));
-    const hasEndDate = cols.has('end_date');
-    const hasTraining = cols.has('is_training');
+    if (cur.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
+    const before = cur.rows[0];
+    const isRecurring = before.day_of_week !== null && before.day_of_week !== undefined;
+    const today = (await client.query(`SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date,'YYYY-MM-DD') AS d`)).rows[0].d;
 
-    // Build column list dynamically — only update is_training if the client sent it
-    const setClauses = [
-      'client_id=COALESCE($1,client_id)',
-      'day_of_week=$2',
-      'date=$3',
-      'start_time=COALESCE($4,start_time)',
-      'end_time=COALESCE($5,end_time)',
-      'notes=$6',
-      'frequency=COALESCE($7,frequency)',
-      'effective_date=COALESCE($8,effective_date)',
-      'anchor_date=COALESCE($9,anchor_date)',
-    ];
-    const params = [
-      clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
-      notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId,
-    ];
-    if (hasEndDate) {
-      params.push(endDate || null);
-      setClauses.push(`end_date=$${params.length}`);
-    }
-    if (hasTraining && isTraining !== undefined) {
-      params.push(!!isTraining);
-      setClauses.push(`is_training=$${params.length}`);
-    }
-    setClauses.push('updated_at=NOW()');
+    // In-place edit of this exact row (one-time shifts, and explicit scope=all).
+    const editInPlace = async () => {
+      const colCheck = await client.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = 'schedules' AND column_name IN ('end_date','is_training')`
+      );
+      const cols = new Set(colCheck.rows.map(r => r.column_name));
+      const setClauses = [
+        'client_id=COALESCE($1,client_id)',
+        'day_of_week=$2',
+        'date=$3',
+        'start_time=COALESCE($4,start_time)',
+        'end_time=COALESCE($5,end_time)',
+        'notes=$6',
+        'frequency=COALESCE($7,frequency)',
+        'effective_date=COALESCE($8,effective_date)',
+        'anchor_date=COALESCE($9,anchor_date)',
+        // Reassignment used to need a SECOND call to /reassign. Because an edit can now
+        // move the live pattern to a new row, that second call would land on the row this
+        // one just retired — so the caregiver silently never changed. Do it here, in the
+        // same statement, on the row we actually wrote.
+        'caregiver_id=COALESCE($11,caregiver_id)',
+      ];
+      const params = [
+        clientId, dayOfWeek !== undefined ? dayOfWeek : null, date || null, startTime, endTime,
+        notes || null, frequency || 'weekly', effectiveDate || null, anchorDate || null, scheduleId,
+        caregiverId || null,
+      ];
+      // Only touch end_date when the caller actually sent it. This used to write
+      // `endDate || null` unconditionally, so ANY edit cleared end_date and
+      // resurrected a previously deleted (end-dated) recurring pattern.
+      if (cols.has('end_date') && endDate !== undefined) {
+        params.push(endDate || null);
+        setClauses.push(`end_date=$${params.length}`);
+      }
+      if (cols.has('is_training') && isTraining !== undefined) {
+        params.push(!!isTraining);
+        setClauses.push(`is_training=$${params.length}`);
+      }
+      setClauses.push('updated_at=NOW()');
+      const r = await client.query(
+        `UPDATE schedules SET ${setClauses.join(', ')} WHERE id=$10 AND is_active=true RETURNING *`, params
+      );
+      return r.rows[0];
+    };
 
-    const result = await db.query(
-      `UPDATE schedules SET ${setClauses.join(', ')}
-       WHERE id=$10 AND is_active=true RETURNING *`,
-      params
+    // ── One-time shift: a single occurrence, so there is nothing to scope ──
+    if (!isRecurring) {
+      const row = await editInPlace();
+      db.auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, before, row);
+      return res.json({ ...row, _scope: 'one-time' });
+    }
+
+    // A recurring edit MUST say what it means. No default — see the note above.
+    if (!scope) {
+      return res.status(400).json({
+        error: 'This is a repeating shift, so the change needs a scope: ' +
+               "'this' (just that day), 'following' (that day onward), or 'all' (every occurrence, past included).",
+        code: 'scope_required',
+      });
+    }
+
+    // ── scope=all: rewrite the pattern in place, changing history too ──
+    if (scope === 'all') {
+      const row = await editInPlace();
+      db.auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, before, row);
+      return res.json({ ...row, _scope: 'all' });
+    }
+
+    // ── scope=this: override a single occurrence; the pattern is untouched ──
+    // A past editDate is allowed on purpose. Correcting a day that has already happened,
+    // so payroll reconciles against what actually ran, is the whole point.
+    if (scope === 'this') {
+      if (!editDate) return res.status(400).json({ error: "scope='this' requires editDate (the occurrence being changed)." });
+      const ex = await client.query(
+        `INSERT INTO schedule_exceptions
+           (schedule_id, exception_date, exception_type, override_start_time, override_end_time,
+            override_client_id, override_caregiver_id, override_notes, created_by)
+         VALUES ($1,$2,'modified',$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (schedule_id, exception_date) DO UPDATE SET
+           exception_type='modified',
+           override_start_time   =COALESCE(EXCLUDED.override_start_time,    schedule_exceptions.override_start_time),
+           override_end_time     =COALESCE(EXCLUDED.override_end_time,      schedule_exceptions.override_end_time),
+           override_client_id    =COALESCE(EXCLUDED.override_client_id,     schedule_exceptions.override_client_id),
+           override_caregiver_id =COALESCE(EXCLUDED.override_caregiver_id,  schedule_exceptions.override_caregiver_id),
+           override_notes        =COALESCE(EXCLUDED.override_notes,         schedule_exceptions.override_notes)
+         RETURNING *`,
+        [scheduleId, editDate, startTime || null, endTime || null, clientId || null, caregiverId || null, notes || null, req.user.id]
+      );
+      db.auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, before, { scope: 'this', editDate, exception: ex.rows[0] });
+      return res.json({ ...before, _scope: 'this', _exception: ex.rows[0] });
+    }
+
+    // ── scope=following: the shift changed permanently as of fromDate ──
+    // fromDate MAY be in the past. "As of two Mondays ago this moved to 10am" is a
+    // legitimate effective-dated correction, and it is exactly what the back office needs
+    // at payday when the real-world change was never entered. It is not a history rewrite:
+    // every week BEFORE fromDate still generates from the old row, untouched. Only
+    // scope='all' rewrites history, and only when asked for by name.
+    const fromDate = editDate || today;
+    // Pattern hasn't produced any occurrence before fromDate → no history to protect.
+    if (before.eff_str && before.eff_str >= fromDate) {
+      const row = await editInPlace();
+      db.auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, before, row);
+      return res.json({ ...row, _scope: 'following', _note: 'pattern had not started yet; edited in place' });
+    }
+
+    await client.query('BEGIN');
+    // 1) Freeze history: the old pattern stops the day before the change.
+    await client.query(
+      `UPDATE schedules SET end_date = ($2::date - INTERVAL '1 day')::date, updated_at=NOW()
+       WHERE id=$1 AND is_active=true`, [scheduleId, fromDate]
     );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
-    res.json(result.rows[0]);
+    // 2) Start a new pattern carrying the edits. Copy every column of the old row
+    //    (drift-proof: preserves split-shift, care_type, status, etc.) and apply
+    //    only the fields the caller actually sent.
+    const allCols = (await client.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name='schedules'`
+    )).rows.map(r => r.column_name).filter(c => !['id', 'created_at', 'updated_at'].includes(c));
+    const overrides = {
+      client_id: clientId, caregiver_id: caregiverId,
+      day_of_week: dayOfWeek, start_time: startTime, end_time: endTime,
+      notes: notes, frequency: frequency, anchor_date: anchorDate, is_training: isTraining,
+      effective_date: fromDate,     // the new pattern starts here
+      end_date: before.end_date,    // preserve any original termination date
+    };
+    const vals = allCols.map(c => (overrides[c] !== undefined ? overrides[c] : before[c]));
+    const inserted = await client.query(
+      `INSERT INTO schedules (${allCols.join(',')}) VALUES (${allCols.map((_, i) => `$${i + 1}`).join(',')}) RETURNING *`,
+      vals
+    );
+    // 3) Restate effective_date. The v36 trigger clamps it forward to CURRENT_DATE on
+    //    INSERT, and Postgres runs UTC while we schedule in America/Chicago — so from
+    //    19:00 Chicago onward CURRENT_DATE is already tomorrow and the clamp would push
+    //    the new pattern a day out. The old pattern ends at fromDate-1, so that day
+    //    would belong to NO pattern and the shift would silently vanish. The trigger
+    //    exempts UPDATE by design ("left alone so back-office can correct a typo"), so
+    //    this sticks. No-op whenever the clamp didn't fire.
+    const created = await client.query(
+      `UPDATE schedules SET effective_date=$2::date WHERE id=$1 RETURNING *`,
+      [inserted.rows[0].id, fromDate]
+    );
+    await client.query('COMMIT');
+
+    db.auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, before, {
+      scope: 'following', endedOn: fromDate, replacedBy: created.rows[0].id, newPattern: created.rows[0],
+    });
+    return res.json({ ...created.rows[0], _scope: 'following', _endedPatternId: scheduleId, _effectiveFrom: fromDate });
   } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* not in a txn */ }
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'That change would duplicate an existing active recurring shift for this caregiver and client.' });
+    }
     console.error('[schedules-all] PUT failed:', error.message, error.stack);
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 });
 
