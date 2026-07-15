@@ -10,14 +10,18 @@ const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const crypto  = require('crypto');
 const rateLimit = require('express-rate-limit');
+const { clientIp } = require('../helpers/clientIp');
 const { sendClientPortalInvite, sendClientPortalPasswordReset } = require('../services/emailService');
 
-// Rate limiter for the public forgot-password endpoint
+// Rate limiter for the public forgot-password endpoint. keyGenerator: without it this keys
+// on req.ip, which behind Render's proxy is the same for everyone — so 10 reset requests
+// company-wide would lock the endpoint for all client-portal users at once.
 const forgotLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIp,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

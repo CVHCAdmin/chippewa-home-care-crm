@@ -8,6 +8,7 @@ const rateLimit = require('express-rate-limit');
 const auditLogger = require('./middleware/auditLogger');
 const dotenv = require('dotenv');
 const db = require('./db');
+const { clientIp } = require('./helpers/clientIp');
 
 dotenv.config();
 
@@ -75,21 +76,12 @@ app.use(cors({
 //
 // KEYING (the important part): Render terminates the connection at its edge and forwards
 // the request, so every request's socket address (Express's default `req.ip`) is the SAME
-// upstream proxy address for ALL clients. Keying the limiter on that put the entire company
-// in ONE bucket — once everyone together made 2000 requests in 15 minutes, every caregiver
-// was locked out at the same instant with "Too many requests from this device," which is
-// exactly the meaning the message never actually had. Key on the REAL client instead: the
-// left-most X-Forwarded-For entry is the original caller, so each device gets its own bucket.
-// (`trust proxy` is set to 1 above, but Render's hop count made req.ip unreliable; reading
-// the header directly is robust regardless of how many proxies sit in front.)
-const clientKey = (req) => {
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) {
-    const first = String(xff).split(',')[0].trim();
-    if (first) return first;
-  }
-  return req.ip;
-};
+// upstream proxy address for ALL clients. Keying a limiter on that puts the entire company
+// in ONE bucket — once everyone together crossed the cap in a 15-minute window, every
+// caregiver was locked out at the same instant with "Too many requests from this device."
+// `clientIp` keys on the real client (left-most X-Forwarded-For entry) so each device gets
+// its own bucket. Every rateLimit() in the app uses it — see helpers/clientIp.js.
+const clientKey = clientIp;
 
 // Global cap, now genuinely PER DEVICE. Generous because an admin loading the dashboard
 // fires 20+ parallel requests and then polls. 2000/15min ≈ ~130/min covers a real session

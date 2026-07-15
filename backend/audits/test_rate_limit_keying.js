@@ -7,15 +7,20 @@ const app = require('express')();
 const rateLimit = require('express-rate-limit');
 const request = require('supertest');
 
-// —— identical to the fix in server.js ——
-const clientKey = (req) => {
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) {
-    const first = String(xff).split(',')[0].trim();
-    if (first) return first;
-  }
-  return req.ip;
-};
+// The REAL shared helper every limiter in the app uses — test the shipped code, not a copy.
+const { clientIp: clientKey } = require('../src/helpers/clientIp');
+
+// Guard: the helper must return distinct keys for distinct clients and read the left-most
+// X-Forwarded-For entry. If this drifts, every limiter silently regresses to one bucket.
+(() => {
+  const k = (xff, ip) => clientKey({ headers: xff ? { 'x-forwarded-for': xff } : {}, ip });
+  const assert = (c, m) => { if (!c) { console.error('HELPER FAIL:', m); process.exit(1); } };
+  assert(k('1.2.3.4') === '1.2.3.4', 'single XFF');
+  assert(k('1.2.3.4, 10.0.0.1, 10.0.0.2') === '1.2.3.4', 'left-most of a chain');
+  assert(k('  9.9.9.9  ') === '9.9.9.9', 'trims whitespace');
+  assert(k(undefined, '5.6.7.8') === '5.6.7.8', 'falls back to req.ip when no XFF');
+  assert(k('1.1.1.1') !== k('2.2.2.2'), 'distinct clients -> distinct keys');
+})();
 const MAX = 5; // small cap so the test is fast; real value is 2000
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: MAX, standardHeaders: true, legacyHeaders: false,
