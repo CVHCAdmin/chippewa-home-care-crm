@@ -83,6 +83,11 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   const [editScope, setEditScope]         = useState('all'); // 'all' | 'this' | 'following'
   const [editDate, setEditDate]           = useState('');
 
+  // Suspend / resume service (schedules.suspended_from). Same endpoints the create-panel
+  // edit box uses — this modal is the one people actually reach from the grid.
+  const [suspendBusy, setSuspendBusy] = useState(false);
+  const [suspendFrom, setSuspendFrom] = useState('');
+
   // ── Delete scope modal ──
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { shift, date }
 
@@ -443,6 +448,8 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
     // Default to the narrowest, safest scope. This used to open on 'all', so the quickest
     // path through the modal rewrote every week the shift had ever run.
     setEditScope('this');
+    // Clear any date typed for a previously-opened shift so it can't leak into this one.
+    setSuspendFrom('');
     setEditShiftForm({
       caregiverId: s.caregiver_id || '',
       clientId:  s.client_id || '',
@@ -504,6 +511,63 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       showToast(err.message, 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  // ═══════════════════════════════════════════════
+  // SUSPEND / RESUME SERVICE
+  // ═══════════════════════════════════════════════
+  // Pause a client's visits without deleting the schedule. The occurrence engine skips
+  // dates on/after suspended_from, so billing, payroll, reminders and no-show all stop —
+  // past visits stay intact. scope 'this' = this weekday only, 'client' = all their days.
+
+  async function handleSuspendService(scope) {
+    if (!editShift) return;
+    setSuspendBusy(true);
+    try {
+      const body = { scope };
+      if (suspendFrom) body.fromDate = suspendFrom; // else the server defaults to today (Chicago)
+      const res = await fetch(`${API_BASE_URL}/api/schedules/${editShift.id}/suspend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Suspend failed');
+      const cl = clientMap[editShift.client_id];
+      const who = scope === 'client'
+        ? `all of ${cl ? cl.first_name + ' ' + cl.last_name : 'this client'}'s days`
+        : `${DAY_FULL[editShift.day_of_week]}s`;
+      showToast(`Suspended ${who} from ${data.fromDate} (${data.suspended} shift${data.suspended !== 1 ? 's' : ''})`);
+      setEditShift(null);
+      await loadAll();
+      onScheduleChange && onScheduleChange();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSuspendBusy(false);
+    }
+  }
+
+  async function handleResumeService(scope) {
+    if (!editShift) return;
+    setSuspendBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/schedules/${editShift.id}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ scope }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Resume failed');
+      showToast(`Service resumed (${data.resumed} shift${data.resumed !== 1 ? 's' : ''})`);
+      setEditShift(null);
+      await loadAll();
+      onScheduleChange && onScheduleChange();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSuspendBusy(false);
     }
   }
 
@@ -837,7 +901,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                             {cl ? `${cl.first_name} ${cl.last_name}` : 'Unknown'}
                             {isSplit && <span style={{ fontSize:10, color, background:`${color}20`, borderRadius:4, padding:'1px 5px', fontWeight:700 }}>Split {s.split_segment}/2</span>}
                           </div>
-                          <div style={{ fontSize:12, color:'#6B7280', marginTop:2 }}>{formatTime(s.start_time)} \u2013 {formatTime(s.end_time)} \u00B7 {durH}h</div>
+                          <div style={{ fontSize:12, color:'#6B7280', marginTop:2 }}>{formatTime(s.start_time)} &ndash; {formatTime(s.end_time)} &middot; {durH}h</div>
                         </div>
                         <span style={{ fontSize:12, color:'#9CA3AF' }}>&#9998;</span>
                       </div>
@@ -1212,7 +1276,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             </div>
             {editShiftForm.startTime && editShiftForm.endTime && (
               <div style={{ textAlign:'center', fontSize:12, color:'#6B7280', margin:'6px 0 2px', background:'#F3F4F6', borderRadius:6, padding:'4px 0' }}>
-                {formatTime(editShiftForm.startTime)} \u2013 {formatTime(editShiftForm.endTime)} \u00B7 <strong>{durH}h</strong>
+                {formatTime(editShiftForm.startTime)} &ndash; {formatTime(editShiftForm.endTime)} &middot; <strong>{durH}h</strong>
               </div>
             )}
             <Field label="Notes (optional)" style={{ marginTop:10 }}>
@@ -1225,6 +1289,61 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                 <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Trainee shadow shift — paid through payroll, excluded from invoices.</div>
               </div>
             </label>
+            {/* Suspend / resume service — pause visits without deleting the schedule */}
+            {isRecurring && (() => {
+              const suspendedFrom = editShift.suspended_from ? editShift.suspended_from.slice(0, 10) : null;
+              const clientName = (() => {
+                const cl = clientMap[editShift.client_id];
+                return cl ? `${cl.first_name} ${cl.last_name}` : 'this client';
+              })();
+              return (
+                <div style={{ marginTop:12, padding:'10px 12px', borderRadius:8,
+                  background: suspendedFrom ? '#FEF3C7' : '#F9FAFB',
+                  border:'1px solid', borderColor: suspendedFrom ? '#FCD34D' : '#E5E7EB' }}>
+                  {suspendedFrom ? (
+                    <>
+                      <div style={{ fontWeight:700, fontSize:13, color:'#92400E', marginBottom:8 }}>
+                        &#9208; Service suspended from {new Date(suspendedFrom + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}
+                      </div>
+                      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                        <button type="button" disabled={suspendBusy} onClick={() => handleResumeService('this')}
+                          style={{ ...cancelBtn, flex:1, minWidth:130 }}>
+                          &#9654; Resume {DAY_FULL[editShift.day_of_week]}s
+                        </button>
+                        <button type="button" disabled={suspendBusy} onClick={() => handleResumeService('client')}
+                          style={{ ...cancelBtn, flex:1, minWidth:130 }}>
+                          &#9654; Resume all {clientName}&rsquo;s days
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontWeight:700, fontSize:13, color:'#111827', marginBottom:8 }}>Suspend service</div>
+                      <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+                        <span style={{ fontSize:12, color:'#374151' }}>Starting</span>
+                        <input type="date" value={suspendFrom} onChange={e => setSuspendFrom(e.target.value)}
+                          style={{ padding:'5px 8px', borderRadius:6, border:'1px solid #D1D5DB', fontSize:13 }} />
+                        <span style={{ fontSize:11, color:'#9CA3AF' }}>{suspendFrom ? '' : '(today)'}</span>
+                      </div>
+                      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                        <button type="button" disabled={suspendBusy} onClick={() => handleSuspendService('this')}
+                          style={{ ...cancelBtn, flex:1, minWidth:130 }}>
+                          &#9208; Just {DAY_FULL[editShift.day_of_week]}s
+                        </button>
+                        <button type="button" disabled={suspendBusy} onClick={() => handleSuspendService('client')}
+                          style={{ ...cancelBtn, flex:1, minWidth:130, color:'#92400E', borderColor:'#FCD34D' }}>
+                          &#9208; All {clientName}&rsquo;s days
+                        </button>
+                      </div>
+                      <div style={{ fontSize:11, color:'#6B7280', marginTop:6 }}>
+                        Pauses visits from that date on. Nothing is deleted &mdash; past visits stay, and you can resume anytime.
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+
             <div style={{ display:'flex', justifyContent:'space-between', marginTop:16 }}>
               <button onClick={() => openDeleteConfirm(editShift, editDate)} disabled={saving} style={{ ...cancelBtn, color:'#EF4444', borderColor:'#FECACA' }}>
                 {saving ? '...' : 'Delete'}
