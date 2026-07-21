@@ -457,4 +457,40 @@ router.post('/:id/resume', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// Client-scoped suspend/resume — the Clients screen operates on a client, not a single
+// schedule, so it can't use the :id routes above (it has no schedule id to hand). Same
+// suspended_from mechanism; this pauses/resumes EVERY active schedule the client has.
+// (These paths have three segments so they never collide with '/:id/suspend'.)
+router.post('/client/:clientId/suspend', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const fromDate = req.body.fromDate
+      || (await db.query(`SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date,'YYYY-MM-DD') AS d`)).rows[0].d;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) return res.status(400).json({ error: 'fromDate must be YYYY-MM-DD.' });
+
+    const result = await db.query(
+      `UPDATE schedules SET suspended_from=$2::date, updated_at=NOW()
+       WHERE client_id=$1 AND is_active=true RETURNING id`,
+      [req.params.clientId, fromDate]
+    );
+    for (const row of result.rows) {
+      await auditLog(req.user.id, 'SUSPEND', 'schedules', row.id, null, { scope: 'client', suspended_from: fromDate }, req.body.reason || null);
+    }
+    res.json({ suspended: result.rows.length, fromDate, clientId: req.params.clientId, scheduleIds: result.rows.map(r => r.id) });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+router.post('/client/:clientId/resume', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(
+      `UPDATE schedules SET suspended_from=NULL, updated_at=NOW()
+       WHERE client_id=$1 AND is_active=true AND suspended_from IS NOT NULL RETURNING id`,
+      [req.params.clientId]
+    );
+    for (const row of result.rows) {
+      await auditLog(req.user.id, 'RESUME', 'schedules', row.id, null, { scope: 'client' }, req.body.reason || null);
+    }
+    res.json({ resumed: result.rows.length, clientId: req.params.clientId, scheduleIds: result.rows.map(r => r.id) });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 module.exports = router;

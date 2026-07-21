@@ -91,6 +91,9 @@ const ClientCard = ({ client, getReferralSourceName, getCareTypeName, onEdit, on
           {getCareTypeName(client.care_type_id)}
         </span>
       )}
+      {client.service_suspended_from && (
+        <span className="badge" style={{ backgroundColor: '#FEF3C7', color: '#92400E' }}>⏸ Suspended</span>
+      )}
     </div>
   </div>
 );
@@ -740,7 +743,13 @@ const ClientsManagement = ({ token }) => {
                   <td><AddressLink address={client.address} city={client.city} state={client.state} zip={client.zip} /></td>
                   <td>{client.is_private_pay ? (<span className="text-muted">-</span>) : (getReferralSourceName(client.referral_source_id))}</td>
                   <td>{getCareTypeName(client.care_type_id)}</td>
-                  <td>{client.is_private_pay ? (<span className="badge badge-info">Private Pay</span>) : (<span className="badge badge-success">Referred</span>)}</td>
+                  <td>
+                    {client.is_private_pay ? (<span className="badge badge-info">Private Pay</span>) : (<span className="badge badge-success">Referred</span>)}
+                    {client.service_suspended_from && (
+                      <span className="badge" title={`Service suspended from ${formatDate(client.service_suspended_from)}`}
+                        style={{ backgroundColor: '#FEF3C7', color: '#92400E', marginLeft: '0.25rem' }}>⏸ Suspended</span>
+                    )}
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                       <button className="btn btn-sm btn-secondary" onClick={() => setCareTasksClient(client)} title="Care tasks checklist">📋 Tasks</button>

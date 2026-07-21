@@ -8,6 +8,12 @@ const formatDateForInput = (dateString) => {
   return date.toISOString().split('T')[0];
 };
 
+// Display a YYYY-MM-DD as a friendly date. Noon avoids the UTC-midnight off-by-one.
+const formatDate = (ymd) => {
+  if (!ymd) return '';
+  return new Date(ymd.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
 const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen, onClose, onSuccess, token }) => {
   const [activeTab, setActiveTab] = useState('basic');
   const [formData, setFormData] = useState({});
@@ -26,8 +32,17 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
   const [portalMessage, setPortalMessage] = useState({ text: '', type: '' });
   const [inviteUrl, setInviteUrl]         = useState('');
 
+  // ── Suspend service state ─────────────────────────────────────────────────
+  // Pauses/resumes all of this client's schedules via the client-scoped endpoints.
+  // suspendedFrom mirrors the list's service_suspended_from and updates after an action.
+  const [suspendedFrom, setSuspendedFrom] = useState(null);
+  const [suspendFromInput, setSuspendFromInput] = useState('');
+  const [suspendBusy, setSuspendBusy] = useState(false);
+
   useEffect(() => {
     if (client && isOpen) {
+      setSuspendedFrom(client.service_suspended_from ? client.service_suspended_from.slice(0, 10) : null);
+      setSuspendFromInput('');
       setFormData({
         // Basic Info
         firstName: client.first_name || '',
@@ -215,6 +230,55 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
     { id: 'portal',    label: '🌐 Portal'     },
   ];
 
+  // ── Suspend service handlers ──────────────────────────────────────────────
+  const handleSuspendService = async () => {
+    setSuspendBusy(true);
+    setMessage('');
+    try {
+      const body = {};
+      if (suspendFromInput) body.fromDate = suspendFromInput; // else server defaults to today (Chicago)
+      const res = await fetch(`${API_BASE_URL}/api/schedules/client/${client.id}/suspend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Suspend failed');
+      if (data.suspended === 0) {
+        setMessage('This client has no active schedules to suspend.');
+      } else {
+        setSuspendedFrom(data.fromDate);
+        setMessage(`Service suspended from ${data.fromDate} (${data.suspended} schedule${data.suspended !== 1 ? 's' : ''}).`);
+        onSuccess && onSuccess();
+      }
+    } catch (err) {
+      setMessage('Error: ' + err.message);
+    } finally {
+      setSuspendBusy(false);
+    }
+  };
+
+  const handleResumeService = async () => {
+    setSuspendBusy(true);
+    setMessage('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/schedules/client/${client.id}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Resume failed');
+      setSuspendedFrom(null);
+      setMessage(`Service resumed (${data.resumed} schedule${data.resumed !== 1 ? 's' : ''}).`);
+      onSuccess && onSuccess();
+    } catch (err) {
+      setMessage('Error: ' + err.message);
+    } finally {
+      setSuspendBusy(false);
+    }
+  };
+
   // ── Portal handlers ───────────────────────────────────────────────────────
   const handleSendInvite = async () => {
     if (!portalEmail.trim()) {
@@ -303,6 +367,38 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
             {message}
           </div>
         )}
+
+        {/* Suspend service — pauses/resumes all of this client's schedules. Nothing is
+            deleted; past visits stay and it can be resumed anytime. */}
+        <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', borderRadius: '8px',
+          background: suspendedFrom ? '#FEF3C7' : '#F9FAFB',
+          border: `1px solid ${suspendedFrom ? '#FCD34D' : '#E5E7EB'}` }}>
+          {suspendedFrom ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#92400E' }}>
+                ⏸ Service suspended from {formatDate(suspendedFrom)}
+              </span>
+              <button type="button" className="btn btn-sm btn-primary" disabled={suspendBusy} onClick={handleResumeService}>
+                ▶ Resume service
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>Suspend service</span>
+              <span style={{ fontSize: '0.8rem', color: '#374151' }}>Starting</span>
+              <input type="date" value={suspendFromInput} onChange={(e) => setSuspendFromInput(e.target.value)}
+                style={{ padding: '0.35rem 0.5rem', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '0.85rem' }} />
+              <span style={{ fontSize: '0.75rem', color: '#9CA3AF' }}>{suspendFromInput ? '' : '(today)'}</span>
+              <button type="button" className="btn btn-sm btn-secondary" disabled={suspendBusy} onClick={handleSuspendService}
+                style={{ color: '#92400E', borderColor: '#FCD34D' }}>
+                ⏸ Suspend all visits
+              </button>
+              <span style={{ fontSize: '0.72rem', color: '#6B7280', flexBasis: '100%' }}>
+                Pauses every scheduled visit from that date on. Nothing is deleted — past visits stay, and you can resume anytime.
+              </span>
+            </div>
+          )}
+        </div>
 
         {/* Tabs */}
         <div className="tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '2px solid #eee', paddingBottom: '0.5rem' }}>

@@ -40,7 +40,10 @@ router.post('/', verifyToken, async (req, res) => {
 router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT c.*, rs.name as referral_source_name, ct.name as care_type_name
+      `SELECT c.*, rs.name as referral_source_name, ct.name as care_type_name,
+              (SELECT MIN(s.suspended_from) FROM schedules s
+                 WHERE s.client_id = c.id AND s.is_active = true AND s.suspended_from IS NOT NULL)
+                AS service_suspended_from
        FROM clients c
        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
        LEFT JOIN care_types ct ON c.care_type_id = ct.id
