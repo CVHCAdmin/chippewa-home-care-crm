@@ -478,12 +478,29 @@ router.get('/:id/caregiver-view', verifyToken, async (req, res) => {
 });
 
 // GET /api/clients/:id/visit-notes
+// Caregivers write visit notes at CLOCK-OUT, stored on time_entries.notes. The
+// client_visit_notes table only ever held manually-added notes (9 rows total).
+// This endpoint used to read ONLY the manual table, so real visit notes —
+// including incident reports like falls — were invisible in the Visit Notes tab.
+// Serve both, newest first. System markers and voided entries are excluded.
 router.get('/:id/visit-notes', verifyToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT vn.*, u.first_name || ' ' || u.last_name as caregiver_name
-       FROM client_visit_notes vn LEFT JOIN users u ON vn.caregiver_id = u.id
-       WHERE vn.client_id = $1 ORDER BY vn.created_at DESC LIMIT 50`, [req.params.id]
+      `SELECT n.id, n.note, n.created_at, n.source,
+              u.first_name || ' ' || u.last_name AS caregiver_name
+         FROM (
+           SELECT vn.id, vn.note, vn.created_at, vn.caregiver_id, 'manual' AS source
+             FROM client_visit_notes vn WHERE vn.client_id = $1
+           UNION ALL
+           SELECT te.id, te.notes AS note, te.start_time AS created_at, te.caregiver_id, 'clock_out' AS source
+             FROM time_entries te
+            WHERE te.client_id = $1 AND te.is_complete = true
+              AND te.notes IS NOT NULL AND TRIM(te.notes) <> ''
+              AND te.notes NOT IN ('(Auto-transition: schedule shift change)',
+                                   '(Auto-closed: caregiver clocked into new client)')
+         ) n
+         LEFT JOIN users u ON n.caregiver_id = u.id
+        ORDER BY n.created_at DESC LIMIT 100`, [req.params.id]
     );
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
