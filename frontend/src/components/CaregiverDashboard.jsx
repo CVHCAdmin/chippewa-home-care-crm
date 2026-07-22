@@ -668,6 +668,24 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // Clock-out takes seconds (GPS snapshot + request) with no visual change — people
   // think the tap didn't register and tap again. Show a working state immediately.
   const [clockingOut, setClockingOut] = useState(false);
+
+  // Track the browser's geolocation permission so caregivers with EVV (payer-billed)
+  // clients see a persistent fix-it banner when location is denied — the one failure
+  // mode no retry can recover from. Caregivers with only private-pay clients are
+  // never nagged; EVV doesn't apply to them.
+  const [gpsPermission, setGpsPermission] = useState(null);
+  useEffect(() => {
+    let perm;
+    (async () => {
+      try {
+        if (!navigator.permissions?.query) return; // older Safari — banner just won't show
+        perm = await navigator.permissions.query({ name: 'geolocation' });
+        setGpsPermission(perm.state);
+        perm.onchange = () => setGpsPermission(perm.state);
+      } catch (_) { /* permission API unavailable */ }
+    })();
+    return () => { if (perm) perm.onchange = null; };
+  }, []);
   const [gpsRetry, setGpsRetry] = useState(null); // { message, retryFn } when GPS hard-blocks a clock action
 
   // Robust GPS acquisition for clock-in/out. Tries in order:
@@ -795,7 +813,21 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       if (!skipGps) {
         const snap = await getLocationSnapshot();
         lat = snap.latitude; lng = snap.longitude;
-        if (!lat || !lng) reportGpsFailure('clock-in', snap.error, selectedClient);
+        if (!lat || !lng) {
+          reportGpsFailure('clock-in', snap.error, selectedClient);
+          // EVV (payer-billed) clients legally require location; private pay does not.
+          // Permission DENIED is the one case we block — it can never self-recover in
+          // the background, and blocking with exact steps is the only lever that gets
+          // it enabled. A merely-slow fix still never blocks anyone (the late-fix
+          // retries and breadcrumb backfill recover those).
+          const cl = clients.find(c => c.id === selectedClient);
+          const isEvvClient = cl && cl.is_private_pay !== true;
+          if (isEvvClient && snap.error?.code === 1) {
+            await hapticNotify('error');
+            toast(gpsErrorMessage({ code: 1 }, 'clock in') + ' Location is required for this client (Medicaid/VA EVV).', 'error');
+            return;
+          }
+        }
       }
 
       await impact('medium'); // native haptic on button press
@@ -1474,6 +1506,17 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <div style={{ fontSize: '1.1rem', fontWeight: '800', color: '#111827', marginBottom: '1rem', textAlign: 'center' }}>
               ⏰ Ready to Start a Shift?
             </div>
+            {gpsPermission === 'denied' && clients.some(c => c.is_private_pay !== true) && (
+              <div style={{ padding: '0.75rem 1rem', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, marginBottom: '1rem' }}>
+                <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#B91C1C', marginBottom: 4 }}>
+                  📍 Location is OFF — required for your Medicaid/VA clients
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#7F1D1D', lineHeight: 1.45 }}>
+                  You won't be able to clock in for those clients until it's on. Private-pay visits are not affected.
+                  <br />Fix: tap the 🔒 next to the address bar → <strong>Location</strong> → <strong>Allow</strong>. If it's missing: phone Settings → Apps → Chrome → Permissions → Location → Allow.
+                </div>
+              </div>
+            )}
             <div className="form-group" style={{ marginBottom: '0.875rem' }}>
               <label style={{ fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Select Client *</label>
               <select
