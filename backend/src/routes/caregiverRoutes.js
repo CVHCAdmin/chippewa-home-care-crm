@@ -90,6 +90,36 @@ router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Caregiver not found' });
     await auditLog(req.user.id, 'UPDATE', 'users', req.params.id, null, result.rows[0]);
+
+    // Ending employment must also end their schedules. Rows left is_active=true keep
+    // generating occurrences — billing, reports, reminders — for someone who no longer
+    // works here, and they're invisible on the scheduler board (it only draws lanes for
+    // ACTIVE caregivers), so nobody can see or delete them. This is how 8 departed
+    // caregivers were still "billing" 28 schedules in July 2026. Past visits are
+    // preserved (history stays); only today-forward is ended.
+    if (isActive === false) {
+      const today = (await db.query(
+        `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date,'YYYY-MM-DD') AS d`)).rows[0].d;
+      // Future one-time shifts and recurring patterns that haven't started: deactivate.
+      const killed = await db.query(
+        `UPDATE schedules SET is_active=false, updated_at=NOW()
+          WHERE caregiver_id=$1 AND is_active=true
+            AND ((day_of_week IS NULL AND date >= $2::date)
+                 OR (day_of_week IS NOT NULL AND effective_date IS NOT NULL AND effective_date > $2::date))
+          RETURNING id`, [req.params.id, today]);
+      // Recurring patterns already running: end them as of today (today's worked visit,
+      // if any, still counts).
+      const ended = await db.query(
+        `UPDATE schedules SET end_date=$2::date, updated_at=NOW()
+          WHERE caregiver_id=$1 AND is_active=true AND day_of_week IS NOT NULL
+            AND (end_date IS NULL OR end_date > $2::date)
+          RETURNING id`, [req.params.id, today]);
+      for (const r of [...killed.rows, ...ended.rows]) {
+        await auditLog(req.user.id, 'END_ON_DEACTIVATION', 'schedules', r.id, null,
+          { caregiver_id: req.params.id, ended_as_of: today });
+      }
+    }
+
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });

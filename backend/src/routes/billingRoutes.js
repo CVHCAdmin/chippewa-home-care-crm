@@ -246,9 +246,36 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       m.start != null && m.end != null && vs < m.end && m.start < ve);
   };
 
+  // Substitute-caregiver de-dupe: when a DIFFERENT caregiver's punch covers most of a
+  // scheduled visit's window, the visit happened — someone else worked it — and the
+  // assigned caregiver's no-clock-in line would double-bill it (e.g. Josie's punch
+  // 10:59-2:02 next to Alexis's scheduled 11-2). Suppress only when actual punches
+  // cover >50% of the window: a small handoff overrun (Patricia clocking out 12:07
+  // over Sue's real 12-3 shift = 16%) must NOT suppress Sue's legitimate line, and
+  // clients with no punches at all (schedule-billed private pay) are never affected.
+  const chiMin = (ts) => {
+    if (!ts) return null;
+    const s = new Date(ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: 'America/Chicago' });
+    const [h, m] = s.split(':').map(Number); return h * 60 + m;
+  };
+  const punchWindows = []; // every real punch this period, by day
+  for (const x of visitsWithMatch) if (x.entry && x.entry.end_time) punchWindows.push({ day: ymd(x.entry.start_time), start: chiMin(x.entry.start_time), end: chiMin(x.entry.end_time) });
+  for (const e of unmatchedEntries) if (e.end_time) punchWindows.push({ day: ymd(e.start_time), start: chiMin(e.start_time), end: chiMin(e.end_time) });
+  const coveredByActualWork = (v) => {
+    const vs = minutesOf(v.start_time), ve = minutesOf(v.end_time);
+    if (vs == null || ve == null || ve <= vs) return false;
+    let covered = 0;
+    for (const p of punchWindows) {
+      if (p.day !== ymd(v.date) || p.start == null || p.end == null || p.end <= p.start) continue;
+      covered += Math.max(0, Math.min(ve, p.end) - Math.max(vs, p.start));
+    }
+    return covered > (ve - vs) * 0.5;
+  };
+
   for (const { visit, entry } of visitsWithMatch) {
-    // Skip a no-clock-in scheduled visit that duplicates an already-worked shift.
-    if (!entry && duplicatesWorkedShift(visit)) continue;
+    // Skip a no-clock-in scheduled visit that duplicates an already-worked shift
+    // (same-caregiver overlapping schedules, or a substitute's punch covering it).
+    if (!entry && (duplicatesWorkedShift(visit) || coveredByActualWork(visit))) continue;
     let hours = 0;
     let startISO = null, endISO = null, timeRangeLabel = '';
     let source = 'scheduled';
