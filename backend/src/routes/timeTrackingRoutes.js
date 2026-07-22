@@ -357,7 +357,10 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     //
     // A MANUAL clock-in is never blocked: the caregiver may have gone to the visit anyway,
     // and that entry correctly surfaces as unscheduled for admin review.
-    if (req.body.autoClockIn && !hasLiveOccurrenceNow) {
+    // autoTransition is gated the same way: the app picks the "next" shift from
+    // phone-side schedule data (stale on the frozen APK), so a cancelled/changed
+    // shift could still trigger an automatic switch. Only a live occurrence counts.
+    if ((req.body.autoClockIn || req.body.autoTransition) && !hasLiveOccurrenceNow) {
       return res.status(409).json({
         error: 'No active scheduled visit right now — automatic clock-in skipped. Clock in manually if you are on site.',
         code: 'no_active_occurrence',
@@ -473,6 +476,37 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
        needsApproval, approvalReason]
     );
     await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
+
+    // EVV backfill from breadcrumbs: the shift's 60s GPS trail often has fixes even
+    // when the clock-in/out snapshot missed. Fill ONLY missing locations, flagged
+    // source:'breadcrumb' with the crumb's own timestamp, time-boxed to 10 minutes of
+    // the event — presence evidence, clearly distinguishable from an at-tap capture.
+    try {
+      const updated = result.rows[0];
+      if (!updated.clock_in_location) {
+        const crumb = await db.query(
+          `SELECT g.latitude, g.longitude, g.timestamp
+             FROM gps_tracking g JOIN time_entries te ON te.id = g.time_entry_id
+            WHERE g.time_entry_id=$1 AND g.timestamp <= te.start_time + INTERVAL '10 minutes'
+            ORDER BY g.timestamp ASC LIMIT 1`, [req.params.id]);
+        if (crumb.rows[0]) {
+          await db.query(`UPDATE time_entries SET clock_in_location=$1 WHERE id=$2 AND clock_in_location IS NULL`,
+            [JSON.stringify({ lat: Number(crumb.rows[0].latitude), lng: Number(crumb.rows[0].longitude), source: 'breadcrumb', captured_at: crumb.rows[0].timestamp }), req.params.id]);
+        }
+      }
+      if (!updated.clock_out_location) {
+        const crumb = await db.query(
+          `SELECT g.latitude, g.longitude, g.timestamp
+             FROM gps_tracking g JOIN time_entries te ON te.id = g.time_entry_id
+            WHERE g.time_entry_id=$1 AND g.timestamp >= te.end_time - INTERVAL '10 minutes'
+            ORDER BY g.timestamp DESC LIMIT 1`, [req.params.id]);
+        if (crumb.rows[0]) {
+          await db.query(`UPDATE time_entries SET clock_out_location=$1 WHERE id=$2 AND clock_out_location IS NULL`,
+            [JSON.stringify({ lat: Number(crumb.rows[0].latitude), lng: Number(crumb.rows[0].longitude), source: 'breadcrumb', captured_at: crumb.rows[0].timestamp }), req.params.id]);
+        }
+      }
+    } catch (bfErr) { console.error('[clock-out] breadcrumb backfill:', bfErr.message); }
+
     try {
       const { sendPushToUser } = require('./pushNotificationRoutes');
       const clientName = timeEntry.rows[0].client_first_name ? `${timeEntry.rows[0].client_first_name} ${timeEntry.rows[0].client_last_name}` : null;
@@ -481,6 +515,28 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
     } catch(e) { console.error('[Push setup]', e.message); }
     try { const { createEVVFromTimeEntry } = require('./sandataRoutes'); createEVVFromTimeEntry(req.params.id).catch(e => console.error('[EVV auto-create]', e.message)); } catch(e) { console.error('[EVV require]', e.message); }
     res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// POST /api/time-entries/:id/late-location
+// The clock-in snapshot gives up after ~6s so the button never hangs; phones that
+// need 10-30s for a fix ended up with no location at all. The app keeps trying in
+// the background for the first minute after clock-in and posts the fix here.
+// Owner-only; only fills a MISSING clock-in location; only within 15 minutes of
+// start. Stored flagged source:'delayed' so EVV review can tell it from an at-tap
+// capture — it is evidence of presence shortly after start, not at the tap.
+router.post('/:id/late-location', verifyToken, async (req, res) => {
+  try {
+    const { latitude, longitude } = req.body || {};
+    if (!latitude || !longitude) return res.status(400).json({ error: 'latitude and longitude required' });
+    const r = await db.query(
+      `UPDATE time_entries SET clock_in_location=$1, updated_at=NOW()
+        WHERE id=$2 AND caregiver_id=$3 AND clock_in_location IS NULL
+          AND start_time > NOW() - INTERVAL '15 minutes'
+        RETURNING id`,
+      [JSON.stringify({ lat: latitude, lng: longitude, source: 'delayed', captured_at: new Date().toISOString() }),
+       req.params.id, req.user.id]);
+    res.json({ updated: r.rows.length });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

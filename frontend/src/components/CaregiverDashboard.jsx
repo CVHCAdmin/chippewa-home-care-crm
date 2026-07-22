@@ -706,17 +706,51 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // permission prompt does NOT count against the geolocation timeout (and Capacitor
   // on Android can ignore its own timeout) — so getCurrentPosition can hang forever
   // while the button sits grey. After `capMs` we just give up and return nulls.
-  // Always resolves { latitude, longitude } (nulls if no fix); never throws, never hangs.
+  // Always resolves { latitude, longitude, error } (nulls if no fix); never throws,
+  // never hangs. `error` keeps the PositionError code so the admin alert can say
+  // "permission denied — fix her phone settings" instead of "unknown GPS error".
   const getLocationSnapshot = async (capMs = 6000) => {
-    const hardCap = new Promise(resolve => setTimeout(() => resolve(null), capMs));
+    const hardCap = new Promise(resolve => setTimeout(() => resolve('cap'), capMs));
     try {
       const fix = await Promise.race([acquireLocationForClock({ fast: true }), hardCap]);
       if (fix?.latitude && fix?.longitude) {
-        return { latitude: fix.latitude, longitude: fix.longitude };
+        return { latitude: fix.latitude, longitude: fix.longitude, error: null };
       }
-    } catch (_) { /* fall through to nulls — GPS must never block clocking */ }
-    return { latitude: null, longitude: null };
+      return { latitude: null, longitude: null, error: { code: 3 } }; // hit the cap = timeout
+    } catch (err) {
+      // fall through to nulls — GPS must never block clocking — but keep the code
+      return { latitude: null, longitude: null, error: { code: err?.code ?? 0 } };
+    }
   };
+
+  // Late-fix retries: when the clock-in snapshot missed (slow fix at the tap),
+  // keep trying quietly for the first minute and stamp the entry via
+  // /late-location. The server only fills a MISSING location, flags it
+  // source:'delayed', and rejects after 15 min — clock-in itself never waits.
+  const lateFixTimersRef = useRef([]);
+  const cancelLateFixRetries = () => {
+    lateFixTimersRef.current.forEach(clearTimeout);
+    lateFixTimersRef.current = [];
+  };
+  const startLateFixRetries = (entryId) => {
+    cancelLateFixRetries();
+    [10000, 30000, 60000].forEach(delay => {
+      lateFixTimersRef.current.push(setTimeout(async () => {
+        try {
+          const p = await getCurrentPositionOnce({ highAccuracy: true, timeout: 12000, maximumAge: 60000 });
+          if (p?.latitude && p?.longitude) {
+            cancelLateFixRetries(); // got one — later retries unnecessary
+            await fetch(`${API_BASE_URL}/api/time-entries/${entryId}/late-location`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ latitude: p.latitude, longitude: p.longitude }),
+            });
+          }
+        } catch (_) { /* next scheduled retry will try again */ }
+      }, delay));
+    });
+  };
+  useEffect(() => () => cancelLateFixRetries(), []); // clean up on unmount
 
   // Notify admins (fire-and-forget) when the caregiver hits a GPS hard block.
   const reportGpsFailure = (action, err, clientId) => {
@@ -759,8 +793,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = null;
       let lng = null;
       if (!skipGps) {
-        ({ latitude: lat, longitude: lng } = await getLocationSnapshot());
-        if (!lat || !lng) reportGpsFailure('clock-in', null, selectedClient);
+        const snap = await getLocationSnapshot();
+        lat = snap.latitude; lng = snap.longitude;
+        if (!lat || !lng) reportGpsFailure('clock-in', snap.error, selectedClient);
       }
 
       await impact('medium'); // native haptic on button press
@@ -787,7 +822,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       await hapticNotify('success'); // success haptic
       setActiveSession(clockInData);
       gpsIntervalRef.current = startGPSBreadcrumbs(clockInData.id);
-      if (!lat) toast('Clocked in (location unavailable)', 'warning');
+      if (!lat) {
+        toast('Clocked in (location unavailable)', 'warning');
+        startLateFixRetries(clockInData.id); // keep trying in the background
+      }
     } catch (error) {
       await hapticNotify('error');
       toast('Failed to clock in: ' + error.message, 'error');
@@ -807,6 +845,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     if (!activeSession?.id) { toast('No active session — reopen and try again.', 'error'); setShowNoteModal(false); return; }
     if (clockingOut) return; // ignore re-taps while the first one is in flight
     setClockingOut(true);
+    cancelLateFixRetries(); // shift is ending — stop any pending late-fix attempts
     try {
       await impact('heavy'); // strong haptic for clock out
 
@@ -816,8 +855,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         // Same best-effort snapshot as clock-in — never strand a caregiver waiting
         // on GPS. Grab a fix if we can (hard-capped); otherwise clock out anyway
         // with no location and notify admins for EVV reconciliation.
-        ({ latitude: lat, longitude: lng } = await getLocationSnapshot());
-        if (!lat || !lng) reportGpsFailure('clock-out', null, activeSession?.client_id || selectedClient);
+        const snap = await getLocationSnapshot();
+        lat = snap.latitude; lng = snap.longitude;
+        if (!lat || !lng) reportGpsFailure('clock-out', snap.error, activeSession?.client_id || selectedClient);
       }
 
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
