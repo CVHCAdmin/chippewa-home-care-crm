@@ -140,6 +140,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       te.start_time,
       te.end_time,
       te.duration_minutes,
+      te.billable_minutes,
       te.notes
     FROM time_entries te
     JOIN users u ON te.caregiver_id = u.id
@@ -282,14 +283,25 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     let timeEntryId = null;
 
     if (entry) {
-      // EVV-confirmed → bill actual
+      // EVV-confirmed → bill actual, capped at the scheduled window like payroll:
+      // actual within 7 min of (or over) scheduled bills the scheduled hours; short
+      // visits bill actual. A missed clock-out (auto-closed hours later) can no
+      // longer bill the whole gap — a 917-minute "shift" on a 2-hour schedule
+      // bills 2 hours. This makes billing agree with payroll on every shift.
       source = 'evv_confirmed';
       timeEntryId = entry.time_entry_id;
+      let actualMin = 0;
       if (entry.duration_minutes) {
-        hours = entry.duration_minutes / 60.0;
+        actualMin = entry.duration_minutes;
       } else if (entry.start_time && entry.end_time) {
-        hours = (new Date(entry.end_time) - new Date(entry.start_time)) / (1000 * 60 * 60);
+        actualMin = (new Date(entry.end_time) - new Date(entry.start_time)) / 60000;
       }
+      const schedMin = (minutesOf(visit.start_time) != null && minutesOf(visit.end_time) != null)
+        ? minutesOf(visit.end_time) - minutesOf(visit.start_time) : null;
+      const PAY_GRACE_MIN = 7; // same grace payroll reconciliation uses
+      const billedMin = (schedMin != null && schedMin > 0 && actualMin >= schedMin - PAY_GRACE_MIN)
+        ? schedMin : actualMin;
+      hours = billedMin / 60.0;
       startISO = entry.start_time;
       endISO = entry.end_time;
       const st = new Date(entry.start_time);
@@ -336,15 +348,22 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     });
   }
 
-  // Orphan time entries (worked but not on schedule) → bill as unscheduled
+  // Orphan time entries (worked but not on schedule) → bill as unscheduled.
+  // Prefer billable_minutes: the clock-out path already zeroes accidental
+  // double-taps (<60s) and caps implausibly long shifts there — billing raw
+  // duration ignored all of that (a 0-minute tap still billed a flat-rate
+  // visit). Fall back to duration for old/manual entries without it.
   for (const entry of unmatchedEntries) {
-    let hours = 0;
-    if (entry.duration_minutes) {
-      hours = entry.duration_minutes / 60.0;
+    let minutes = 0;
+    if (entry.billable_minutes != null) {
+      minutes = Number(entry.billable_minutes);
+    } else if (entry.duration_minutes) {
+      minutes = entry.duration_minutes;
     } else if (entry.start_time && entry.end_time) {
-      hours = (new Date(entry.end_time) - new Date(entry.start_time)) / (1000 * 60 * 60);
+      minutes = (new Date(entry.end_time) - new Date(entry.start_time)) / 60000;
     }
-    if (hours <= 0) continue;
+    const hours = minutes / 60.0;
+    if (minutes < 1) continue; // sub-minute "visits" are taps, not care
 
     const amount = rateType === 'hourly' ? hours * rate : rate;
     invoiceTotal += amount;

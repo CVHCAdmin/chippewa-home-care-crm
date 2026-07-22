@@ -107,8 +107,7 @@ const ClientsManagement = ({ token }) => {
   const [selectedClient, setSelectedClient] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [bulkAction, setBulkAction] = useState(null); // 'activate' | 'deactivate' | 'assign-payer'
-  const [bulkPayerId, setBulkPayerId] = useState('');
+  const [bulkAction, setBulkAction] = useState(null); // 'activate' | 'deactivate'
   const [bulkBusy, setBulkBusy] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [bulkImportRows, setBulkImportRows] = useState([]);
@@ -556,8 +555,8 @@ const ClientsManagement = ({ token }) => {
                     </select>
                   </div>
                   <div className="form-group">
-                    <label>Care Type</label>
-                    <select value={formData.careTypeId} onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}>
+                    <label>Care Type *</label>
+                    <select value={formData.careTypeId} onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })} required>
                       <option value="">Select care type...</option>
                       {careTypes.map(ct => (<option key={ct.id} value={ct.id}>{ct.name}</option>))}
                     </select>
@@ -574,8 +573,8 @@ const ClientsManagement = ({ token }) => {
               ) : (
                 <>
                   <div className="form-group">
-                    <label>Care Type</label>
-                    <select value={formData.careTypeId} onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}>
+                    <label>Care Type *</label>
+                    <select value={formData.careTypeId} onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })} required>
                       <option value="">Select care type...</option>
                       {careTypes.map(ct => (<option key={ct.id} value={ct.id}>{ct.name}</option>))}
                     </select>
@@ -698,10 +697,10 @@ const ClientsManagement = ({ token }) => {
                 style={{ padding: '0.35rem 0.75rem', background: '#DC2626', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
                 ✕ Deactivate
               </button>
-              <button onClick={() => { setBulkPayerId(''); setBulkAction('assign-payer'); }}
-                style={{ padding: '0.35rem 0.75rem', background: '#6366F1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
-                🏥 Assign Payer
-              </button>
+              {/* Bulk "Assign Payer" removed 2026-07-22: it sent a partial body to the
+                  full-row PUT, nulling ~25 unguarded columns per client (proven in
+                  audits/test_bulk_assign_payer_dataloss.js), and payer assignment is
+                  per-client work anyway — use the Edit modal's Billing tab. */}
               <button onClick={() => setSelectedIds([])} style={{ padding: '0.35rem 0.75rem', background: 'none', border: '1px solid #D1D5DB', borderRadius: 6, cursor: 'pointer', fontSize: '0.82rem', color: '#6B7280' }}>
                 Clear
               </button>
@@ -815,31 +814,22 @@ const ClientsManagement = ({ token }) => {
         </div>
       )}
 
-      {/* Bulk action modal — activate, deactivate, or assign payer */}
+      {/* Bulk action modal — activate / deactivate (uses the dedicated status
+          endpoint; the old assign-payer path through the full-row PUT wiped
+          unsent columns and was removed) */}
       {bulkAction && (() => {
         const selected = clients.filter(c => selectedIds.includes(c.id));
-        const isActDeact = bulkAction === 'activate' || bulkAction === 'deactivate';
-        const verb = bulkAction === 'activate' ? 'Activate' : bulkAction === 'deactivate' ? 'Deactivate' : 'Assign payer to';
+        const verb = bulkAction === 'activate' ? 'Activate' : 'Deactivate';
         const apply = async () => {
-          if (bulkAction === 'assign-payer' && !bulkPayerId) { alert('Pick a payer'); return; }
           setBulkBusy(true);
           let succ = 0, fail = 0;
           for (const c of selected) {
             try {
-              let r;
-              if (bulkAction === 'activate' || bulkAction === 'deactivate') {
-                r = await fetch(`${API_BASE_URL}/api/clients/${c.id}/status`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                  body: JSON.stringify({ isActive: bulkAction === 'activate' }),
-                });
-              } else {
-                r = await fetch(`${API_BASE_URL}/api/clients/${c.id}`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                  body: JSON.stringify({ referralSourceId: bulkPayerId, isPrivatePay: false }),
-                });
-              }
+              const r = await fetch(`${API_BASE_URL}/api/clients/${c.id}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ isActive: bulkAction === 'activate' }),
+              });
               if (r.ok) succ++; else fail++;
             } catch { fail++; }
           }
@@ -853,24 +843,13 @@ const ClientsManagement = ({ token }) => {
           <div className="modal active" onClick={() => !bulkBusy && setBulkAction(null)}>
             <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
               <h3 style={{ margin: 0 }}>{verb} {selected.length} client{selected.length !== 1 ? 's' : ''}?</h3>
-              {bulkAction === 'assign-payer' && (
-                <div className="form-group" style={{ marginTop: '0.75rem' }}>
-                  <label>Payer / Referral Source</label>
-                  <select value={bulkPayerId} onChange={(e) => setBulkPayerId(e.target.value)}>
-                    <option value="">Select…</option>
-                    {referralSources.filter(rs => rs.is_active !== false).map(rs => (
-                      <option key={rs.id} value={rs.id}>{rs.name}{rs.type ? ` (${rs.type})` : ''}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
               <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 6, marginTop: '0.5rem', padding: '0.5rem', fontSize: '0.85rem' }}>
                 {selected.map(c => <div key={c.id}>{c.first_name} {c.last_name}</div>)}
               </div>
               <div className="modal-actions" style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" disabled={bulkBusy} onClick={() => setBulkAction(null)}>Cancel</button>
-                <button className="btn btn-primary" disabled={bulkBusy || (bulkAction === 'assign-payer' && !bulkPayerId)} onClick={apply}>
-                  {bulkBusy ? 'Applying…' : (isActDeact ? `${verb} ${selected.length}` : `Assign to ${selected.length}`)}
+                <button className="btn btn-primary" disabled={bulkBusy} onClick={apply}>
+                  {bulkBusy ? 'Applying…' : `${verb} ${selected.length}`}
                 </button>
               </div>
             </div>

@@ -133,6 +133,23 @@ router.post('/', verifyToken, async (req, res) => {
       effDate = (effectiveDate && effectiveDate >= today) ? effectiveDate : today;
     }
 
+    // One-time duplicate guard: the v53 unique index only covers recurring rows
+    // (day_of_week IS NOT NULL), so a double-submit or retried request could insert
+    // an identical one-time shift twice — each occurrence bills. Return the existing
+    // row instead, same shape as the idempotent clock-in.
+    if (!isRecurring && date) {
+      const existing = await db.query(
+        `SELECT * FROM schedules
+          WHERE is_active=true AND day_of_week IS NULL
+            AND caregiver_id=$1 AND client_id=$2 AND date=$3::date
+            AND start_time=$4 AND end_time=$5
+          LIMIT 1`,
+        [caregiverId, clientId, date, startTime, endTime]);
+      if (existing.rows.length > 0) {
+        return res.status(200).json({ ...existing.rows[0], duplicate: true, authWarnings: authCheck.warnings });
+      }
+    }
+
     const scheduleId = uuidv4();
     const result = await db.query(
       `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, effective_date, is_training)

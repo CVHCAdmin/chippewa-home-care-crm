@@ -588,10 +588,11 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                       </select>
                     </div>
                     <div className="form-group">
-                      <label>Care Type</label>
+                      <label>Care Type *</label>
                       <select
                         value={formData.careTypeId}
                         onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
+                        required
                       >
                         <option value="">Select care type...</option>
                         {careTypes.map(ct => (
@@ -601,7 +602,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                     </div>
                   </div>
                   <div className="alert alert-info">
-                    <strong>Rate:</strong> Billing rate is determined by the Referral Source + Care Type combination. 
+                    <strong>Rate:</strong> Billing rate is determined by the Referral Source + Care Type combination.
                     Manage rates in the Billing Dashboard.
                   </div>
                 </>
@@ -610,10 +611,11 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                   <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Private Pay Rate</h4>
                   <div className="form-grid-2">
                     <div className="form-group">
-                      <label>Care Type</label>
+                      <label>Care Type *</label>
                       <select
                         value={formData.careTypeId}
                         onChange={(e) => setFormData({ ...formData, careTypeId: e.target.value })}
+                        required
                       >
                         <option value="">Select care type...</option>
                         {careTypes.map(ct => (

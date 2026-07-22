@@ -665,6 +665,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   }, [location]); // only restart interval when location first becomes available
 
   const [clockingIn, setClockingIn] = useState(false);
+  // Clock-out takes seconds (GPS snapshot + request) with no visual change — people
+  // think the tap didn't register and tap again. Show a working state immediately.
+  const [clockingOut, setClockingOut] = useState(false);
   const [gpsRetry, setGpsRetry] = useState(null); // { message, retryFn } when GPS hard-blocks a clock action
 
   // Robust GPS acquisition for clock-in/out. Tries in order:
@@ -802,6 +805,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     // Guard: if the session went away (stale modal, reload, re-login), don't throw
     // on activeSession.id below — close the modal cleanly instead of trapping the user.
     if (!activeSession?.id) { toast('No active session — reopen and try again.', 'error'); setShowNoteModal(false); return; }
+    if (clockingOut) return; // ignore re-taps while the first one is in flight
+    setClockingOut(true);
     try {
       await impact('heavy'); // strong haptic for clock out
 
@@ -873,6 +878,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       await hapticNotify('error');
       toast('Failed to clock out: ' + error.message, 'error');
       setShowNoteModal(false); // never trap the caregiver in the notes modal on error
+    } finally {
+      setClockingOut(false);
     }
   };
 
@@ -2170,8 +2177,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             </div>
 
             <div className="form-actions">
-              <button className="btn btn-secondary" onClick={() => { setShowNoteModal(false); setNoteError(''); }}>Cancel</button>
-              <button className="btn btn-primary" onClick={completeClockOut}>Clock Out</button>
+              <button className="btn btn-secondary" disabled={clockingOut} onClick={() => { setShowNoteModal(false); setNoteError(''); }}>Cancel</button>
+              <button className="btn btn-primary" disabled={clockingOut} onClick={completeClockOut}
+                style={clockingOut ? { opacity: 0.7, cursor: 'wait' } : undefined}>
+                {clockingOut ? '⏳ Clocking Out...' : 'Clock Out'}
+              </button>
             </div>
           </div>
         </div>

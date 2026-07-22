@@ -551,6 +551,21 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
     }
 
     // ── Standard single shift ──
+    // One-time duplicate guard (v53's unique index only covers recurring rows):
+    // a double-submit / retry of the same one-time shift returns the existing row
+    // instead of inserting a billable twin.
+    if (dayOfWeek == null && date) {
+      const existing = await db.query(
+        `SELECT * FROM schedules
+          WHERE is_active=true AND day_of_week IS NULL
+            AND caregiver_id=$1 AND client_id=$2 AND date=$3::date
+            AND start_time=$4 AND end_time=$5
+          LIMIT 1`,
+        [caregiverId, clientId, date, startTime, endTime]);
+      if (existing.rows.length > 0) {
+        return res.status(200).json({ ...existing.rows[0], duplicate: true, effectiveDateClamped, effectiveDate });
+      }
+    }
     const id = uuidv4();
     const result = await db.query(
       `INSERT INTO schedules (id, caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, frequency, effective_date, anchor_date, is_training)
