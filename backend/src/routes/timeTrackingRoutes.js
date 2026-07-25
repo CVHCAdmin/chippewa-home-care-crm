@@ -206,6 +206,21 @@ router.get('/', verifyToken, async (req, res) => {
 router.post('/clock-in', verifyToken, async (req, res) => {
   try {
     const { clientId, latitude, longitude, scheduleId, autoTransition } = req.body;
+
+    // Auto-transition is disabled server-side (July 2026). The app fired it purely on
+    // the clock — it never checked that the caregiver was actually AT the next client —
+    // so it closed the previous entry and opened one for the next client while the
+    // caregiver was still in the previous client's home. Their clock-out note then
+    // landed on the wrong client's record, which the client portal shows to that
+    // client's family. The frozen APK still posts these, so refuse them here, BEFORE
+    // the open entry is auto-closed: the caregiver stays clocked in and clocks into
+    // the next client manually on arrival.
+    if (autoTransition) {
+      return res.status(409).json({
+        error: 'Automatic shift transition is disabled — clock out, then clock in for your next client when you arrive.',
+        code: 'auto_transition_disabled',
+      });
+    }
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
     let hasLiveOccurrenceNow = false;
@@ -294,7 +309,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
           updated_at = NOW()
          WHERE id = $4`,
         [durationMinutes, discrepancyMinutes, billableMinutes, openEntry.id,
-          autoTransition ? '(Auto-transition: schedule shift change)' : '(Auto-closed: caregiver clocked into new client)',
+          '(Auto-closed: caregiver clocked into new client)',
           needsApproval, approvalReason]
       );
       await auditLog(req.user.id, 'UPDATE', 'time_entries', openEntry.id, null, { auto_closed: true, duration_minutes: durationMinutes });
@@ -357,10 +372,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     //
     // A MANUAL clock-in is never blocked: the caregiver may have gone to the visit anyway,
     // and that entry correctly surfaces as unscheduled for admin review.
-    // autoTransition is gated the same way: the app picks the "next" shift from
-    // phone-side schedule data (stale on the frozen APK), so a cancelled/changed
-    // shift could still trigger an automatic switch. Only a live occurrence counts.
-    if ((req.body.autoClockIn || req.body.autoTransition) && !hasLiveOccurrenceNow) {
+    if (req.body.autoClockIn && !hasLiveOccurrenceNow) {
       return res.status(409).json({
         error: 'No active scheduled visit right now — automatic clock-in skipped. Clock in manually if you are on site.',
         code: 'no_active_occurrence',
