@@ -822,8 +822,30 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     }
   };
 
+  // Clock-out GPS prefetch: the at-tap snapshot is capped at ~6s and only tries a
+  // coarse fix, which after hours stationary indoors misses essentially always
+  // (July 2026 audit: 0 of 116 clock-out requests carried coordinates). Starting a
+  // high-accuracy fix the moment the notes modal opens gives GPS the 30-60s the
+  // caregiver spends typing the note — without the confirm button ever waiting.
+  const clockOutFixRef = useRef(null);
+  const freshClockOutFix = () => {
+    const p = clockOutFixRef.current;
+    return p && Date.now() - p.at < 300000 ? p : null; // same 5-min freshness rule as the watcher cache
+  };
+  const prefetchClockOutFix = () => {
+    clockOutFixRef.current = null;
+    getCurrentPositionOnce({ highAccuracy: true, timeout: 45000, maximumAge: 60000 })
+      .then(p => {
+        if (p?.latitude && p?.longitude) {
+          clockOutFixRef.current = { latitude: p.latitude, longitude: p.longitude, at: Date.now() };
+        }
+      })
+      .catch(() => { /* best-effort — the at-tap snapshot still runs at confirm */ });
+  };
+
   const handleClockOut = () => {
     if (!activeSession) return toast('No active session.');
+    prefetchClockOutFix(); // resolves in the background while the note is typed
     setShowNoteModal(true);
   };
 
@@ -840,12 +862,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = null;
       let lng = null;
       if (!skipGps) {
-        // Same best-effort snapshot as clock-in — never strand a caregiver waiting
-        // on GPS. Grab a fix if we can (hard-capped); otherwise clock out anyway
-        // with no location and notify admins for EVV reconciliation.
-        const snap = await getLocationSnapshot();
-        lat = snap.latitude; lng = snap.longitude;
-        if (!lat || !lng) reportGpsFailure('clock-out', snap.error, activeSession?.client_id || selectedClient);
+        // Prefer the fix prefetched at modal-open; fall back to the same capped
+        // best-effort snapshot as clock-in — never strand a caregiver waiting on
+        // GPS. Check the prefetch once more after the snapshot in case it landed
+        // during those ~6 seconds. Otherwise clock out anyway with no location
+        // and notify admins for EVV reconciliation.
+        let fix = freshClockOutFix();
+        if (!fix) {
+          const snap = await getLocationSnapshot();
+          fix = (snap.latitude && snap.longitude)
+            ? { latitude: snap.latitude, longitude: snap.longitude }
+            : freshClockOutFix();
+          if (!fix) reportGpsFailure('clock-out', snap.error, activeSession?.client_id || selectedClient);
+        }
+        if (fix) { lat = fix.latitude; lng = fix.longitude; }
       }
 
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
@@ -895,6 +925,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       }
 
       await hapticNotify('success');
+      clockOutFixRef.current = null; // used (or stale) — never carry into a later clock-out
       setActiveSession(null);
       setSelectedClient('');
       setVisitNote('');

@@ -421,6 +421,16 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
     if (timeEntry.rows.length === 0) return res.status(404).json({ error: 'Time entry not found' });
     const entry = timeEntry.rows[0];
 
+    // Idempotent: offline-queue replays and stale-UI re-taps re-run this route on
+    // entries that are already closed — each hit reset end_time to NOW() (silently
+    // stretching the shift) and overwrote clock_out_location with whatever the
+    // replay carried, usually null (one caregiver logged 68 clock-out POSTs for 17
+    // shifts in a week). A completed entry is final here; changes go through the
+    // admin edit route.
+    if (entry.end_time) {
+      return res.status(200).json({ ...entry, already_complete: true });
+    }
+
     // VA clients require a visit note to clock out (VA documentation rule). Everyone else's
     // note stays optional. Enforced here on the server because the caregiver app is a frozen
     // APK — a client-side check wouldn't reach the phones already in the field. The app shows
