@@ -173,9 +173,11 @@ router.post('/create-payment-link', auth, requireStripe, async (req, res) => {
     // Stripe Payment Link has one fixed amount and can't price per method.
     const paymentLink = `${FRONTEND_URL}/pay/${invoiceId}`;
 
+    // Creating a shareable pay link is an explicit "send it out" action, so it
+    // also releases the invoice to the family portal (drafts hidden — v55).
     await db.query(`
       UPDATE invoices
-      SET stripe_payment_link = $1, updated_at = NOW()
+      SET stripe_payment_link = $1, sent_at = COALESCE(sent_at, NOW()), updated_at = NOW()
       WHERE id = $2
     `, [paymentLink, invoiceId]);
 

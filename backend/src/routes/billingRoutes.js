@@ -1156,6 +1156,27 @@ router.put('/invoices/:id/line-items', auth, async (req, res) => {
 // ==================== SEND INVOICE EMAIL ====================
 
 // Send invoice to client via email with Pay Now link
+// POST /api/billing/invoices/:id/release
+// Marks a reviewed invoice as released so the family portal shows it, without
+// sending any email — for clients who only use the portal. New invoices start
+// as drafts the portal cannot see (v55); emailing or creating a pay link also
+// releases automatically.
+router.post('/invoices/:id/release', auth, async (req, res) => {
+  try {
+    const r = await db.query(`
+      UPDATE invoices
+      SET sent_at = COALESCE(sent_at, NOW()), updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, sent_at
+    `, [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Invoice not found' });
+    res.json({ success: true, sent_at: r.rows[0].sent_at });
+  } catch (error) {
+    console.error('Error releasing invoice:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/invoices/:id/send-email', auth, async (req, res) => {
   try {
     const invoiceResult = await db.query(`
@@ -1217,10 +1238,11 @@ router.post('/invoices/:id/send-email', auth, async (req, res) => {
       return res.status(503).json({ error: 'Email service not configured on server.' });
     }
 
-    // Track that the invoice was emailed
+    // Track that the invoice was emailed; sent_at releases it to the family
+    // portal (drafts are hidden there until an explicit send/release — v55).
     await db.query(`
       UPDATE invoices
-      SET notes = COALESCE(notes, '') || $1, updated_at = NOW()
+      SET notes = COALESCE(notes, '') || $1, sent_at = COALESCE(sent_at, NOW()), updated_at = NOW()
       WHERE id = $2
     `, [`\nEmailed to ${recipientEmail} on ${new Date().toLocaleDateString()}`, req.params.id]);
 
@@ -1288,7 +1310,7 @@ router.post('/invoices/:id/send-reminder', auth, async (req, res) => {
     const label = daysOverdue > 0 ? `${daysOverdue}d overdue` : 'pre-due';
     await db.query(`
       UPDATE invoices
-      SET notes = COALESCE(notes, '') || $1, updated_at = NOW()
+      SET notes = COALESCE(notes, '') || $1, sent_at = COALESCE(sent_at, NOW()), updated_at = NOW()
       WHERE id = $2
     `, [`\nReminder sent to ${recipientEmail} on ${stamp} (${label})`, req.params.id]);
 

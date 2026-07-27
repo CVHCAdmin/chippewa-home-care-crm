@@ -518,6 +518,10 @@ router.get('/portal/invoices', clientAuth, async (req, res) => {
         ), '[]'::json) AS line_items
       FROM invoices i
       WHERE i.client_id = $1
+        -- Drafts stay invisible until the admin sends or releases the invoice
+        -- (v55). Invoices with a recorded payment always show — paid history
+        -- must never disappear from the family's view.
+        AND (i.sent_at IS NOT NULL OR i.payment_status IN ('paid', 'partial'))
       ORDER BY i.created_at DESC
       LIMIT 24
     `, [req.clientId]);

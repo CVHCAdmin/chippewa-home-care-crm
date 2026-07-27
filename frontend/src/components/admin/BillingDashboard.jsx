@@ -578,10 +578,35 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Failed to send');
       toast(`Invoice emailed to ${data.sentTo}`, 'success');
+      // Emailing releases the draft to the family portal — reflect it immediately
+      setSelectedInvoice(prev => prev && prev.id === invoice.id ? { ...prev, sent_at: prev.sent_at || new Date().toISOString() } : prev);
+      loadData();
     } catch (error) {
       toast('Failed to send: ' + error.message, 'error');
     } finally {
       setSendingInvoiceEmail(false);
+    }
+  };
+
+  // Invoices start as drafts the family portal cannot see. Emailing or creating
+  // a pay link releases them automatically; this button covers portal-only
+  // clients where nothing is emailed.
+  const handleReleaseToPortal = async (invoice) => {
+    if (!invoice?.id) return;
+    const ok = await confirm(`Make invoice #${invoice.invoice_number} visible in the family portal?`);
+    if (!ok) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoice.id}/release`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to release');
+      toast('Invoice released to family portal', 'success');
+      setSelectedInvoice(prev => prev && prev.id === invoice.id ? { ...prev, sent_at: data.sent_at } : prev);
+      loadData();
+    } catch (error) {
+      toast('Failed to release: ' + error.message, 'error');
     }
   };
 
@@ -1189,6 +1214,12 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                       <span className={`badge ${invoice.payment_status === 'paid' ? 'badge-success' : invoice.payment_status === 'partial' ? 'badge-warning' : 'badge-danger'}`}>
                         {invoice.payment_status?.toUpperCase()}
                       </span>
+                      {!invoice.sent_at && (
+                        <span className="badge badge-secondary" style={{ marginLeft: 4 }}
+                              title="Not visible in the family portal until you send or release it">
+                          🔒 DRAFT
+                        </span>
+                      )}
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: '0.25rem' }}>
@@ -2001,8 +2032,21 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               </div>
             </div>
 
+            {/* Draft / released state (screen only) */}
+            <div className="no-print" style={{ marginTop: '16px', padding: '10px 14px', borderRadius: '8px', fontSize: '0.9rem',
+              background: selectedInvoice.sent_at ? '#F0FDF4' : '#FFFBEB',
+              border: `1px solid ${selectedInvoice.sent_at ? '#BBF7D0' : '#FDE68A'}`,
+              color: selectedInvoice.sent_at ? '#166534' : '#92400E' }}>
+              {selectedInvoice.sent_at
+                ? `✓ Sent — visible in the family portal since ${formatDate(selectedInvoice.sent_at)}`
+                : '🔒 DRAFT — the family cannot see this invoice until you send it, create a pay link, or release it to the portal.'}
+            </div>
+
             {/* Action Buttons (screen only) */}
             <div className="modal-actions no-print" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #eee' }}>
+              {!selectedInvoice.sent_at && (
+                <button className="btn btn-success" onClick={() => handleReleaseToPortal(selectedInvoice)}>👁️ Release to Portal</button>
+              )}
               {selectedInvoice.payment_status !== 'paid' && (
                 <>
                   <button className="btn btn-secondary" onClick={() => openLineItemEditor(selectedInvoice)}>✏️ Edit Line Items</button>
