@@ -11,30 +11,38 @@ const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 router.get('/revenue', auth, async (req, res) => {
   const { period = 'month', months = 3 } = req.query;
   try {
-    // Actual billed revenue last N months
+    // Actual billed revenue last N months. Date matches reports.js:
+    // service_date with service_date_from fallback, so a claim shows up in
+    // both Forecast and Reports or in neither.
     const actual = await db.query(`
       SELECT
-        DATE_TRUNC('month', service_date_from) AS period,
+        DATE_TRUNC('month', COALESCE(service_date, service_date_from)) AS period,
         SUM(charge_amount) AS billed,
         SUM(paid_amount) AS collected,
         COUNT(*) AS claim_count
       FROM claims
-      WHERE service_date_from >= CURRENT_DATE - ($1 * INTERVAL '1 month')
+      WHERE COALESCE(service_date, service_date_from) >= CURRENT_DATE - ($1 * INTERVAL '1 month')
         AND status NOT IN ('voided','rejected')
       GROUP BY 1 ORDER BY 1
     `, [months]);
 
-    // Projected revenue from active authorizations + scheduled hours
+    // Projected revenue from active authorizations + scheduled hours.
+    // Units are converted per unit_type (a '15min' auth is units/4 hours —
+    // treating those as hours overstated projections 4x), and the auth's own
+    // contracted hourly_rate is used when on file; $18.50 only as fallback.
     const projected = await db.query(`
       SELECT
         a.client_id,
         c.first_name || ' ' || c.last_name AS client_name,
         a.service_type,
-        COALESCE(a.authorized_units, 0) AS authorized_hours,
-        COALESCE(a.used_units, 0) AS used_hours,
-        (COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) AS remaining_hours,
-        18.50 AS hourly_rate,
-        ((COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) * 18.50) AS projected_remaining_revenue,
+        CASE WHEN a.unit_type = '15min' THEN COALESCE(a.authorized_units, 0) / 4.0 ELSE COALESCE(a.authorized_units, 0) END AS authorized_hours,
+        CASE WHEN a.unit_type = '15min' THEN COALESCE(a.used_units, 0) / 4.0 ELSE COALESCE(a.used_units, 0) END AS used_hours,
+        CASE WHEN a.unit_type = '15min' THEN (COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) / 4.0
+             ELSE (COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) END AS remaining_hours,
+        COALESCE(a.hourly_rate, 18.50) AS hourly_rate,
+        (CASE WHEN a.unit_type = '15min' THEN (COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) / 4.0
+              ELSE (COALESCE(a.authorized_units, 0) - COALESCE(a.used_units, 0)) END
+         * COALESCE(a.hourly_rate, 18.50)) AS projected_remaining_revenue,
         a.end_date
       FROM authorizations a
       JOIN clients c ON a.client_id = c.id
@@ -75,19 +83,21 @@ router.get('/revenue', auth, async (req, res) => {
         AVG(cl.charge_amount) AS avg_claim
       FROM claims cl
       JOIN clients c ON cl.client_id = c.id
-      WHERE cl.service_date_from >= CURRENT_DATE - INTERVAL '90 days'
+      WHERE COALESCE(cl.service_date, cl.service_date_from) >= CURRENT_DATE - INTERVAL '90 days'
         AND cl.status NOT IN ('voided','rejected')
       GROUP BY 1,2 ORDER BY 3 DESC LIMIT 10
     `);
 
-    // Auth utilization summary
+    // Auth utilization summary — same unit_type conversion and per-auth rate
+    // as the projected list above (utilization % is unit-agnostic).
     const authSummary = await db.query(`
       SELECT
         COUNT(*) AS total_active_auths,
-        SUM(COALESCE(authorized_units, 0)) AS total_auth_hours,
-        SUM(COALESCE(used_units, 0)) AS total_used_hours,
+        SUM(CASE WHEN unit_type = '15min' THEN COALESCE(authorized_units, 0) / 4.0 ELSE COALESCE(authorized_units, 0) END) AS total_auth_hours,
+        SUM(CASE WHEN unit_type = '15min' THEN COALESCE(used_units, 0) / 4.0 ELSE COALESCE(used_units, 0) END) AS total_used_hours,
         ROUND(AVG(COALESCE(used_units,0)::numeric / NULLIF(COALESCE(authorized_units,0),0) * 100), 1) AS avg_utilization_pct,
-        SUM((COALESCE(authorized_units,0) - COALESCE(used_units,0)) * 18.50) AS total_projected_remaining
+        SUM((CASE WHEN unit_type = '15min' THEN (COALESCE(authorized_units,0) - COALESCE(used_units,0)) / 4.0
+                  ELSE (COALESCE(authorized_units,0) - COALESCE(used_units,0)) END) * COALESCE(hourly_rate, 18.50)) AS total_projected_remaining
       FROM authorizations
       WHERE status = 'active' AND end_date >= CURRENT_DATE
     `);

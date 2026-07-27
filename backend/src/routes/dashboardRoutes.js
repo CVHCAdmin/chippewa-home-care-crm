@@ -30,8 +30,11 @@ router.get('/summary', verifyToken, requireAdmin, async (req, res) => {
                   FROM invoice_payments
                  WHERE payment_date >= date_trunc('month', CURRENT_DATE)
                    AND payment_date <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'`),
-      // Caregivers currently clocked in (open time entry today)
-      db.query(`SELECT COUNT(DISTINCT caregiver_id) as count FROM time_entries WHERE end_time IS NULL AND DATE(start_time) = CURRENT_DATE`),
+      // Caregivers currently clocked in (open time entry today, Chicago day —
+      // the bare CURRENT_DATE comparison used the UTC date and missed evening
+      // shifts after 6-7pm)
+      db.query(`SELECT COUNT(DISTINCT caregiver_id) as count FROM time_entries
+                 WHERE end_time IS NULL AND (start_time AT TIME ZONE 'America/Chicago')::date = $1::date`, [TODAY_CT]),
       // Shifts today. Counted off the shared engine so the number matches what payroll,
       // billing and the calendar think is happening today. The old count checked neither
       // end_date nor cancellations, so it included visits the office had cancelled and
@@ -94,14 +97,17 @@ router.get('/action-items', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/dashboard/referrals
 router.get('/referrals', verifyToken, requireAdmin, async (req, res) => {
   try {
+    // Client count and invoice revenue aggregated separately: joining both in
+    // one query multiplied referral_count by each client's invoice count.
     const result = await db.query(
-      `SELECT rs.name, rs.type, COUNT(c.id) as referral_count,
-        SUM(CASE WHEN i.payment_status = 'paid' THEN i.total ELSE 0 END) as total_revenue
+      `SELECT rs.name, rs.type,
+        (SELECT COUNT(*) FROM clients c WHERE c.referral_source_id = rs.id) as referral_count,
+        COALESCE((SELECT SUM(i.total) FROM invoices i
+                   JOIN clients c2 ON c2.id = i.client_id
+                  WHERE c2.referral_source_id = rs.id AND i.payment_status = 'paid'), 0) as total_revenue
        FROM referral_sources rs
-       LEFT JOIN clients c ON rs.id = c.referral_source_id
-       LEFT JOIN invoices i ON c.id = i.client_id
        WHERE rs.is_active = true
-       GROUP BY rs.id, rs.name, rs.type ORDER BY referral_count DESC`
+       ORDER BY referral_count DESC`
     );
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -110,15 +116,27 @@ router.get('/referrals', verifyToken, requireAdmin, async (req, res) => {
 // GET /api/dashboard/caregiver-hours
 router.get('/caregiver-hours', verifyToken, requireAdmin, async (req, res) => {
   try {
+    // Hours and ratings aggregated separately: joining both tables off the
+    // same user row multiplied SUM(duration) by the caregiver's rating count.
+    // Capped minutes (not raw duration — missed clock-outs inflate raw), and
+    // real division (integer /60 truncated to whole hours).
     const result = await db.query(
-      `SELECT u.id, u.first_name, u.last_name, COUNT(te.id) as shifts,
-        COALESCE(SUM(te.duration_minutes)::integer/60, 0) as total_hours,
-        COALESCE(AVG(pr.satisfaction_score), 0) as avg_satisfaction
+      `SELECT u.id, u.first_name, u.last_name,
+        COALESCE(te.shifts, 0) as shifts,
+        COALESCE(te.total_hours, 0) as total_hours,
+        COALESCE(pr.avg_satisfaction, 0) as avg_satisfaction
        FROM users u
-       LEFT JOIN time_entries te ON u.id = te.caregiver_id AND te.end_time IS NOT NULL
-       LEFT JOIN performance_ratings pr ON u.id = pr.caregiver_id
+       LEFT JOIN (
+         SELECT caregiver_id, COUNT(*) as shifts,
+                ROUND(SUM(COALESCE(billable_minutes, duration_minutes)) / 60.0, 1) as total_hours
+         FROM time_entries WHERE end_time IS NOT NULL GROUP BY caregiver_id
+       ) te ON te.caregiver_id = u.id
+       LEFT JOIN (
+         SELECT caregiver_id, AVG(satisfaction_score) as avg_satisfaction
+         FROM performance_ratings GROUP BY caregiver_id
+       ) pr ON pr.caregiver_id = u.id
        WHERE u.role = 'caregiver' AND u.is_active = true
-       GROUP BY u.id, u.first_name, u.last_name ORDER BY total_hours DESC NULLS LAST`
+       ORDER BY total_hours DESC NULLS LAST`
     );
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -236,25 +254,28 @@ router.get('/caregiver-patterns/:caregiverId', verifyToken, requireAdmin, async 
         GROUP BY day_of_week ORDER BY day_of_week
       `, [caregiverId, months]),
 
-      // Late clock-ins (>15 min after scheduled start) by day of week
+      // Late clock-ins (>15 min after scheduled start) by day of week.
+      // te.start_time::time in a UTC session is the UTC wall clock — comparing
+      // it to the Chicago schedule time made nearly every shift read "late"
+      // and bucketed evening shifts under the next weekday. Chicago throughout.
       db.query(`
-        SELECT EXTRACT(DOW FROM DATE(te.start_time))::int AS day_of_week, COUNT(*) AS count,
-          ROUND(AVG(EXTRACT(EPOCH FROM (te.start_time::time - s.start_time)) / 60)) AS avg_minutes_late
+        SELECT EXTRACT(DOW FROM (te.start_time AT TIME ZONE 'America/Chicago')::date)::int AS day_of_week, COUNT(*) AS count,
+          ROUND(AVG(EXTRACT(EPOCH FROM ((te.start_time AT TIME ZONE 'America/Chicago')::time - s.start_time)) / 60)) AS avg_minutes_late
         FROM time_entries te
         JOIN schedules s ON te.schedule_id = s.id
         WHERE te.caregiver_id = $1
           AND te.is_complete = true
-          AND DATE(te.start_time) >= CURRENT_DATE - ($2 || ' months')::interval
-          AND (te.start_time::time - s.start_time) > INTERVAL '15 minutes'
+          AND (te.start_time AT TIME ZONE 'America/Chicago')::date >= CURRENT_DATE - ($2 || ' months')::interval
+          AND ((te.start_time AT TIME ZONE 'America/Chicago')::time - s.start_time) > INTERVAL '15 minutes'
         GROUP BY day_of_week ORDER BY day_of_week
       `, [caregiverId, months]),
 
-      // Total shifts by day of week (for percentages)
+      // Total shifts by day of week (for percentages) — Chicago weekdays
       db.query(`
-        SELECT EXTRACT(DOW FROM DATE(te.start_time))::int AS day_of_week, COUNT(*) AS count
+        SELECT EXTRACT(DOW FROM (te.start_time AT TIME ZONE 'America/Chicago')::date)::int AS day_of_week, COUNT(*) AS count
         FROM time_entries te
         WHERE te.caregiver_id = $1 AND te.is_complete = true
-          AND DATE(te.start_time) >= CURRENT_DATE - ($2 || ' months')::interval
+          AND (te.start_time AT TIME ZONE 'America/Chicago')::date >= CURRENT_DATE - ($2 || ' months')::interval
         GROUP BY day_of_week ORDER BY day_of_week
       `, [caregiverId, months]),
     ]);

@@ -52,54 +52,68 @@ router.post('/overview', auth, async (req, res) => {
       FROM occ WHERE 1=1 ${scheduleFilters.replace(/\bs\./g, 'occ.')}
     `, params);
 
-    // Average satisfaction from performance ratings
+    // Average satisfaction from performance ratings (Chicago calendar days:
+    // the DB session is UTC, so a bare timestamptz >= date compares against
+    // 7pm the prior Chicago evening)
     const satisfactionQuery = await db.query(`
       SELECT COALESCE(AVG(pr.satisfaction_score), 0) as "avgSatisfaction"
       FROM performance_ratings pr
-      WHERE pr.created_at >= $1 AND pr.created_at <= $2
+      WHERE (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
-    // Revenue from invoices
+    // Revenue billed in the period: invoices + claims, matching the Revenue tab
+    // so adjacent tabs agree. Claims created FROM an invoice (invoice_id set)
+    // are excluded because the invoice already carries that amount.
     const revenueQuery = await db.query(`
-      SELECT COALESCE(SUM(i.total), 0) as "totalRevenue"
-      FROM invoices i
-      WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
-    `, [startDate, endDate]);
+      SELECT COALESCE(SUM(billed), 0) as "totalRevenue" FROM (
+        SELECT i.total as billed FROM invoices i
+        WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
+          AND ($3::uuid IS NULL OR i.client_id = $3)
+        UNION ALL
+        SELECT cl.charge_amount FROM claims cl
+        WHERE COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
+          AND COALESCE(cl.status,'') <> 'voided' AND cl.invoice_id IS NULL
+          AND ($3::uuid IS NULL OR cl.client_id = $3)
+      ) u
+    `, [startDate, endDate, clientId || null]);
 
-    // Top caregivers - by SCHEDULED hours with clients
+    // Top caregivers - by SCHEDULED hours with clients. Honors the caregiver /
+    // client filters so this panel agrees with the summary tiles above it.
     const topCaregiversQuery = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT
         u.id, u.first_name, u.last_name,
-        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) as total_hours,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id AND ($4::uuid IS NULL OR o.client_id = $4)), 0) as total_hours,
         -- Labor COST (scheduled hours x pay rate), not revenue. Renamed so the UI
         -- stops mislabeling what we pay the caregiver as "revenue".
-        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id), 0) * COALESCE(u.default_pay_rate, 0) as est_labor_cost,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.caregiver_id = u.id AND ($4::uuid IS NULL OR o.client_id = $4)), 0) * COALESCE(u.default_pay_rate, 0) as est_labor_cost,
         COALESCE(AVG(pr.satisfaction_score), 0) as avg_satisfaction,
-        COALESCE((SELECT COUNT(DISTINCT o.client_id) FROM occ o WHERE o.caregiver_id = u.id), 0) as clients_served
+        COALESCE((SELECT COUNT(DISTINCT o.client_id) FROM occ o WHERE o.caregiver_id = u.id AND ($4::uuid IS NULL OR o.client_id = $4)), 0) as clients_served
       FROM users u
       LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id
-        AND pr.created_at >= $1 AND pr.created_at <= $2
+        AND (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
       WHERE u.role = 'caregiver' AND u.is_active = true
+        AND ($3::uuid IS NULL OR u.id = $3)
       GROUP BY u.id, u.first_name, u.last_name, u.default_pay_rate
       ORDER BY total_hours DESC
       LIMIT 10
-    `, [startDate, endDate]);
+    `, [startDate, endDate, caregiverId || null, clientId || null]);
 
     // Top clients — scheduled hours + REAL invoiced revenue (was a fake $25/hr estimate)
     const topClientsQuery = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT
         c.id, c.first_name, c.last_name, c.service_type,
-        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.client_id = c.id), 0) as total_hours,
+        COALESCE((SELECT SUM(o.hours) FROM occ o WHERE o.client_id = c.id AND ($4::uuid IS NULL OR o.caregiver_id = $4)), 0) as total_hours,
         COALESCE((SELECT SUM(i.total) FROM invoices i WHERE i.client_id = c.id
                   AND i.billing_period_start >= $1 AND i.billing_period_end <= $2), 0) as revenue,
-        COALESCE((SELECT COUNT(DISTINCT o.caregiver_id) FROM occ o WHERE o.client_id = c.id), 0) as caregiver_count
+        COALESCE((SELECT COUNT(DISTINCT o.caregiver_id) FROM occ o WHERE o.client_id = c.id AND ($4::uuid IS NULL OR o.caregiver_id = $4)), 0) as caregiver_count
       FROM clients c
       WHERE c.is_active = true
+        AND ($3::uuid IS NULL OR c.id = $3)
       ORDER BY total_hours DESC
       LIMIT 10
-    `, [startDate, endDate]);
+    `, [startDate, endDate, clientId || null, caregiverId || null]);
 
     res.json({
       summary: {
@@ -137,18 +151,20 @@ router.post('/hours', auth, async (req, res) => {
       GROUP BY 1 ORDER BY week_start
     `, params);
 
-    // Hours by service type
+    // Hours by service type — same filters as hoursByWeek so the panels on this
+    // screen agree with each other when a caregiver/client is selected.
     const hoursByTypeQuery = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT COALESCE(c.service_type, 'unspecified') AS service_type, COALESCE(SUM(occ.hours), 0) AS hours
       FROM occ JOIN clients c ON c.id = occ.client_id
+      WHERE 1=1 ${occFilter}
       GROUP BY c.service_type ORDER BY hours DESC
-    `, [startDate, endDate]);
+    `, params);
 
     // Calculate total for percentages
     const totalHours = hoursByTypeQuery.rows.reduce((sum, row) => sum + parseFloat(row.hours || 0), 0);
 
-    // Caregiver breakdown — scheduled hours
+    // Caregiver breakdown — scheduled hours, same filters as the other panels
     const caregiverBreakdownQuery = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT u.id, u.first_name, u.last_name,
@@ -156,11 +172,11 @@ router.post('/hours', auth, async (req, res) => {
         COUNT(DISTINCT occ.client_id) AS client_count,
         COALESCE(AVG(occ.hours), 0) AS avg_shift_hours
       FROM users u JOIN occ ON occ.caregiver_id = u.id
-      WHERE u.role = 'caregiver' AND u.is_active = true
+      WHERE u.role = 'caregiver' AND u.is_active = true ${occFilter}
       GROUP BY u.id, u.first_name, u.last_name
       HAVING SUM(occ.hours) > 0
       ORDER BY total_hours DESC
-    `, [startDate, endDate]);
+    `, params);
 
     res.json({
       hoursByWeek: hoursByWeekQuery.rows,
@@ -200,7 +216,7 @@ router.post('/performance', auth, async (req, res) => {
         ) as incident_count
       FROM users u
       LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id
-        AND pr.created_at >= $1 AND pr.created_at <= $2
+        AND (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
       WHERE u.role = 'caregiver' AND u.is_active = true
         ${caregiverId ? 'AND u.id = $3' : ''}
       GROUP BY u.id, u.first_name, u.last_name
@@ -213,28 +229,33 @@ router.post('/performance', auth, async (req, res) => {
         pr.satisfaction_score as rating,
         COUNT(*) as count
       FROM performance_ratings pr
-      WHERE pr.created_at >= $1 AND pr.created_at <= $2
+      WHERE (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
       GROUP BY pr.satisfaction_score
       ORDER BY pr.satisfaction_score DESC
     `, [startDate, endDate]);
 
-    // Punctuality - from TIME_ENTRIES (actual clock-ins vs scheduled)
+    // Punctuality - from TIME_ENTRIES (actual clock-ins vs scheduled).
+    // te.start_time is timestamptz in a UTC session: a bare ::time renders the
+    // UTC wall clock, which reads 5-6h later than the Chicago schedule time and
+    // made every clock-in look late (on-time % was ~0 across the board).
+    // Convert to America/Chicago, and use Chicago day boundaries for the range.
     const punctualityQuery = await db.query(`
-      SELECT 
+      SELECT
         u.id,
         u.first_name,
         u.last_name,
         COUNT(te.id) as total_shifts,
-        COUNT(CASE WHEN te.start_time::time <= sch.start_time::time + INTERVAL '5 minutes' THEN 1 END) as on_time_count
+        COUNT(CASE WHEN (te.start_time AT TIME ZONE 'America/Chicago')::time <= sch.start_time::time + INTERVAL '5 minutes' THEN 1 END) as on_time_count
       FROM users u
       LEFT JOIN time_entries te ON te.caregiver_id = u.id
-        AND te.start_time >= $1 AND te.start_time <= ($2::date + interval '1 day')
+        AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+        AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
         AND te.end_time IS NOT NULL
       LEFT JOIN schedules sch ON te.schedule_id = sch.id
       WHERE u.role = 'caregiver' AND u.is_active = true
       GROUP BY u.id, u.first_name, u.last_name
       HAVING COUNT(te.id) > 0
-      ORDER BY (COUNT(CASE WHEN te.start_time::time <= sch.start_time::time + INTERVAL '5 minutes' THEN 1 END)::float / NULLIF(COUNT(te.id), 0)) DESC
+      ORDER BY (COUNT(CASE WHEN (te.start_time AT TIME ZONE 'America/Chicago')::time <= sch.start_time::time + INTERVAL '5 minutes' THEN 1 END)::float / NULLIF(COUNT(te.id), 0)) DESC
     `, [startDate, endDate]);
 
     res.json({
@@ -266,19 +287,19 @@ router.post('/satisfaction', auth, async (req, res) => {
         COUNT(CASE WHEN pr.satisfaction_score = 3 THEN 1 END) as neutral_count,
         COUNT(CASE WHEN pr.satisfaction_score < 3 THEN 1 END) as negative_count
       FROM performance_ratings pr
-      WHERE pr.created_at >= $1 AND pr.created_at <= $2
+      WHERE (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
         ${caregiverId ? 'AND pr.caregiver_id = $3' : ''}
     `, caregiverId ? [startDate, endDate, caregiverId] : [startDate, endDate]);
 
     // Satisfaction trend by week
     const trendQuery = await db.query(`
       SELECT 
-        DATE_TRUNC('week', pr.created_at) as week_start,
+        DATE_TRUNC('week', (pr.created_at AT TIME ZONE 'America/Chicago')) as week_start,
         COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
         COUNT(*) as count
       FROM performance_ratings pr
-      WHERE pr.created_at >= $1 AND pr.created_at <= $2
-      GROUP BY DATE_TRUNC('week', pr.created_at)
+      WHERE (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
+      GROUP BY DATE_TRUNC('week', (pr.created_at AT TIME ZONE 'America/Chicago'))
       ORDER BY week_start
     `, [startDate, endDate]);
 
@@ -292,7 +313,7 @@ router.post('/satisfaction', auth, async (req, res) => {
         COUNT(pr.id) as rating_count
       FROM clients c
       LEFT JOIN performance_ratings pr ON pr.client_id = c.id
-        AND pr.created_at >= $1 AND pr.created_at <= $2
+        AND (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
       WHERE c.is_active = true
       GROUP BY c.id, c.first_name, c.last_name
       HAVING COUNT(pr.id) > 0
@@ -313,7 +334,7 @@ router.post('/satisfaction', auth, async (req, res) => {
         END as theme,
         COUNT(*) as count
       FROM performance_ratings pr
-      WHERE pr.created_at >= $1 AND pr.created_at <= $2
+      WHERE (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
         AND pr.comments IS NOT NULL AND pr.comments != ''
       GROUP BY theme
       ORDER BY count DESC
@@ -354,18 +375,23 @@ router.post('/revenue', auth, async (req, res) => {
     const claimClientFilter = clientId ? 'AND cl.client_id = $3' : '';
     const p = clientId ? [startDate, endDate, clientId] : [startDate, endDate];
 
-    // Overall revenue — invoices
+    // Overall revenue — invoices. Outstanding is net of adjustments/write-offs
+    // so it matches the Billing Dashboard's balance math.
     const revenueQuery = await db.query(`
       SELECT
         COALESCE(SUM(i.total), 0) as total,
         COALESCE(SUM(i.amount_paid), 0) as collected,
-        COALESCE(SUM(i.total - COALESCE(i.amount_paid, 0)), 0) as outstanding,
+        COALESCE(SUM(i.total - COALESCE(i.amount_paid, 0) - COALESCE(i.amount_adjusted, 0)), 0) as outstanding,
         COUNT(i.id) as invoice_count
       FROM invoices i
       WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2 ${clientFilter}
     `, p);
 
-    // Overall revenue — claims (MCO/Medicaid/VA), excludes voided
+    // Overall revenue — claims (MCO/Medicaid/VA), excludes voided. Claims
+    // created FROM an invoice (invoice_id set) are excluded everywhere in this
+    // report: the invoice already carries that amount, so counting both would
+    // double it. Date: service_date with service_date_from fallback — the
+    // invoice->claim path populates only service_date_from.
     const claimsRevQuery = await db.query(`
       SELECT
         COALESCE(SUM(cl.charge_amount), 0) as total,
@@ -373,8 +399,8 @@ router.post('/revenue', auth, async (req, res) => {
         COALESCE(SUM(COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount, 0)), 0) as outstanding,
         COUNT(cl.id) as claim_count
       FROM claims cl
-      WHERE cl.service_date >= $1 AND cl.service_date <= $2
-        AND COALESCE(cl.status,'') <> 'voided' ${claimClientFilter}
+      WHERE COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
+        AND COALESCE(cl.status,'') <> 'voided' AND cl.invoice_id IS NULL ${claimClientFilter}
     `, p);
 
     // Scheduled hours for the period (context only — NOT billed hours)
@@ -404,8 +430,8 @@ router.post('/revenue', auth, async (req, res) => {
         SELECT COALESCE(c.service_type, 'unspecified') as service_type,
           cl.charge_amount as revenue, COALESCE(cl.paid_amount,0) as collected
         FROM claims cl JOIN clients c ON c.id = cl.client_id
-        WHERE cl.service_date >= $1 AND cl.service_date <= $2
-          AND COALESCE(cl.status,'') <> 'voided' ${claimClientFilter}
+        WHERE COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
+          AND COALESCE(cl.status,'') <> 'voided' AND cl.invoice_id IS NULL ${claimClientFilter}
       ) u
       GROUP BY service_type ORDER BY revenue DESC
     `, p);
@@ -427,8 +453,8 @@ router.post('/revenue', auth, async (req, res) => {
           cl.charge_amount as billed, COALESCE(cl.paid_amount,0) as collected
         FROM claims cl
         LEFT JOIN referral_sources rs ON rs.id = cl.payer_id
-        WHERE cl.service_date >= $1 AND cl.service_date <= $2
-          AND COALESCE(cl.status,'') <> 'voided' ${claimClientFilter}
+        WHERE COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
+          AND COALESCE(cl.status,'') <> 'voided' AND cl.invoice_id IS NULL ${claimClientFilter}
       ) u
       GROUP BY payer ORDER BY billed DESC
     `, p);
@@ -446,42 +472,49 @@ router.post('/revenue', auth, async (req, res) => {
         COALESCE(SUM(bal) FILTER (WHERE CURRENT_DATE - due > 90), 0) as d90_plus,
         COALESCE(SUM(bal), 0) as total_outstanding
       FROM (
-        SELECT (i.total - COALESCE(i.amount_paid, 0)) as bal,
+        -- Balance matches the Billing Dashboard: total - paid - ADJUSTED.
+        -- Ignoring amount_adjusted left written-off invoices in the 90+ bucket
+        -- forever while Billing showed them settled.
+        SELECT (i.total - COALESCE(i.amount_paid, 0) - COALESCE(i.amount_adjusted, 0)) as bal,
                COALESCE(i.payment_due_date, i.billing_period_end + 30) as due
         FROM invoices i
-        WHERE (i.total - COALESCE(i.amount_paid, 0)) > 0.005 ${agingInvFilter}
+        WHERE (i.total - COALESCE(i.amount_paid, 0) - COALESCE(i.amount_adjusted, 0)) > 0.005 ${agingInvFilter}
         UNION ALL
         SELECT (COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount, 0)) as bal,
-               (COALESCE(cl.submission_date, cl.service_date) + COALESCE(rs.expected_pay_days, 30)) as due
+               (COALESCE(cl.submission_date, cl.service_date, cl.service_date_from) + COALESCE(rs.expected_pay_days, 30)) as due
         FROM claims cl
         LEFT JOIN referral_sources rs ON rs.id = cl.payer_id
         WHERE (COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount, 0)) > 0.005
-          AND COALESCE(cl.status,'') NOT IN ('voided','draft') ${agingClaimFilter}
+          AND COALESCE(cl.status,'') NOT IN ('voided','draft')
+          AND cl.invoice_id IS NULL ${agingClaimFilter}
       ) t
     `, clientId ? [clientId] : []);
 
-    // Revenue by client — invoices + claims
+    // Revenue by client — invoices + claims; honors the clientId filter so the
+    // panel agrees with the tiles when one client is selected.
     const byClientQuery = await db.query(`
       SELECT id, first_name, last_name,
         COALESCE(SUM(revenue), 0) as revenue,
         COALESCE(SUM(outstanding), 0) as outstanding
       FROM (
         SELECT c.id, c.first_name, c.last_name,
-          i.total as revenue, (i.total - COALESCE(i.amount_paid,0)) as outstanding
+          i.total as revenue, (i.total - COALESCE(i.amount_paid,0) - COALESCE(i.amount_adjusted,0)) as outstanding
         FROM clients c JOIN invoices i ON i.client_id = c.id
           AND i.billing_period_start >= $1 AND i.billing_period_end <= $2
+        WHERE ($3::uuid IS NULL OR c.id = $3)
         UNION ALL
         SELECT c.id, c.first_name, c.last_name,
           cl.charge_amount as revenue, (COALESCE(cl.charge_amount,0) - COALESCE(cl.paid_amount,0)) as outstanding
         FROM clients c JOIN claims cl ON cl.client_id = c.id
-          AND cl.service_date >= $1 AND cl.service_date <= $2
-          AND COALESCE(cl.status,'') <> 'voided'
+          AND COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
+          AND COALESCE(cl.status,'') <> 'voided' AND cl.invoice_id IS NULL
+        WHERE ($3::uuid IS NULL OR c.id = $3)
       ) u
       GROUP BY id, first_name, last_name
       HAVING SUM(revenue) > 0
       ORDER BY revenue DESC
       LIMIT 15
-    `, [startDate, endDate]);
+    `, [startDate, endDate, clientId || null]);
 
     res.json({
       revenue: {
@@ -520,13 +553,15 @@ router.post('/:type/export', auth, async (req, res) => {
       const result = await db.query(`
         SELECT 
           u.first_name || ' ' || u.last_name as caregiver,
-          COALESCE(SUM(te.duration_minutes) / 60.0, 0) as actual_hours,
+          -- Capped/cleaned minutes, not raw duration: raw is inflated by every
+          -- missed clock-out. Chicago day boundaries (session is UTC).
+          COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 0) as actual_hours,
           COUNT(te.id) as shifts,
           COUNT(DISTINCT te.client_id) as unique_clients
         FROM users u
         LEFT JOIN time_entries te ON te.caregiver_id = u.id
-          AND te.start_time >= $1::timestamptz
-          AND te.start_time < ($2::date + INTERVAL '1 day')::timestamptz
+          AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+          AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
           AND te.is_complete = true
         WHERE u.role = 'caregiver'
         GROUP BY u.id, u.first_name, u.last_name
@@ -585,14 +620,17 @@ router.post('/:type/export', auth, async (req, res) => {
       const result = await db.query(`
         SELECT
           u.first_name || ' ' || u.last_name as caregiver,
-          COALESCE(SUM(te.duration_minutes) / 60.0, 0) as hours_worked,
+          -- Capped/cleaned minutes for the pay estimate — raw duration paid
+          -- every missed clock-out as worked time. True pay still comes from
+          -- payroll reconciliation; this export is an estimate.
+          COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 0) as hours_worked,
           COALESCE(u.default_pay_rate, 18.00) as hourly_rate,
-          COALESCE(SUM(te.duration_minutes) / 60.0 * COALESCE(u.default_pay_rate, 18.00), 0) as gross_pay,
+          COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0 * COALESCE(u.default_pay_rate, 18.00), 0) as gross_pay,
           COUNT(te.id) as shifts
         FROM users u
         LEFT JOIN time_entries te ON te.caregiver_id = u.id
-          AND te.start_time >= $1::timestamptz
-          AND te.start_time < ($2::date + INTERVAL '1 day')::timestamptz
+          AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+          AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
           AND te.is_complete = true
         WHERE u.role = 'caregiver'
         GROUP BY u.id, u.first_name, u.last_name, u.default_pay_rate
@@ -600,17 +638,21 @@ router.post('/:type/export', auth, async (req, res) => {
       `, [sd, ed]);
       data = result.rows;
     } else {
-      // Fallback: overview
+      // Fallback: caregiver hours. Previously this had NO end-date bound (it
+      // exported everything from the start date to forever) and used raw
+      // duration; now it honors both bounds and uses capped minutes.
       const result = await db.query(`
         SELECT u.first_name || ' ' || u.last_name as caregiver,
-          COALESCE(SUM(te.duration_minutes) / 60.0, 0) as hours
+          COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 0) as hours
         FROM users u
         LEFT JOIN time_entries te ON te.caregiver_id = u.id
-          AND te.start_time >= $1::timestamptz AND te.is_complete = true
+          AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+          AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
+          AND te.is_complete = true
         WHERE u.role = 'caregiver'
         GROUP BY u.id, u.first_name, u.last_name
         ORDER BY hours DESC
-      `, [sd]);
+      `, [sd, ed]);
       data = result.rows;
     }
 
@@ -706,7 +748,8 @@ router.get('/pnl', auth, async (req, res) => {
         UNION ALL
         SELECT COALESCE(charge_amount,0) as billed, COALESCE(paid_amount,0) as collected
         FROM claims
-        WHERE service_date >= $1 AND service_date <= $2 AND COALESCE(status,'') <> 'voided'
+        WHERE COALESCE(service_date, service_date_from) BETWEEN $1 AND $2
+          AND COALESCE(status,'') <> 'voided' AND invoice_id IS NULL
       ) u
     `, [start, end]);
 
@@ -728,7 +771,8 @@ router.get('/pnl', auth, async (req, res) => {
           cl.charge_amount as billed, COALESCE(cl.paid_amount,0) as collected
         FROM claims cl
         LEFT JOIN referral_sources rs ON cl.payer_id = rs.id
-        WHERE cl.service_date >= $1 AND cl.service_date <= $2 AND COALESCE(cl.status,'') <> 'voided'
+        WHERE COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
+          AND COALESCE(cl.status,'') <> 'voided' AND cl.invoice_id IS NULL
       ) u
       GROUP BY payer_name
       ORDER BY billed DESC
@@ -756,13 +800,50 @@ router.get('/pnl', auth, async (req, res) => {
         COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes) / 60.0 * COALESCE(u.default_pay_rate, 15)), 0) as gross_payroll
       FROM time_entries te
       JOIN users u ON te.caregiver_id = u.id
-      WHERE te.start_time >= $1 AND te.start_time <= ($2::date + interval '1 day')
+      WHERE te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+        AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
         AND te.end_time IS NOT NULL
     `, [start, end]);
 
-    const totalRevenue = parseFloat(revenue.rows[0]?.total_collected || 0);
+    // Earned but not yet billed — the reason net income used to read hugely
+    // negative: payroll counts every hour worked, while revenue only counted
+    // what was already invoiced/claimed AND collected. Value private-pay work
+    // at each client's own rate; for payer-billed work (MCO/Medicaid/VA) we
+    // report the unclaimed HOURS only — no dollar guess without a claim.
+    const unbilled = await db.query(`
+      SELECT
+        COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) FILTER (WHERE c.is_private_pay), 0) / 60.0 as pp_hours,
+        COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes) / 60.0 * COALESCE(c.private_pay_rate, 0)) FILTER (WHERE c.is_private_pay), 0) as pp_earned,
+        COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) FILTER (WHERE NOT COALESCE(c.is_private_pay, false)
+          AND NOT EXISTS (SELECT 1 FROM claims cl WHERE cl.client_id = c.id
+                           AND COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
+                           AND COALESCE(cl.status,'') <> 'voided')), 0) / 60.0 as payer_unclaimed_hours,
+        (SELECT COALESCE(SUM(i.total), 0) FROM invoices i JOIN clients c2 ON c2.id = i.client_id
+          WHERE c2.is_private_pay AND i.billing_period_start >= $1 AND i.billing_period_end <= $2) as pp_invoiced
+      FROM time_entries te
+      JOIN clients c ON c.id = te.client_id
+      WHERE te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+        AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
+        AND te.end_time IS NOT NULL
+    `, [start, end]);
+
+    const totalBilled = parseFloat(revenue.rows[0]?.total_billed || 0);
+    const totalCollected = parseFloat(revenue.rows[0]?.total_collected || 0);
     const grossPayroll = parseFloat(payroll.rows[0]?.gross_payroll || 0);
-    const netIncome = totalRevenue - totalExpenses - grossPayroll;
+    const ppEarned = parseFloat(unbilled.rows[0]?.pp_earned || 0);
+
+    // Private-pay dollars earned in the period beyond what was invoiced to
+    // private-pay clients for the period (floored at 0 — an invoice can
+    // legitimately exceed hour-value).
+    const ppInvoiced = parseFloat(unbilled.rows[0]?.pp_invoiced || 0);
+    const ppUninvoicedEst = Math.max(0, ppEarned - ppInvoiced);
+
+    // Net income on an EARNED basis: billed revenue + private-pay work done but
+    // not yet invoiced, minus expenses and payroll for the same period. The
+    // cash-basis figure is reported alongside, clearly labeled.
+    const earnedRevenue = totalBilled + ppUninvoicedEst;
+    const netIncome = earnedRevenue - totalExpenses - grossPayroll;
+    const netIncomeCash = totalCollected - totalExpenses - grossPayroll;
 
     res.json({
       period: { start, end },
@@ -777,8 +858,16 @@ router.get('/pnl', auth, async (req, res) => {
         estimated_taxes: grossPayroll * 0.0765,
         total: grossPayroll * 1.0765
       },
+      unbilled: {
+        private_pay_hours: parseFloat(unbilled.rows[0]?.pp_hours || 0),
+        private_pay_earned: ppEarned,
+        private_pay_uninvoiced_est: ppUninvoicedEst,
+        payer_unclaimed_hours: parseFloat(unbilled.rows[0]?.payer_unclaimed_hours || 0)
+      },
+      earnedRevenue,
       netIncome,
-      margin: totalRevenue > 0 ? ((netIncome / totalRevenue) * 100).toFixed(2) : 0
+      netIncomeCash,
+      margin: earnedRevenue > 0 ? ((netIncome / earnedRevenue) * 100).toFixed(2) : 0
     });
   } catch (error) {
     console.error('P&L report error:', error);
@@ -1534,18 +1623,20 @@ router.get('/hours-by-payer', auth, async (req, res) => {
         JOIN clients c ON te.client_id = c.id
         LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
         WHERE te.is_complete = true
-          AND te.start_time >= $1::date
-          AND te.start_time <  ($2::date + INTERVAL '1 day')
+          AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+          AND te.start_time <  ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
       )
       SELECT
         payer_key, payer_name, payer_type,
         COUNT(DISTINCT client_id) AS active_clients,
         COUNT(te_id)              AS visits,
-        ROUND(SUM(duration_minutes) / 60.0, 2) AS total_hours,
+        -- Both columns use capped minutes; raw duration was inflated by every
+        -- missed clock-out and made "Total" disagree with billing/payroll.
+        ROUND(SUM(COALESCE(billable_minutes, duration_minutes)) / 60.0, 2) AS total_hours,
         ROUND(SUM(COALESCE(billable_minutes, duration_minutes)) / 60.0, 2) AS billable_hours,
-        ROUND(AVG(duration_minutes) / 60.0, 2) AS avg_visit_hours,
-        MIN(start_time::date) AS first_visit,
-        MAX(start_time::date) AS last_visit
+        ROUND(AVG(COALESCE(billable_minutes, duration_minutes)) / 60.0, 2) AS avg_visit_hours,
+        MIN((start_time AT TIME ZONE 'America/Chicago')::date) AS first_visit,
+        MAX((start_time AT TIME ZONE 'America/Chicago')::date) AS last_visit
       FROM labeled
       GROUP BY payer_key, payer_name, payer_type
       ORDER BY billable_hours DESC NULLS LAST
@@ -1576,21 +1667,24 @@ router.get('/caregiver-utilization', auth, async (req, res) => {
     const result = await db.query(`
       WITH actuals AS (
         SELECT caregiver_id,
-          ROUND(SUM(duration_minutes) / 60.0, 2) AS actual_hours,
+          ROUND(SUM(COALESCE(billable_minutes, duration_minutes)) / 60.0, 2) AS actual_hours,
           COUNT(*) AS visits
         FROM time_entries
         WHERE is_complete = true
-          AND start_time >= $1::date AND start_time < ($2::date + INTERVAL '1 day')
+          AND start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+          AND start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
         GROUP BY caregiver_id
       ),
       weeks AS (
-        SELECT GREATEST(1, CEIL(($2::date - $1::date + 1)::numeric / 7))::int AS n
+        -- Fractional weeks: CEIL turned a 30-day month into 5 full weeks of
+        -- capacity, understating everyone's utilization.
+        SELECT GREATEST(($2::date - $1::date + 1)::numeric / 7, 0.1) AS n
       )
       SELECT
         u.id, u.first_name, u.last_name, u.is_active,
         COALESCE(ca.max_hours_per_week, 40) AS max_hours_per_week,
-        (SELECT n FROM weeks) AS weeks_in_period,
-        COALESCE(ca.max_hours_per_week, 40) * (SELECT n FROM weeks) AS capacity_hours,
+        ROUND((SELECT n FROM weeks), 2) AS weeks_in_period,
+        ROUND(COALESCE(ca.max_hours_per_week, 40) * (SELECT n FROM weeks), 1) AS capacity_hours,
         COALESCE(a.actual_hours, 0) AS actual_hours,
         COALESCE(a.visits, 0) AS visits,
         CASE
@@ -1727,16 +1821,16 @@ router.get('/client-visits-summary', auth, async (req, res) => {
         ct.name AS care_type_name,
         COUNT(te.id) AS visits,
         COUNT(DISTINCT te.caregiver_id) AS distinct_caregivers,
-        ROUND(SUM(te.duration_minutes) / 60.0, 2) AS total_hours,
+        ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 2) AS total_hours,
         ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 2) AS billable_hours,
-        MIN(te.start_time::date) AS first_visit,
-        MAX(te.start_time::date) AS last_visit
+        MIN((te.start_time AT TIME ZONE 'America/Chicago')::date) AS first_visit,
+        MAX((te.start_time AT TIME ZONE 'America/Chicago')::date) AS last_visit
       FROM clients c
       LEFT JOIN time_entries te
         ON te.client_id = c.id
         AND te.is_complete = true
-        AND te.start_time >= $1::date
-        AND te.start_time <  ($2::date + INTERVAL '1 day')
+        AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+        AND te.start_time <  ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
       LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
       LEFT JOIN care_types ct ON c.care_type_id = ct.id
       WHERE c.is_active = true
@@ -1791,7 +1885,7 @@ router.post('/:type/export-pdf', auth, async (req, res) => {
       const result = await db.query(`SELECT u.first_name || ' ' || u.last_name as name,
           COALESCE(AVG(pr.satisfaction_score), 0) as avg_rating,
           COUNT(DISTINCT pr.id) as ratings, COUNT(DISTINCT s.client_id) as clients
-        FROM users u LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id AND pr.created_at >= $1 AND pr.created_at <= $2
+        FROM users u LEFT JOIN performance_ratings pr ON pr.caregiver_id = u.id AND (pr.created_at AT TIME ZONE 'America/Chicago')::date BETWEEN $1 AND $2
         LEFT JOIN schedules s ON s.caregiver_id = u.id AND s.is_active = true
         WHERE u.role = 'caregiver' AND u.is_active = true
         GROUP BY u.id, u.first_name, u.last_name ORDER BY avg_rating DESC`, [startDate, endDate]);

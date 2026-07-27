@@ -274,7 +274,7 @@ const ReportsAnalytics = ({ token }) => {
                 <tbody>
                   {hoursByWeek.map((week, idx) => (
                     <tr key={idx}>
-                      <td>{week.week}</td>
+                      <td>{week.week_start ? new Date(week.week_start).toLocaleDateString() : ''}</td>
                       <td>{Number(parseFloat(week.hours || 0)).toFixed(2)}</td>
                     </tr>
                   ))}
@@ -288,41 +288,29 @@ const ReportsAnalytics = ({ token }) => {
 
         <div className="card">
           <h3>Caregiver Hours Breakdown</h3>
+          {/* Regular/Overtime columns removed: the endpoint never provided
+              them (they always showed 0.00), and the utilization bar divided
+              by a hard-coded 40h regardless of the selected date range. The
+              Caregiver Utilization tab is the real utilization view. */}
           {caregiverBreakdown && caregiverBreakdown.length > 0 ? (
             <table className="table">
               <thead>
                 <tr>
                   <th>Caregiver</th>
-                  <th>Regular Hours</th>
-                  <th>Overtime Hours</th>
-                  <th>Total</th>
-                  <th>Utilization</th>
+                  <th>Total Hours</th>
+                  <th>Clients</th>
+                  <th>Avg Shift</th>
                 </tr>
               </thead>
               <tbody>
-                {caregiverBreakdown.map(cg => {
-                  const regularHours = parseFloat(cg.regular_hours) || 0;
-                  const overtimeHours = parseFloat(cg.overtime_hours) || 0;
-                  const totalHours = parseFloat(cg.total_hours) || 0;
-                  return (
-                    <tr key={cg.id}>
-                      <td><strong>{cg.first_name} {cg.last_name}</strong></td>
-                      <td>{Number(parseFloat(regularHours || 0)).toFixed(2)}</td>
-                      <td className={overtimeHours > 0 ? 'value-warning' : ''}>{Number(parseFloat(overtimeHours || 0)).toFixed(2)}</td>
-                      <td><strong>{Number(parseFloat(totalHours || 0)).toFixed(2)}</strong></td>
-                      <td>
-                        <div style={{ width: '100px', height: '6px', background: '#e0e0e0', borderRadius: '3px', overflow: 'hidden' }}>
-                          <div style={{ 
-                            width: `${Math.min((totalHours / 40) * 100, 100)}%`, 
-                            height: '100%', 
-                            background: totalHours > 40 ? '#ff9800' : '#4caf50' 
-                          }}></div>
-                        </div>
-                        <small>{Number((totalHours / 40) * 100).toFixed(0)}%</small>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {caregiverBreakdown.map(cg => (
+                  <tr key={cg.id}>
+                    <td><strong>{cg.first_name} {cg.last_name}</strong></td>
+                    <td><strong>{Number(parseFloat(cg.total_hours || 0)).toFixed(2)}</strong></td>
+                    <td>{cg.client_count || 0}</td>
+                    <td>{Number(parseFloat(cg.avg_shift_hours || 0)).toFixed(2)}h</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           ) : (
@@ -335,47 +323,46 @@ const ReportsAnalytics = ({ token }) => {
 
   const renderPerformanceReport = () => {
     if (!reportData) return null;
-    const { performance } = reportData;
+    // The backend returns caregiverPerformance + punctuality; this tab used to
+    // read a nonexistent `performance` key (and columns like attendance_rate /
+    // training_hours that no query produced) so it always rendered empty.
+    const { caregiverPerformance = [], punctuality = [] } = reportData;
+    const punctualityById = Object.fromEntries(punctuality.map(p => [p.id, p]));
 
     return (
       <div>
         <div className="card">
           <h3>Caregiver Performance Metrics</h3>
-          {performance && performance.length > 0 ? (
+          {caregiverPerformance.length > 0 ? (
             <table className="table">
               <thead>
                 <tr>
                   <th>Caregiver</th>
                   <th>Avg Rating</th>
-                  <th>Attendance</th>
-                  <th>Incidents</th>
-                  <th>Training Hours</th>
-                  <th>Status</th>
+                  <th>Scheduled Hours</th>
+                  <th>Clients</th>
+                  <th>Incidents Reported</th>
+                  <th>On-Time %</th>
                 </tr>
               </thead>
               <tbody>
-                {performance.map(perf => {
+                {caregiverPerformance.map(perf => {
                   const avgRating = parseFloat(perf.avg_rating) || 0;
-                  const attendanceRate = parseFloat(perf.attendance_rate) || 0;
-                  const trainingHours = parseFloat(perf.training_hours) || 0;
-                  const performanceScore = parseFloat(perf.performance_score) || 0;
+                  const punct = punctualityById[perf.id];
                   return (
                     <tr key={perf.id}>
                       <td><strong>{perf.first_name} {perf.last_name}</strong></td>
                       <td>
-                        {perf.avg_rating ? (
+                        {avgRating > 0 ? (
                           <span style={{ fontSize: '1.1em' }}>
-                            ⭐ {Number(parseFloat(avgRating || 0)).toFixed(2)} ({perf.rating_count || 0})
+                            ⭐ {avgRating.toFixed(2)} ({perf.rating_count || 0})
                           </span>
                         ) : (
                           'N/A'
                         )}
                       </td>
-                      <td>
-                        <span className={attendanceRate >= 95 ? 'value-success' : 'value-warning'}>
-                          {Number(parseFloat(attendanceRate || 0)).toFixed(2)}%
-                        </span>
-                      </td>
+                      <td>{Number(parseFloat(perf.total_hours || 0)).toFixed(1)}</td>
+                      <td>{perf.clients_served || 0}</td>
                       <td>
                         {(perf.incident_count || 0) > 0 ? (
                           <span className="value-danger">{perf.incident_count}</span>
@@ -383,11 +370,14 @@ const ReportsAnalytics = ({ token }) => {
                           '0 ✓'
                         )}
                       </td>
-                      <td>{Number(parseFloat(trainingHours || 0)).toFixed(2)}</td>
                       <td>
-                        <span className={`badge ${performanceScore >= 85 ? 'badge-success' : performanceScore >= 70 ? 'badge-warning' : 'badge-danger'}`}>
-                          {Number(parseFloat(performanceScore || 0)).toFixed(0)}/100
-                        </span>
+                        {punct && punct.total_shifts > 0 ? (
+                          <span className={parseFloat(punct.on_time_percentage) >= 90 ? 'value-success' : 'value-warning'}>
+                            {punct.on_time_percentage}% ({punct.total_shifts} shifts)
+                          </span>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                     </tr>
                   );
@@ -404,8 +394,12 @@ const ReportsAnalytics = ({ token }) => {
 
   const renderSatisfactionReport = () => {
     if (!reportData) return null;
-    const { satisfaction = {}, trends } = reportData;
-    const distribution = satisfaction.distribution || {};
+    // Reads the keys the backend actually returns (satisfaction.avg_rating,
+    // positive/neutral/negative percentages, satisfaction.trend). The old keys
+    // (overall / distribution / top-level trends) never existed, so the score
+    // showed N/A and the trend table sat empty.
+    const { satisfaction = {} } = reportData;
+    const trend = satisfaction.trend || [];
 
     return (
       <div>
@@ -413,7 +407,7 @@ const ReportsAnalytics = ({ token }) => {
           <div className="stat-card">
             <h3>Overall Satisfaction</h3>
             <div className="value" style={{ fontSize: '3rem' }}>
-              {satisfaction.overall ? Number(parseFloat(satisfaction.overall || 0)).toFixed(2) : 'N/A'}⭐
+              {satisfaction.total_ratings > 0 ? Number(parseFloat(satisfaction.avg_rating || 0)).toFixed(2) : 'N/A'}⭐
             </div>
             <p className="stat-subtext">{satisfaction.total_ratings || 0} ratings</p>
           </div>
@@ -421,45 +415,44 @@ const ReportsAnalytics = ({ token }) => {
           <div className="stat-card">
             <h3>Satisfaction Distribution</h3>
             <div style={{ fontSize: '0.9rem' }}>
-              <p>5 ⭐: {distribution[5] || 0}</p>
-              <p>4 ⭐: {distribution[4] || 0}</p>
-              <p>3 ⭐: {distribution[3] || 0}</p>
-              <p>2 ⭐: {distribution[2] || 0}</p>
-              <p>1 ⭐: {distribution[1] || 0}</p>
+              <p>😊 Positive (4-5⭐): {satisfaction.positive_percentage || 0}%</p>
+              <p>😐 Neutral (3⭐): {satisfaction.neutral_percentage || 0}%</p>
+              <p>🙁 Negative (1-2⭐): {satisfaction.negative_percentage || 0}%</p>
             </div>
           </div>
         </div>
 
         <div className="card">
-          <h3>Satisfaction Trends</h3>
-          {trends && trends.length > 0 ? (
+          <h3>Satisfaction Trends (by week)</h3>
+          {trend.length > 0 ? (
             <table className="table">
               <thead>
                 <tr>
-                  <th>Period</th>
+                  <th>Week</th>
                   <th>Avg Rating</th>
                   <th>Trend</th>
                   <th>Ratings</th>
                 </tr>
               </thead>
               <tbody>
-                {trends.map((trend, idx) => {
-                  const rating = parseFloat(trend.rating) || 0;
-                  const change = parseFloat(trend.change) || 0;
+                {trend.map((row, idx) => {
+                  const rating = parseFloat(row.avg_rating) || 0;
+                  const prev = idx > 0 ? (parseFloat(trend[idx - 1].avg_rating) || 0) : rating;
+                  const change = rating - prev;
                   return (
                     <tr key={idx}>
-                      <td>{trend.period}</td>
-                      <td>⭐ {Number(parseFloat(rating || 0)).toFixed(2)}</td>
+                      <td>{row.week_start ? new Date(row.week_start).toLocaleDateString() : ''}</td>
+                      <td>⭐ {rating.toFixed(2)}</td>
                       <td>
-                        {change > 0 ? (
-                          <span style={{ color: '#4caf50' }}>↑ {Number(parseFloat(change || 0)).toFixed(2)}</span>
-                        ) : change < 0 ? (
-                          <span style={{ color: '#f44336' }}>↓ {Number(parseFloat(Math.abs(change) || 0)).toFixed(2)}</span>
+                        {change > 0.005 ? (
+                          <span style={{ color: '#4caf50' }}>↑ {change.toFixed(2)}</span>
+                        ) : change < -0.005 ? (
+                          <span style={{ color: '#f44336' }}>↓ {Math.abs(change).toFixed(2)}</span>
                         ) : (
                           <span style={{ color: '#999' }}>→ Stable</span>
                         )}
                       </td>
-                      <td>{trend.count || 0}</td>
+                      <td>{row.count || 0}</td>
                     </tr>
                   );
                 })}
@@ -612,8 +605,12 @@ const ReportsAnalytics = ({ token }) => {
 
   const renderPnlReport = () => {
     if (!reportData) return null;
-    const { revenue = {}, revenueByPayer = [], expenses = {}, payroll = {}, netIncome = 0, margin = 0 } = reportData;
+    const { revenue = {}, revenueByPayer = [], expenses = {}, payroll = {}, unbilled = {},
+            earnedRevenue = 0, netIncome = 0, netIncomeCash = 0, margin = 0 } = reportData;
     const net = parseFloat(netIncome) || 0;
+    const netCash = parseFloat(netIncomeCash) || 0;
+    const payerUnclaimedHrs = parseFloat(unbilled.payer_unclaimed_hours) || 0;
+    const ppUninvoiced = parseFloat(unbilled.private_pay_uninvoiced_est) || 0;
     return (
       <div>
         <div className="card" style={{ background: '#FEF3C7', borderLeft: '4px solid #D97706', marginBottom: '1rem' }}>
@@ -625,9 +622,9 @@ const ReportsAnalytics = ({ token }) => {
         </div>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <div className="stat-card">
-            <h3>Revenue (collected)</h3>
-            <div className="value value-success">{money(revenue.total_collected)}</div>
-            <div className="stat-subtext">{money(revenue.total_billed)} billed</div>
+            <h3>Revenue (earned)</h3>
+            <div className="value value-success">{money(earnedRevenue)}</div>
+            <div className="stat-subtext">{money(revenue.total_billed)} billed · {money(revenue.total_collected)} collected</div>
           </div>
           <div className="stat-card">
             <h3>Payroll</h3>
@@ -639,11 +636,19 @@ const ReportsAnalytics = ({ token }) => {
             <div className="value">{money(expenses.total)}</div>
           </div>
           <div className="stat-card">
-            <h3>Net Income</h3>
+            <h3>Net Income (earned)</h3>
             <div className="value" style={{ color: net >= 0 ? '#059669' : '#DC2626' }}>{money(net)}</div>
-            <div className="stat-subtext">{parseFloat(margin).toFixed(1)}% margin</div>
+            <div className="stat-subtext">{parseFloat(margin).toFixed(1)}% margin · cash basis {money(netCash)}</div>
           </div>
         </div>
+
+        {(ppUninvoiced > 0.005 || payerUnclaimedHrs > 0.01) && (
+          <div className="card" style={{ background: '#EFF6FF', borderLeft: '4px solid #2563EB', marginBottom: '1rem' }}>
+            <strong>Work done this period that isn&apos;t billed yet:</strong>{' '}
+            {ppUninvoiced > 0.005 && <>≈{money(ppUninvoiced)} of private-pay hours not yet invoiced (valued at each client&apos;s rate). </>}
+            {payerUnclaimedHrs > 0.01 && <>{payerUnclaimedHrs.toFixed(1)} payer-billed (MCO/Medicaid/VA) hours with no claim generated — that revenue has no dollar figure here until claims are created.</>}
+          </div>
+        )}
 
         <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
           <div className="card">
@@ -678,17 +683,24 @@ const ReportsAnalytics = ({ token }) => {
           <h3>P&amp;L Summary</h3>
           <table className="table">
             <tbody>
-              <tr><td>Revenue (collected)</td><td style={{ textAlign: 'right' }}>{money(revenue.total_collected)}</td></tr>
+              <tr><td>Revenue billed (invoices + claims)</td><td style={{ textAlign: 'right' }}>{money(revenue.total_billed)}</td></tr>
+              <tr><td>+ Private-pay work not yet invoiced (est.)</td><td style={{ textAlign: 'right' }}>{money(ppUninvoiced)}</td></tr>
               <tr><td>&minus; Payroll (incl. est. taxes)</td><td style={{ textAlign: 'right' }}>&minus;{money(payroll.total)}</td></tr>
               <tr><td>&minus; Expenses</td><td style={{ textAlign: 'right' }}>&minus;{money(expenses.total)}</td></tr>
               <tr style={{ fontWeight: 700, borderTop: '2px solid #E5E7EB' }}>
-                <td>Net Income</td>
+                <td>Net Income (earned basis)</td>
                 <td style={{ textAlign: 'right', color: net >= 0 ? '#059669' : '#DC2626' }}>{money(net)}</td>
+              </tr>
+              <tr style={{ color: '#6B7280' }}>
+                <td>Net cash flow (collected &minus; payroll &minus; expenses)</td>
+                <td style={{ textAlign: 'right', color: netCash >= 0 ? '#059669' : '#DC2626' }}>{money(netCash)}</td>
               </tr>
             </tbody>
           </table>
           <p style={{ fontSize: '0.8rem', color: '#6B7280', margin: '0.5rem 0 0' }}>
-            Revenue = collections from invoices. Payroll = actual clocked pay from time entries + 7.65% est. employer tax.
+            Earned basis matches work done in the period against its costs; the cash line shows money actually
+            in the door. Payroll = cleaned clocked hours &times; pay rate + 7.65% est. employer tax (the finalized
+            number comes from the payroll run).
           </p>
         </div>
       </div>
