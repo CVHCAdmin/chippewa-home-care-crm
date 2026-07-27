@@ -98,12 +98,11 @@ workflows:
     environment:
       node: 22.11.0
       xcode: latest
-      cocoapods: default
       vars:
         BUNDLE_ID: com.cvhc.homecare
         XCODE_WORKSPACE: ios/App/App.xcworkspace
         XCODE_SCHEME: App
-        APP_STORE_APPLE_ID: TBD
+        APP_STORE_APPLE_ID: 6785646689
     scripts:
       - name: Install frontend dependencies
         script: |
@@ -123,10 +122,8 @@ workflows:
         script: |
           cd frontend
           npx cap sync ios
-      - name: Install CocoaPods
-        script: |
-          cd frontend/ios/App
-          pod install
+      # No CocoaPods step: Capacitor 8 uses Swift Package Manager — there is no
+      # Podfile, and `pod install` fails the build.
       - name: Set up signing
         script: |
           keychain initialize

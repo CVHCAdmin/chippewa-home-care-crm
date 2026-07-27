@@ -37,8 +37,13 @@ router.post('/', verifyToken, async (req, res) => {
 });
 
 // GET /api/clients
+// Admins see every active client. Caregivers see ONLY clients they have an
+// active schedule with (owner's direction, strict: 2026-07-27) — the full
+// roster is PHI and was showing in the clock-in dropdown. A substitute
+// covering an unassigned client needs the admin to add a schedule first.
 router.get('/', verifyToken, async (req, res) => {
   try {
+    const isAdmin = req.user?.role === 'admin';
     const result = await db.query(
       `SELECT c.*, rs.name as referral_source_name, ct.name as care_type_name,
               (SELECT MIN(s.suspended_from) FROM schedules s
@@ -47,7 +52,12 @@ router.get('/', verifyToken, async (req, res) => {
        FROM clients c
        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
        LEFT JOIN care_types ct ON c.care_type_id = ct.id
-       WHERE c.is_active = true ORDER BY c.first_name`
+       WHERE c.is_active = true
+         AND ($1 OR EXISTS (
+               SELECT 1 FROM schedules s2
+                WHERE s2.client_id = c.id AND s2.caregiver_id = $2 AND s2.is_active = true))
+       ORDER BY c.first_name`,
+      [isAdmin, req.user.id]
     );
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
