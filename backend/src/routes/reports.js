@@ -922,8 +922,11 @@ router.get('/pnl', auth, async (req, res) => {
     // claims to create).
     const earnedRevenue = ppEarned + payerEarned;
     const unbilledEst = Math.max(0, earnedRevenue - totalBilled);
-    const netIncome = earnedRevenue - totalExpenses - grossPayroll;
-    const netIncomeCash = totalCollected - totalExpenses - grossPayroll;
+    // Net subtracts payroll INCLUDING est. employer taxes — the same number
+    // the summary table displays, so the rows always sum to the total.
+    const payrollTotal = grossPayroll * 1.0765;
+    const netIncome = earnedRevenue - totalExpenses - payrollTotal;
+    const netIncomeCash = totalCollected - totalExpenses - payrollTotal;
 
     res.json({
       period: { start, end },
