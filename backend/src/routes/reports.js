@@ -818,15 +818,22 @@ router.get('/pnl', auth, async (req, res) => {
   try {
     // Revenue = invoices (private/self-pay) + claims (MCO/Medicaid/VA). Claims
     // carry the payer-billed side that never touches the invoices table.
+    // Invoices are counted by OVERLAP with the range, PRORATED by days —
+    // private pay bills bi-weekly, so a week-sized P&L view would otherwise
+    // show $0 billed even when a paid invoice covers most of that week.
     const revenue = await db.query(`
       SELECT
         COALESCE(SUM(billed), 0) as total_billed,
         COALESCE(SUM(collected), 0) as total_collected,
         COALESCE(SUM(billed) - SUM(collected), 0) as outstanding
       FROM (
-        SELECT total as billed, COALESCE(amount_paid,0) as collected
-        FROM invoices
-        WHERE billing_period_start >= $1 AND billing_period_end <= $2
+        SELECT i.total * frac as billed, COALESCE(i.amount_paid, 0) * frac as collected
+        FROM (
+          SELECT *, GREATEST(0, LEAST(billing_period_end, $2::date) - GREATEST(billing_period_start, $1::date) + 1)::numeric
+                    / NULLIF(billing_period_end - billing_period_start + 1, 0) AS frac
+          FROM invoices
+          WHERE billing_period_end >= $1 AND billing_period_start <= $2
+        ) i
         UNION ALL
         SELECT COALESCE(charge_amount,0) as billed, COALESCE(paid_amount,0) as collected
         FROM claims
@@ -835,7 +842,7 @@ router.get('/pnl', auth, async (req, res) => {
       ) u
     `, [start, end]);
 
-    // Revenue by payer — invoices + claims
+    // Revenue by payer — invoices (overlap-prorated, same rule as above) + claims
     const revenueByPayer = await db.query(`
       SELECT payer_name,
         SUM(cnt) as invoice_count,
@@ -843,11 +850,14 @@ router.get('/pnl', auth, async (req, res) => {
         COALESCE(SUM(collected), 0) as collected
       FROM (
         SELECT COALESCE(rs.name, 'Private Pay') as payer_name, 1 as cnt,
-          i.total as billed, COALESCE(i.amount_paid,0) as collected
+          i.total * GREATEST(0, LEAST(i.billing_period_end, $2::date) - GREATEST(i.billing_period_start, $1::date) + 1)::numeric
+            / NULLIF(i.billing_period_end - i.billing_period_start + 1, 0) as billed,
+          COALESCE(i.amount_paid,0) * GREATEST(0, LEAST(i.billing_period_end, $2::date) - GREATEST(i.billing_period_start, $1::date) + 1)::numeric
+            / NULLIF(i.billing_period_end - i.billing_period_start + 1, 0) as collected
         FROM invoices i
         LEFT JOIN clients c ON i.client_id = c.id
         LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
-        WHERE i.billing_period_start >= $1 AND i.billing_period_end <= $2
+        WHERE i.billing_period_end >= $1 AND i.billing_period_start <= $2
         UNION ALL
         SELECT COALESCE(rs.name, 'Unknown Payer') as payer_name, 1 as cnt,
           cl.charge_amount as billed, COALESCE(cl.paid_amount,0) as collected
