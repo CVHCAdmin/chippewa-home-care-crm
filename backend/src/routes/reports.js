@@ -22,6 +22,32 @@ const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 // and does not expand per day. Prefer SCHEDULE_OCCURRENCES_CTE for period totals.
 const SCHEDULE_HOURS_CALC = `(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)`;
 
+// Delivered work for a $1..$2 date range (Chicago days). Ground truth for
+// "hours actually worked": payroll-reviewed shifts (what actually gets paid —
+// roughly half the staff never clocks in, their weeks are approved from the
+// schedule) UNION clock entries no approved review covers yet (typically the
+// current, not-yet-reviewed pay period). Verified against the paid 7/12-7/18
+// period: clock data alone held 94h of the 293h actually paid.
+const DELIVERED_WORK_CTE = `delivered AS (
+  SELECT psr.caregiver_id, psr.client_id, psr.shift_date AS work_date,
+         psr.payable_minutes AS mins
+  FROM payroll_shift_reviews psr
+  WHERE psr.status IN ('verified', 'approved', 'manual_entry')
+    AND psr.payable_minutes > 0
+    AND psr.shift_date BETWEEN $1 AND $2
+  UNION ALL
+  SELECT te.caregiver_id, te.client_id,
+         (te.start_time AT TIME ZONE 'America/Chicago')::date,
+         COALESCE(te.billable_minutes, te.duration_minutes)
+  FROM time_entries te
+  WHERE te.end_time IS NOT NULL
+    AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+    AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
+    AND NOT EXISTS (SELECT 1 FROM payroll_shift_reviews p2
+                     WHERE p2.time_entry_id = te.id
+                       AND p2.status IN ('verified', 'approved', 'manual_entry'))
+)`;
+
 // ==================== OVERVIEW REPORT ====================
 // POST /api/reports/overview
 router.post('/overview', auth, async (req, res) => {
@@ -52,17 +78,15 @@ router.post('/overview', auth, async (req, res) => {
       FROM occ WHERE 1=1 ${scheduleFilters.replace(/\bs\./g, 'occ.')}
     `, params);
 
-    // Actual worked hours (capped minutes) for the same period + filters, so
-    // the overview can show delivered-vs-scheduled instead of the permanently
-    // empty satisfaction average (zero ratings have ever been collected).
+    // Delivered hours (payroll-reviewed + unreviewed clock) for the same
+    // period + filters — most staff never clock in, so clock data alone held
+    // a third of the real hours.
     const workedQuery = await db.query(`
-      SELECT COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes)), 0) / 60.0 AS worked
-      FROM time_entries te
-      WHERE te.end_time IS NOT NULL
-        AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
-        AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
-        AND ($3::uuid IS NULL OR te.caregiver_id = $3)
-        AND ($4::uuid IS NULL OR te.client_id = $4)
+      WITH ${DELIVERED_WORK_CTE}
+      SELECT COALESCE(SUM(mins), 0) / 60.0 AS worked
+      FROM delivered
+      WHERE ($3::uuid IS NULL OR caregiver_id = $3)
+        AND ($4::uuid IS NULL OR client_id = $4)
     `, [startDate, endDate, caregiverId || null, clientId || null]);
 
     // Average satisfaction from performance ratings (Chicago calendar days:
@@ -195,20 +219,18 @@ router.post('/hours', auth, async (req, res) => {
       ORDER BY total_hours DESC
     `, params);
 
-    // Actual worked hours per caregiver for the same period + filters — this
-    // is the "Hours Worked" report, but every number above is SCHEDULED; the
-    // worked column lets scheduled-vs-delivered variance show per caregiver.
+    // Delivered hours per caregiver (payroll-reviewed + unreviewed clock) —
+    // this is the "Hours Worked" report; every number above is SCHEDULED, and
+    // clock data alone misses the staff who never clock in.
     const workedParams = [startDate, endDate, caregiverId || null, clientId || null];
     const workedByCgQuery = await db.query(`
-      SELECT te.caregiver_id,
-        ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 2) AS worked_hours
-      FROM time_entries te
-      WHERE te.end_time IS NOT NULL
-        AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
-        AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
-        AND ($3::uuid IS NULL OR te.caregiver_id = $3)
-        AND ($4::uuid IS NULL OR te.client_id = $4)
-      GROUP BY te.caregiver_id
+      WITH ${DELIVERED_WORK_CTE}
+      SELECT caregiver_id,
+        ROUND(SUM(mins) / 60.0, 2) AS worked_hours
+      FROM delivered
+      WHERE ($3::uuid IS NULL OR caregiver_id = $3)
+        AND ($4::uuid IS NULL OR client_id = $4)
+      GROUP BY caregiver_id
     `, workedParams);
     const workedByCg = Object.fromEntries(workedByCgQuery.rows.map(r => [r.caregiver_id, parseFloat(r.worked_hours)]));
 
@@ -295,12 +317,15 @@ router.post('/performance', auth, async (req, res) => {
       ORDER BY (COUNT(CASE WHEN (te.start_time AT TIME ZONE 'America/Chicago')::time <= sch.start_time::time + INTERVAL '5 minutes' THEN 1 END)::float / NULLIF(COUNT(te.id), 0)) DESC
     `, [startDate, endDate]);
 
-    // Worked hours + GPS capture per caregiver — both derive from time
-    // entries the operation actually generates (ratings never got collected,
-    // so this tab leans on delivery metrics instead).
+    // Delivered hours per caregiver (payroll-reviewed + unreviewed clock).
+    // GPS capture stays clock-based — it only applies to app users' entries.
     const deliveryQuery = await db.query(`
+      WITH ${DELIVERED_WORK_CTE}
+      SELECT caregiver_id, ROUND(SUM(mins) / 60.0, 1) AS worked_hours
+      FROM delivered GROUP BY caregiver_id
+    `, [startDate, endDate]);
+    const gpsQuery = await db.query(`
       SELECT te.caregiver_id,
-        ROUND(SUM(COALESCE(te.billable_minutes, te.duration_minutes)) / 60.0, 1) AS worked_hours,
         ROUND(100.0 * COUNT(te.clock_in_location) / COUNT(*), 0) AS gps_capture_pct
       FROM time_entries te
       WHERE te.end_time IS NOT NULL
@@ -309,12 +334,13 @@ router.post('/performance', auth, async (req, res) => {
       GROUP BY te.caregiver_id
     `, [startDate, endDate]);
     const deliveryByCg = Object.fromEntries(deliveryQuery.rows.map(r => [r.caregiver_id, r]));
+    const gpsByCg = Object.fromEntries(gpsQuery.rows.map(r => [r.caregiver_id, r.gps_capture_pct]));
 
     res.json({
       caregiverPerformance: performanceQuery.rows.map(row => ({
         ...row,
         worked_hours: parseFloat(deliveryByCg[row.id]?.worked_hours ?? 0),
-        gps_capture_pct: deliveryByCg[row.id]?.gps_capture_pct ?? null
+        gps_capture_pct: gpsByCg[row.id] ?? null
       })),
       ratingDistribution: ratingDistributionQuery.rows,
       punctuality: punctualityQuery.rows.map(row => ({
@@ -851,79 +877,51 @@ router.get('/pnl', auth, async (req, res) => {
     // Use the cleaned/capped billable_minutes, not raw duration — raw is inflated
     // by missed clock-outs (e.g. a 19-hour punch on a 2-hour shift). This is a
     // rough estimate; true pay comes from the payroll reconciliation.
-    // Labor cost estimate from cleaned clock times. NOTE (2026-07-28): the
-    // payroll_shift_reviews table was tried here and REJECTED for now — for
-    // July it holds ~2.4x this number because hundreds of approved review rows
-    // have no clock-in behind them ("bulk approved — no clock-in on record").
-    // Until the owner rules on whether those are real paid labor, the P&L
-    // stays on the clock-based estimate rather than silently 2.4x-ing costs.
-    const payroll = await db.query(`
+    // Delivered work drives BOTH sides of the P&L (owner confirmed 2026-07-28
+    // that the bulk-approved no-clock-in shifts are real paid labor): payroll
+    // = delivered minutes x pay rate; earned revenue = delivered minutes x the
+    // client's contract rate (private-pay rate, or the payer rate effective on
+    // the service date). Hours with no rate on file count $0 and are reported
+    // as unvalued.
+    const deliveredQ = await db.query(`
+      WITH ${DELIVERED_WORK_CTE}
       SELECT
-        COALESCE(SUM(COALESCE(te.billable_minutes, te.duration_minutes) / 60.0 * COALESCE(u.default_pay_rate, 15)), 0) as gross_payroll
-      FROM time_entries te
-      JOIN users u ON te.caregiver_id = u.id
-      WHERE te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
-        AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
-        AND te.end_time IS NOT NULL
+        COALESCE(SUM(d.mins), 0) / 60.0 AS delivered_hours,
+        COALESCE(SUM(d.mins / 60.0 * COALESCE(u.default_pay_rate, 15)), 0) AS gross_payroll,
+        COALESCE(SUM(d.mins) FILTER (WHERE c.is_private_pay), 0) / 60.0 AS pp_hours,
+        COALESCE(SUM(d.mins / 60.0 * c.private_pay_rate) FILTER (WHERE c.is_private_pay AND c.private_pay_rate IS NOT NULL), 0) AS pp_earned,
+        COALESCE(SUM(d.mins) FILTER (WHERE NOT COALESCE(c.is_private_pay, false) AND prate.hourly IS NOT NULL), 0) / 60.0 AS payer_hours,
+        COALESCE(SUM(d.mins / 60.0 * prate.hourly) FILTER (WHERE NOT COALESCE(c.is_private_pay, false) AND prate.hourly IS NOT NULL), 0) AS payer_earned,
+        COALESCE(SUM(d.mins) FILTER (WHERE c.id IS NULL
+          OR (c.is_private_pay AND c.private_pay_rate IS NULL)
+          OR (NOT COALESCE(c.is_private_pay, false) AND prate.hourly IS NULL)), 0) / 60.0 AS unvalued_hours
+      FROM delivered d
+      LEFT JOIN users u ON u.id = d.caregiver_id
+      LEFT JOIN clients c ON c.id = d.client_id
+      LEFT JOIN LATERAL (
+        SELECT CASE WHEN r.rate_type = '15min' THEN r.rate_amount * 4 ELSE r.rate_amount END AS hourly
+        FROM referral_source_rates r
+        WHERE r.referral_source_id = c.referral_source_id AND r.care_type_id = c.care_type_id
+          AND r.is_active = true
+          AND r.effective_date <= d.work_date
+          AND (r.end_date IS NULL OR r.end_date >= d.work_date)
+        ORDER BY r.effective_date DESC LIMIT 1
+      ) prate ON true
     `, [start, end]);
 
-    // Earned but not yet billed — the reason net income used to read hugely
-    // negative: payroll counts every hour worked, while revenue only counted
-    // what was already invoiced/claimed AND collected. Private-pay work is
-    // valued at each client's own rate; payer-billed work (MCO/Medicaid/VA)
-    // is valued at the payer's contracted rate for the client's care type
-    // (effective on the service date). Hours with no rate on file stay
-    // unvalued — reported as hours, never guessed at.
-    const unbilled = await db.query(`
-      SELECT
-        COALESCE(SUM(mins) FILTER (WHERE pp), 0) / 60.0 as pp_hours,
-        COALESCE(SUM(mins / 60.0 * pp_rate) FILTER (WHERE pp), 0) as pp_earned,
-        COALESCE(SUM(mins) FILTER (WHERE NOT pp AND unclaimed), 0) / 60.0 as payer_unclaimed_hours,
-        COALESCE(SUM(mins / 60.0 * payer_hourly) FILTER (WHERE NOT pp AND unclaimed AND payer_hourly IS NOT NULL), 0) as payer_unbilled_est,
-        COALESCE(SUM(mins) FILTER (WHERE NOT pp AND unclaimed AND payer_hourly IS NULL), 0) / 60.0 as payer_unvalued_hours,
-        (SELECT COALESCE(SUM(i.total), 0) FROM invoices i JOIN clients c2 ON c2.id = i.client_id
-          WHERE c2.is_private_pay AND i.billing_period_start >= $1 AND i.billing_period_end <= $2) as pp_invoiced
-      FROM (
-        SELECT COALESCE(te.billable_minutes, te.duration_minutes) AS mins,
-               COALESCE(c.is_private_pay, false) AS pp,
-               COALESCE(c.private_pay_rate, 0) AS pp_rate,
-               prate.hourly AS payer_hourly,
-               NOT EXISTS (SELECT 1 FROM claims cl WHERE cl.client_id = c.id
-                            AND COALESCE(cl.service_date, cl.service_date_from) BETWEEN $1 AND $2
-                            AND COALESCE(cl.status,'') <> 'voided') AS unclaimed
-        FROM time_entries te
-        JOIN clients c ON c.id = te.client_id
-        LEFT JOIN LATERAL (
-          SELECT CASE WHEN r.rate_type = '15min' THEN r.rate_amount * 4 ELSE r.rate_amount END AS hourly
-          FROM referral_source_rates r
-          WHERE r.referral_source_id = c.referral_source_id AND r.care_type_id = c.care_type_id
-            AND r.is_active = true
-            AND r.effective_date <= (te.start_time AT TIME ZONE 'America/Chicago')::date
-            AND (r.end_date IS NULL OR r.end_date >= (te.start_time AT TIME ZONE 'America/Chicago')::date)
-          ORDER BY r.effective_date DESC LIMIT 1
-        ) prate ON true
-        WHERE te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
-          AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
-          AND te.end_time IS NOT NULL
-      ) t
-    `, [start, end]);
-
+    const d = deliveredQ.rows[0] || {};
     const totalBilled = parseFloat(revenue.rows[0]?.total_billed || 0);
     const totalCollected = parseFloat(revenue.rows[0]?.total_collected || 0);
-    const grossPayroll = parseFloat(payroll.rows[0]?.gross_payroll || 0);
-    const ppEarned = parseFloat(unbilled.rows[0]?.pp_earned || 0);
+    const grossPayroll = parseFloat(d.gross_payroll || 0);
+    const ppEarned = parseFloat(d.pp_earned || 0);
+    const payerEarned = parseFloat(d.payer_earned || 0);
 
-    // Private-pay dollars earned in the period beyond what was invoiced to
-    // private-pay clients for the period (floored at 0 — an invoice can
-    // legitimately exceed hour-value).
-    const ppInvoiced = parseFloat(unbilled.rows[0]?.pp_invoiced || 0);
-    const ppUninvoicedEst = Math.max(0, ppEarned - ppInvoiced);
-
-    // Net income on an EARNED basis: billed revenue + private-pay work not yet
-    // invoiced + payer work not yet claimed (both valued at real rates), minus
-    // expenses and payroll for the same period. Cash basis reported alongside.
-    const payerUnbilledEst = parseFloat(unbilled.rows[0]?.payer_unbilled_est || 0);
-    const earnedRevenue = totalBilled + ppUninvoicedEst + payerUnbilledEst;
+    // Earned revenue = value of the work actually delivered this period.
+    // Billed/collected are shown as billing PROGRESS against it; whatever is
+    // earned beyond billed is the unbilled backlog (invoices to generate,
+    // claims to create).
+    const earnedRevenue = ppEarned + payerEarned;
+    const unbilledEst = Math.max(0, earnedRevenue - totalBilled);
     const netIncome = earnedRevenue - totalExpenses - grossPayroll;
     const netIncomeCash = totalCollected - totalExpenses - grossPayroll;
 
@@ -940,14 +938,15 @@ router.get('/pnl', auth, async (req, res) => {
         estimated_taxes: grossPayroll * 0.0765,
         total: grossPayroll * 1.0765
       },
-      unbilled: {
-        private_pay_hours: parseFloat(unbilled.rows[0]?.pp_hours || 0),
+      delivered: {
+        hours: parseFloat(d.delivered_hours || 0),
+        private_pay_hours: parseFloat(d.pp_hours || 0),
         private_pay_earned: ppEarned,
-        private_pay_uninvoiced_est: ppUninvoicedEst,
-        payer_unclaimed_hours: parseFloat(unbilled.rows[0]?.payer_unclaimed_hours || 0),
-        payer_unbilled_est: payerUnbilledEst,
-        payer_unvalued_hours: parseFloat(unbilled.rows[0]?.payer_unvalued_hours || 0)
+        payer_hours: parseFloat(d.payer_hours || 0),
+        payer_earned: payerEarned,
+        unvalued_hours: parseFloat(d.unvalued_hours || 0)
       },
+      unbilledEst,
       earnedRevenue,
       netIncome,
       netIncomeCash,

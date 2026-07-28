@@ -17,6 +17,8 @@ const PayrollProcessing = ({ token }) => {
   });
   const [payrollData, setPayrollData] = useState([]);
   const [shiftData, setShiftData] = useState({ shifts: [], stats: {} });
+  const [noClockin, setNoClockin] = useState({ rows: [], summary: {} });
+  const [showNoClockin, setShowNoClockin] = useState(false);
   const [analytics, setAnalytics] = useState({ analytics: [], totals: {} });
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -125,6 +127,12 @@ const PayrollProcessing = ({ token }) => {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (r.ok) setShiftData(await r.json());
+      // Payable rows with no clock-in behind them — review this list before
+      // payout (this is where a deactivated account quietly collected $1,260).
+      const nc = await fetch(`${API_BASE_URL}/api/payroll/no-clockin?startDate=${payPeriod.startDate}&endDate=${payPeriod.endDate}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (nc.ok) setNoClockin(await nc.json());
     } catch (e) {
       console.error('Load shifts error:', e);
     }
@@ -503,6 +511,49 @@ const PayrollProcessing = ({ token }) => {
                   <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: 2 }}>{s.label}</div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Paid without clock-in — review before payout */}
+          {noClockin.rows.length > 0 && (
+            <div className="card" style={{ background: '#FFFBEB', borderLeft: '4px solid #D97706', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div>
+                  <strong>⚠️ {noClockin.summary.shifts} payable shifts have no clock-in behind them</strong>
+                  {' '}— {noClockin.summary.hours}h ≈ ${Number(noClockin.summary.dollars || 0).toFixed(0)}.
+                  {noClockin.summary.inactive_caregiver_shifts > 0 && (
+                    <span style={{ color: '#DC2626', fontWeight: 700 }}>
+                      {' '}{noClockin.summary.inactive_caregiver_shifts} belong to DEACTIVATED caregivers.
+                    </span>
+                  )}
+                  <span style={{ color: '#92400E' }}> Normal for staff who don&apos;t use the app — but check this list before paying out.</span>
+                </div>
+                <button className="btn btn-sm btn-secondary" onClick={() => setShowNoClockin(v => !v)}>
+                  {showNoClockin ? 'Hide list' : 'Show list'}
+                </button>
+              </div>
+              {showNoClockin && (
+                <table className="table" style={{ marginTop: '0.75rem' }}>
+                  <thead>
+                    <tr><th>Caregiver</th><th>Client</th><th>Date</th><th>Start</th><th>Payable</th><th>Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {noClockin.rows.map(r => (
+                      <tr key={r.id} style={!r.caregiver_active ? { background: '#FEE2E2' } : undefined}>
+                        <td>
+                          <strong>{`${r.caregiver_first || ''} ${r.caregiver_last || ''}`.trim() || '(no name)'}</strong>
+                          {!r.caregiver_active && <span className="badge badge-danger" style={{ marginLeft: 6 }}>DEACTIVATED</span>}
+                        </td>
+                        <td>{r.client_first} {r.client_last}</td>
+                        <td>{new Date(r.shift_date).toLocaleDateString()}</td>
+                        <td>{r.scheduled_start?.slice(0, 5)}</td>
+                        <td>{(r.payable_minutes / 60).toFixed(2)}h</td>
+                        <td>{r.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           )}
 

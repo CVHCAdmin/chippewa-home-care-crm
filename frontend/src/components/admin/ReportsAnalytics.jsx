@@ -620,20 +620,20 @@ const ReportsAnalytics = ({ token }) => {
 
   const renderPnlReport = () => {
     if (!reportData) return null;
-    const { revenue = {}, revenueByPayer = [], expenses = {}, payroll = {}, unbilled = {},
-            earnedRevenue = 0, netIncome = 0, netIncomeCash = 0, margin = 0 } = reportData;
+    const { revenue = {}, revenueByPayer = [], expenses = {}, payroll = {}, delivered = {},
+            unbilledEst = 0, earnedRevenue = 0, netIncome = 0, netIncomeCash = 0, margin = 0 } = reportData;
     const net = parseFloat(netIncome) || 0;
     const netCash = parseFloat(netIncomeCash) || 0;
-    const payerUnclaimedHrs = parseFloat(unbilled.payer_unclaimed_hours) || 0;
-    const payerUnbilledEst = parseFloat(unbilled.payer_unbilled_est) || 0;
-    const payerUnvaluedHrs = parseFloat(unbilled.payer_unvalued_hours) || 0;
-    const ppUninvoiced = parseFloat(unbilled.private_pay_uninvoiced_est) || 0;
+    const deliveredHrs = parseFloat(delivered.hours) || 0;
+    const unvaluedHrs = parseFloat(delivered.unvalued_hours) || 0;
+    const unbilled$ = parseFloat(unbilledEst) || 0;
     return (
       <div>
         <div className="card" style={{ background: '#FEF3C7', borderLeft: '4px solid #D97706', marginBottom: '1rem' }}>
-          <strong>⚠️ Earned-basis view.</strong> Revenue = what was billed (invoices + claims) plus the estimated
-          value of work done but not yet invoiced/claimed, at real client and payer rates. Payroll is an
-          estimate from cleaned clock times, not the finalized payroll run. Directional view, not a filed P&amp;L.
+          <strong>⚠️ Earned-basis view built on delivered work.</strong> Delivered = payroll-reviewed shifts
+          (what actually gets paid — including staff who don&apos;t use the app) plus clock entries not yet
+          reviewed. Revenue = delivered hours &times; each client&apos;s contract rate; payroll = the same hours
+          &times; pay rates + 7.65% est. employer tax. Directional view, not a filed P&amp;L.
         </div>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <div className="stat-card">
@@ -657,12 +657,17 @@ const ReportsAnalytics = ({ token }) => {
           </div>
         </div>
 
-        {(ppUninvoiced > 0.005 || payerUnclaimedHrs > 0.01) && (
+        {(unbilled$ > 0.005 || unvaluedHrs > 0.01) && (
           <div className="card" style={{ background: '#EFF6FF', borderLeft: '4px solid #2563EB', marginBottom: '1rem' }}>
-            <strong>Work done this period that isn&apos;t billed yet (counted in earned revenue):</strong>{' '}
-            {ppUninvoiced > 0.005 && <>≈{money(ppUninvoiced)} of private-pay hours not yet invoiced (each client&apos;s own rate). </>}
-            {payerUnbilledEst > 0.005 && <>≈{money(payerUnbilledEst)} of payer-billed (MCO/Medicaid/VA) hours with no claim generated yet — valued at the payer&apos;s contracted rate; generate the claims to actually bill it. </>}
-            {payerUnvaluedHrs > 0.01 && <><strong>{payerUnvaluedHrs.toFixed(1)} payer hours have no rate on file</strong> (client missing payer or care-type rate) and are counted at $0 — fix the rate table to value them.</>}
+            {unbilled$ > 0.005 && (
+              <><strong>≈{money(unbilled$)} of delivered work is not billed yet</strong> — generate the period&apos;s
+              invoices (private pay) and claims (MCO/Medicaid/VA) to collect it. </>
+            )}
+            {unvaluedHrs > 0.01 && (
+              <><strong>{unvaluedHrs.toFixed(1)} delivered hours are counted at $0</strong> — the client has no
+              payer/care type set or no rate is on file for them. Fix the client profile or the rate table
+              and this revenue appears.</>
+            )}
           </div>
         )}
 
@@ -699,9 +704,9 @@ const ReportsAnalytics = ({ token }) => {
           <h3>P&amp;L Summary</h3>
           <table className="table">
             <tbody>
-              <tr><td>Revenue billed (invoices + claims)</td><td style={{ textAlign: 'right' }}>{money(revenue.total_billed)}</td></tr>
-              <tr><td>+ Private-pay work not yet invoiced (est.)</td><td style={{ textAlign: 'right' }}>{money(ppUninvoiced)}</td></tr>
-              <tr><td>+ Payer work not yet claimed (est. at contract rates)</td><td style={{ textAlign: 'right' }}>{money(payerUnbilledEst)}</td></tr>
+              <tr><td>Revenue earned ({deliveredHrs.toFixed(1)} delivered hours &times; contract rates)</td><td style={{ textAlign: 'right' }}>{money(earnedRevenue)}</td></tr>
+              <tr style={{ color: '#6B7280', fontSize: '0.9em' }}><td style={{ paddingLeft: '1.25rem' }}>of which billed so far</td><td style={{ textAlign: 'right' }}>{money(revenue.total_billed)}</td></tr>
+              <tr style={{ color: '#6B7280', fontSize: '0.9em' }}><td style={{ paddingLeft: '1.25rem' }}>not yet billed (invoices/claims to generate)</td><td style={{ textAlign: 'right' }}>{money(unbilled$)}</td></tr>
               <tr><td>&minus; Payroll (incl. est. taxes)</td><td style={{ textAlign: 'right' }}>&minus;{money(payroll.total)}</td></tr>
               <tr><td>&minus; Expenses</td><td style={{ textAlign: 'right' }}>&minus;{money(expenses.total)}</td></tr>
               <tr style={{ fontWeight: 700, borderTop: '2px solid #E5E7EB' }}>

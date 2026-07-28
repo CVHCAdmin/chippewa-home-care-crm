@@ -404,6 +404,51 @@ router.get('/shifts', auth, async (req, res) => {
   }
 });
 
+// ==================== PAID WITHOUT CLOCK-IN ====================
+// GET /api/payroll/no-clockin?startDate=&endDate=
+// Every payable review row in the period with NO time entry behind it —
+// mostly staff who never use the app, but this is also exactly where a
+// deactivated account or an overlap gets paid unnoticed (a blank-name
+// deactivated caregiver collected 63h/$1,260 over three periods this way).
+// Surface it so payout day starts with this list, not with trust.
+router.get('/no-clockin', auth, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate required' });
+  try {
+    const rows = (await db.query(`
+      SELECT psr.id, psr.shift_date, psr.scheduled_start, psr.scheduled_minutes,
+             psr.payable_minutes, psr.status,
+             u.first_name AS caregiver_first, u.last_name AS caregiver_last,
+             u.is_active AS caregiver_active,
+             COALESCE(u.default_pay_rate, 15) AS rate,
+             c.first_name AS client_first, c.last_name AS client_last
+      FROM payroll_shift_reviews psr
+      JOIN users u ON u.id = psr.caregiver_id
+      LEFT JOIN clients c ON c.id = psr.client_id
+      WHERE psr.pay_period_start = $1 AND psr.pay_period_end = $2
+        AND psr.time_entry_id IS NULL
+        AND psr.status IN ('verified', 'approved', 'manual_entry')
+        AND psr.payable_minutes > 0
+      ORDER BY u.is_active ASC, u.last_name, psr.shift_date, psr.scheduled_start
+    `, [startDate, endDate])).rows;
+
+    const totalMinutes = rows.reduce((s, r) => s + (r.payable_minutes || 0), 0);
+    const totalDollars = rows.reduce((s, r) => s + (r.payable_minutes || 0) / 60 * parseFloat(r.rate || 15), 0);
+    res.json({
+      rows,
+      summary: {
+        shifts: rows.length,
+        hours: Math.round(totalMinutes / 60 * 10) / 10,
+        dollars: Math.round(totalDollars * 100) / 100,
+        inactive_caregiver_shifts: rows.filter(r => !r.caregiver_active).length
+      }
+    });
+  } catch (error) {
+    console.error('No-clockin report error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== PAYROLL ANALYTICS ====================
 // GET /api/payroll/analytics?startDate=&endDate=
 // Per-caregiver punctuality + hours report for the pay period, computed from the
