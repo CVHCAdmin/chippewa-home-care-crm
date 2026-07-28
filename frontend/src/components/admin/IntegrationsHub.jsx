@@ -659,7 +659,7 @@ const IntegrationsHub = ({ token }) => {
       )}
 
       <Card>
-        <SectionHeader icon="💰" title="Payroll Export" sub="Based on verified clock-in/out records"/>
+        <SectionHeader icon="💰" title="Payroll Export" sub="Payable hours from approved payroll shift reviews — upload the CSV into Gusto's hours import"/>
         <div style={{display:'flex',gap:'0.75rem',alignItems:'flex-end',marginBottom:'1rem',flexWrap:'wrap'}}>
           <div>
             <label style={{display:'block',fontWeight:'600',fontSize:'0.78rem',marginBottom:'0.3rem'}}>Pay Period Start</label>
@@ -676,9 +676,22 @@ const IntegrationsHub = ({ token }) => {
             setLoad('preview',false);
           }}>{loading.preview?'Loading...':'Preview'}</Btn>
           {payrollPreview && <>
-            <a href={`${API_BASE_URL}/api/gusto/export-csv?startDate=${payPeriod.start}&endDate=${payPeriod.end}`} download style={{textDecoration:'none'}}>
-              <Btn outline>⬇ CSV Export</Btn>
-            </a>
+            {/* Authenticated download — a plain <a href> hit the auth-guarded
+                endpoint without the token and 401'd every time */}
+            <Btn outline disabled={loading.csv} onClick={async()=>{
+              setLoad('csv',true);
+              try{
+                const r = await fetch(`${API_BASE_URL}/api/gusto/export-csv?startDate=${payPeriod.start}&endDate=${payPeriod.end}`,{headers});
+                if(!r.ok) throw new Error('Export failed');
+                const blob = await r.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = `gusto-hours-${payPeriod.start}-to-${payPeriod.end}.csv`;
+                document.body.appendChild(a); a.click(); a.remove();
+                URL.revokeObjectURL(url);
+              }catch(e){ toast(e.message,'error'); }
+              setLoad('csv',false);
+            }}>{loading.csv?'Preparing...':'⬇ CSV for Gusto'}</Btn>
             {gustoConfig?.isConfigured && (
               <Btn color="#7C3AED" disabled={loading.gusto} onClick={async()=>{
                 setLoad('gusto',true);
@@ -708,6 +721,14 @@ const IntegrationsHub = ({ token }) => {
                 <div style={{fontSize:'0.72rem',color:'#6B7280'}}>Gross Pay</div>
               </div>
             </div>
+            {(payrollPreview.warnings?.unresolved_reviews > 0 || payrollPreview.warnings?.clock_entries_without_review > 0) && (
+              <div style={{background:'#FEE2E2',border:'1px solid #FCA5A5',borderRadius:'8px',padding:'0.75rem',marginBottom:'1rem',fontSize:'0.82rem',color:'#991B1B'}}>
+                ⚠️ Not in this export:
+                {payrollPreview.warnings.unresolved_reviews > 0 && <> {payrollPreview.warnings.unresolved_reviews} shift(s) still pending/flagged in Shift Review.</>}
+                {payrollPreview.warnings.clock_entries_without_review > 0 && <> {payrollPreview.warnings.clock_entries_without_review} clock entr(ies) with no payroll review row (run Reconcile in Payroll first).</>}
+                {' '}Resolve them, then re-preview before uploading to Gusto.
+              </div>
+            )}
             {payrollPreview.totals.unmapped > 0 && (
               <div style={{background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:'8px',padding:'0.75rem',marginBottom:'1rem',fontSize:'0.82rem',color:'#92400E'}}>
                 ⚠️ {payrollPreview.totals.unmapped} caregiver(s) not mapped to Gusto — CSV export still works, Gusto sync will skip them.
@@ -716,7 +737,7 @@ const IntegrationsHub = ({ token }) => {
             <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
               <thead>
                 <tr style={{background:'#F9FAFB'}}>
-                  {['Caregiver','Hours','Weekend Hrs','Rate','Gross Pay','Gusto'].map(h=>(
+                  {['Caregiver','Regular','Overtime','Total','Rate','Gross Pay','Gusto'].map(h=>(
                     <th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontWeight:'700',color:'#374151',borderBottom:'1px solid #E5E7EB'}}>{h}</th>
                   ))}
                 </tr>
@@ -725,8 +746,9 @@ const IntegrationsHub = ({ token }) => {
                 {payrollPreview.preview.map(r=>(
                   <tr key={r.id} style={{borderBottom:'1px solid #F3F4F6'}}>
                     <td style={{padding:'0.5rem 0.75rem',fontWeight:'600'}}>{r.first_name} {r.last_name}</td>
-                    <td style={{padding:'0.5rem 0.75rem'}}>{r.total_hours}h</td>
-                    <td style={{padding:'0.5rem 0.75rem',color:'#6B7280'}}>{r.weekend_hours}h</td>
+                    <td style={{padding:'0.5rem 0.75rem'}}>{r.regular_hours}h</td>
+                    <td style={{padding:'0.5rem 0.75rem',color:parseFloat(r.overtime_hours)>0?'#D97706':'#6B7280',fontWeight:parseFloat(r.overtime_hours)>0?700:400}}>{r.overtime_hours}h</td>
+                    <td style={{padding:'0.5rem 0.75rem',fontWeight:'700'}}>{r.total_hours}h</td>
                     <td style={{padding:'0.5rem 0.75rem'}}>{r.hourly_rate?fmt$(r.hourly_rate)+'/hr':'—'}</td>
                     <td style={{padding:'0.5rem 0.75rem',fontWeight:'700',color:'#2ABBA7'}}>{fmt$(r.gross_pay)}</td>
                     <td style={{padding:'0.5rem 0.75rem'}}>{r.gusto_mapped?<Badge status="active" label="✓ Mapped"/>:<Badge status="pending" label="Not Mapped"/>}</td>

@@ -100,33 +100,62 @@ router.post('/sync-employees', auth, requireAdmin, async (req, res) => {
 });
 
 // ─── PREVIEW PAYROLL EXPORT ───────────────────────────────────────────────────
+// Hours come from APPROVED payroll shift reviews (payable_minutes) — the same
+// number payroll actually pays. Roughly half the staff never clocks in, so the
+// old raw-clock version missed most paid hours and priced everyone off an
+// empty rates table. OT = payable over 40h per Sun–Sat week; rates from
+// users.default_pay_rate; OT priced at 1.5x.
+const GUSTO_WEEKLY_CTE = `weekly AS (
+  SELECT psr.caregiver_id,
+    (psr.shift_date - EXTRACT(DOW FROM psr.shift_date)::int) AS week_start,
+    SUM(psr.payable_minutes) / 60.0 AS week_hours,
+    COALESCE(SUM(psr.payable_minutes) FILTER (WHERE EXTRACT(DOW FROM psr.shift_date) IN (0, 6)), 0) / 60.0 AS weekend_hours,
+    COUNT(*) AS shifts
+  FROM payroll_shift_reviews psr
+  WHERE psr.shift_date BETWEEN $1::date AND $2::date
+    AND psr.status IN ('verified', 'approved', 'manual_entry')
+    AND psr.payable_minutes > 0
+  GROUP BY psr.caregiver_id, (psr.shift_date - EXTRACT(DOW FROM psr.shift_date)::int)
+)`;
+
 router.get('/preview', auth, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate required' });
 
     const result = await db.query(`
+      WITH ${GUSTO_WEEKLY_CTE}
       SELECT
         u.id, u.first_name, u.last_name, u.email,
         gem.gusto_employee_id, gem.is_synced as gusto_mapped,
-        COUNT(te.id) as shift_count,
-        ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric, 2) as total_hours,
-        ROUND(SUM(CASE WHEN EXTRACT(DOW FROM te.start_time) IN (0,6) THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600 ELSE 0 END)::numeric, 2) as weekend_hours,
-        cp.base_hourly_rate as hourly_rate,
-        ROUND(SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600)::numeric * COALESCE(cp.base_hourly_rate, 0), 2) as gross_pay
-      FROM users u
-      JOIN time_entries te ON te.caregiver_id = u.id
+        SUM(w.shifts) as shift_count,
+        ROUND(SUM(w.week_hours)::numeric, 2) as total_hours,
+        ROUND(SUM(LEAST(w.week_hours, 40))::numeric, 2) as regular_hours,
+        ROUND(SUM(GREATEST(w.week_hours - 40, 0))::numeric, 2) as overtime_hours,
+        ROUND(SUM(w.weekend_hours)::numeric, 2) as weekend_hours,
+        COALESCE(u.default_pay_rate, 15) as hourly_rate,
+        ROUND((SUM(LEAST(w.week_hours, 40)) * COALESCE(u.default_pay_rate, 15)
+             + SUM(GREATEST(w.week_hours - 40, 0)) * COALESCE(u.default_pay_rate, 15) * 1.5)::numeric, 2) as gross_pay
+      FROM weekly w
+      JOIN users u ON u.id = w.caregiver_id
       LEFT JOIN gusto_employee_map gem ON gem.user_id = u.id
-      LEFT JOIN (
-        SELECT DISTINCT ON (caregiver_id) caregiver_id, base_hourly_rate
-        FROM caregiver_pay_rates ORDER BY caregiver_id, created_at DESC
-      ) cp ON cp.caregiver_id = u.id
-      WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1
-        AND te.is_complete = true
-        AND u.role = 'caregiver'
-      GROUP BY u.id, u.first_name, u.last_name, u.email, gem.gusto_employee_id, gem.is_synced, cp.base_hourly_rate
+      GROUP BY u.id, u.first_name, u.last_name, u.email, u.default_pay_rate, gem.gusto_employee_id, gem.is_synced
       ORDER BY u.last_name, u.first_name
     `, [startDate, endDate]);
+
+    // Warn about work in the period that is NOT in the export yet
+    const warn = (await db.query(`
+      SELECT
+        (SELECT COUNT(*) FROM payroll_shift_reviews
+          WHERE shift_date BETWEEN $1::date AND $2::date
+            AND status IN ('pending', 'flagged', 'missing_punch')) AS unresolved_reviews,
+        (SELECT COUNT(*) FROM time_entries te
+          WHERE te.end_time IS NOT NULL
+            AND te.start_time >= ($1::date)::timestamp AT TIME ZONE 'America/Chicago'
+            AND te.start_time < ($2::date + 1)::timestamp AT TIME ZONE 'America/Chicago'
+            AND NOT EXISTS (SELECT 1 FROM payroll_shift_reviews p2
+                             WHERE p2.time_entry_id = te.id)) AS clock_entries_without_review
+    `, [startDate, endDate])).rows[0];
 
     const totals = {
       employees: result.rows.length,
@@ -135,12 +164,25 @@ router.get('/preview', auth, requireAdmin, async (req, res) => {
       unmapped: result.rows.filter(r => !r.gusto_mapped).length
     };
 
-    res.json({ preview: result.rows, totals, period: { startDate, endDate } });
+    res.json({
+      preview: result.rows, totals, period: { startDate, endDate },
+      warnings: {
+        unresolved_reviews: parseInt(warn.unresolved_reviews) || 0,
+        clock_entries_without_review: parseInt(warn.clock_entries_without_review) || 0
+      }
+    });
   } catch(error) { res.status(500).json({ error: error.message }); }
 });
 
 // ─── EXPORT TO GUSTO ──────────────────────────────────────────────────────────
 router.post('/export', auth, requireAdmin, async (req, res) => {
+  // DISABLED until the Phase 2 API rebuild: this scaffold computes hours from
+  // raw clock times (misses the staff who never clock in) and PUTs to a Gusto
+  // endpoint that does not exist. Use the CSV export — it carries the real
+  // approved payable hours. Do not remove this guard without rebuilding the
+  // push against Gusto's current API and testing in their demo environment.
+  return res.status(501).json({ error: 'Direct Gusto push is not ready — use the CSV export and upload it in Gusto.' });
+  // eslint-disable-next-line no-unreachable
   const cfg = getGustoConfig();
   if (!cfg.isConfigured) return res.status(400).json({ error: 'Gusto not configured', setup: true });
   try {
@@ -197,39 +239,35 @@ router.post('/export', auth, requireAdmin, async (req, res) => {
   } catch(error) { res.status(500).json({ error: error.message }); }
 });
 
-// ─── CSV EXPORT (fallback if Gusto not configured) ────────────────────────────
+// ─── CSV EXPORT (upload into Gusto's hours import) ────────────────────────────
+// Same payable-hours source as the preview: approved payroll shift reviews,
+// OT split per Sun–Sat week. The old version summed raw clock times, which
+// missed the staff who never clock in (two-thirds of paid hours).
 router.get('/export-csv', auth, requireAdmin, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    // Per-week split for FLSA overtime (>40 hrs/week → OT). Old query
-     // computed OT per individual shift and would miss weekly aggregation,
-     // OR (if read literally) double-count shifts >40h as their own OT.
-    const result = await db.query(`
-      WITH weekly AS (
-        SELECT u.id, u.first_name, u.last_name, u.email,
-          date_trunc('week', te.start_time) AS week_start,
-          SUM(EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600) AS week_hours
-        FROM users u
-        JOIN time_entries te ON te.caregiver_id = u.id
-        WHERE te.start_time >= $1::date AND te.start_time < $2::date + 1
-          AND te.is_complete = true AND u.role = 'caregiver'
-        GROUP BY u.id, u.first_name, u.last_name, u.email, date_trunc('week', te.start_time)
-      )
-      SELECT first_name, last_name, email,
-        ROUND(SUM(LEAST(week_hours, 40))::numeric, 2)        AS regular_hours,
-        ROUND(SUM(GREATEST(week_hours - 40, 0))::numeric, 2) AS overtime_hours
-      FROM weekly
-      GROUP BY id, first_name, last_name, email
-      ORDER BY last_name
-    `, [startDate || new Date().toISOString().split('T')[0], endDate || new Date().toISOString().split('T')[0]]);
+    if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate required' });
 
-    const lines = ['First Name,Last Name,Email,Regular Hours,Overtime Hours'];
+    const result = await db.query(`
+      WITH ${GUSTO_WEEKLY_CTE}
+      SELECT u.first_name, u.last_name, u.email,
+        ROUND(SUM(LEAST(w.week_hours, 40))::numeric, 2)        AS regular_hours,
+        ROUND(SUM(GREATEST(w.week_hours - 40, 0))::numeric, 2) AS overtime_hours,
+        ROUND(SUM(w.week_hours)::numeric, 2)                   AS total_hours
+      FROM weekly w
+      JOIN users u ON u.id = w.caregiver_id
+      GROUP BY u.id, u.first_name, u.last_name, u.email
+      ORDER BY u.last_name, u.first_name
+    `, [startDate, endDate]);
+
+    const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = ['First Name,Last Name,Email,Regular Hours,Overtime Hours,Total Hours'];
     for (const r of result.rows) {
-      lines.push(`${r.first_name},${r.last_name},${r.email},${r.regular_hours},${r.overtime_hours}`);
+      lines.push([q(r.first_name), q(r.last_name), q(r.email), r.regular_hours, r.overtime_hours, r.total_hours].join(','));
     }
 
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="payroll-${startDate}-${endDate}.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename="gusto-hours-${startDate}-to-${endDate}.csv"`);
     res.send(lines.join('\n'));
   } catch(error) { res.status(500).json({ error: error.message }); }
 });
