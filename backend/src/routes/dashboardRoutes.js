@@ -26,8 +26,11 @@ router.get('/summary', verifyToken, requireAdmin, async (req, res) => {
       // "how much have we collected on invoices whose billing period began
       // this month", which excluded any prior-month invoice paid in June.
       // The correct definition for a cash-collected report is payment_date.
-      db.query(`SELECT COALESCE(SUM(amount), 0) as amount
-                  FROM invoice_payments
+      // From invoices, not invoice_payments: payments are mostly recorded by
+      // updating invoices.amount_paid directly (mark-paid, Stripe webhook) —
+      // invoice_payments has 3 rows ever, so summing it undercounted badly.
+      db.query(`SELECT COALESCE(SUM(amount_paid), 0) as amount
+                  FROM invoices
                  WHERE payment_date >= date_trunc('month', CURRENT_DATE)
                    AND payment_date <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'`),
       // Caregivers currently clocked in (open time entry today, Chicago day —

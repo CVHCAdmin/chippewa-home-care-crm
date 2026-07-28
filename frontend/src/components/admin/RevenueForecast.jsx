@@ -71,9 +71,9 @@ export default function RevenueForecast({ token }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1.5rem' }}>
         {[
           { label: `Billed (${months}mo)`, val: fmt$(totalActualBilled), sub: `${fmt$(totalActualCollected)} collected`, color: '#3B82F6', bg: '#EFF6FF' },
-          { label: 'Projected Remaining', val: fmt$(totalProjectedRemaining), sub: `From ${summary.total_active_auths || 0} active auths`, color: '#10B981', bg: '#D1FAE5' },
-          { label: 'Auth Utilization', val: `${summary.avg_utilization_pct || 0}%`, sub: `${fmtH(summary.total_used_hours)} / ${fmtH(summary.total_auth_hours)} hrs`, color: '#F59E0B', bg: '#FFFBEB' },
-          { label: 'Est. Next Week', val: fmt$(nextWeek.estimated_revenue || 0), sub: `${fmtH(nextWeek.scheduled_hours)} scheduled`, color: '#8B5CF6', bg: '#F5F3FF' },
+          { label: 'Unused Auth $/week', val: fmt$(totalProjectedRemaining), sub: `Across ${summary.total_active_auths || 0} authorized clients`, color: '#10B981', bg: '#D1FAE5' },
+          { label: 'Auth Hours Scheduled', val: `${summary.avg_utilization_pct || 0}%`, sub: `${fmtH(summary.total_used_hours)} / ${fmtH(summary.total_auth_hours)} per week`, color: '#F59E0B', bg: '#FFFBEB' },
+          { label: 'Est. This Week', val: fmt$(nextWeek.estimated_revenue || 0), sub: `${fmtH(nextWeek.scheduled_hours)} scheduled`, color: '#8B5CF6', bg: '#F5F3FF' },
         ].map(k => (
           <div key={k.label} style={{ background: k.bg, borderRadius: '10px', padding: '1rem 1.1rem', border: `1px solid ${k.color}28` }}>
             <div style={{ fontSize: '0.75rem', color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.3rem' }}>{k.label}</div>
@@ -156,24 +156,30 @@ export default function RevenueForecast({ token }) {
             </div>
           )}
           <div style={{ marginTop: '1rem', padding: '0.75rem 1rem', background: '#FFFBEB', border: '1px solid #FCD34D', borderRadius: '8px', fontSize: '0.8rem', color: '#92400E' }}>
-            💡 Estimated at $18.50/hr average rate. Actual revenue depends on payer rates and billing outcomes.
+            💡 Valued at each client&apos;s real rate — private-pay rate or the payer&apos;s contracted rate for their
+            care type ($18.50 fallback only when no rate is on file). Actual revenue depends on billing outcomes.
           </div>
         </div>
       )}
 
       {tab === 'auths' && (
         <div>
-          <h4 style={{ margin: '0 0 1rem', color: '#374151' }}>Active Authorization Remaining Value</h4>
+          <h4 style={{ margin: '0 0 1rem', color: '#374151' }}>Weekly Authorization vs Schedule (per client)</h4>
+          <div style={{ marginBottom: '0.75rem', fontSize: '0.8rem', color: '#6B7280' }}>
+            Authorized hours are weekly. A client on the schedule is treated as live — the paper auth dates are
+            stale and ignored. &quot;Unused $/wk&quot; = authorized hours you are not scheduling, valued at the
+            client&apos;s rate: recurring money left on the table.
+          </div>
           {projected.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '3rem', color: '#9CA3AF', background: '#F9FAFB', borderRadius: '10px', border: '2px dashed #E5E7EB' }}>
-              No active authorizations with remaining hours.
+              No authorizations on file.
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                 <thead>
                   <tr style={{ background: '#F9FAFB', borderBottom: '2px solid #E5E7EB' }}>
-                    {['Client','Service','Auth Hrs','Used Hrs','Remaining','Rate','Projected $','Expires'].map(c => (
+                    {['Client','Service','Auth Hrs/wk','Scheduled/wk','Unused/wk','Rate','Unused $/wk','Auth End (stale)'].map(c => (
                       <th key={c} style={{ textAlign: 'left', padding: '0.65rem 0.85rem', fontWeight: 700, color: '#374151', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{c}</th>
                     ))}
                   </tr>
@@ -198,8 +204,8 @@ export default function RevenueForecast({ token }) {
                         <td style={{ padding: '0.65rem 0.85rem', fontWeight: 700, color: '#10B981' }}>{fmtH(r.remaining_hours)}</td>
                         <td style={{ padding: '0.65rem 0.85rem', color: '#6B7280' }}>{r.hourly_rate ? fmt$(r.hourly_rate) + '/hr' : '—'}</td>
                         <td style={{ padding: '0.65rem 0.85rem', fontWeight: 700, color: '#3B82F6' }}>{fmt$(r.projected_remaining_revenue)}</td>
-                        <td style={{ padding: '0.65rem 0.85rem', color: new Date(r.end_date) < new Date(Date.now() + 30*86400000) ? '#EF4444' : '#6B7280', fontSize: '0.82rem' }}>
-                          {r.end_date ? new Date(r.end_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+                        <td style={{ padding: '0.65rem 0.85rem', color: '#9CA3AF', fontSize: '0.82rem' }}>
+                          {r.end_date ? new Date(r.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }) : '—'}
                         </td>
                       </tr>
                     );
@@ -207,7 +213,7 @@ export default function RevenueForecast({ token }) {
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: '2px solid #E5E7EB', background: '#F9FAFB' }}>
-                    <td colSpan={6} style={{ padding: '0.65rem 0.85rem', fontWeight: 700, textAlign: 'right' }}>Total Projected:</td>
+                    <td colSpan={6} style={{ padding: '0.65rem 0.85rem', fontWeight: 700, textAlign: 'right' }}>Total unused per week:</td>
                     <td style={{ padding: '0.65rem 0.85rem', fontWeight: 800, color: '#3B82F6', fontSize: '1rem' }}>{fmt$(totalProjectedRemaining)}</td>
                     <td />
                   </tr>

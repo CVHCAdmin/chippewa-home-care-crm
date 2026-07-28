@@ -123,28 +123,28 @@ const ReportsAnalytics = ({ token }) => {
         {/* Key Metrics */}
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))' }}>
           <div className="stat-card">
-            <h3>Total Hours</h3>
+            <h3>Scheduled Hours</h3>
             <div className="value">{Number(parseFloat(summary.totalHours || 0)).toFixed(2)}</div>
             <p className="stat-subtext">Across all caregivers</p>
           </div>
           <div className="stat-card">
-            <h3>Total Revenue</h3>
+            <h3>Revenue Billed</h3>
             <div className="value value-success">
               ${Number(parseFloat(summary.totalRevenue || 0)).toFixed(2)}
             </div>
-            <p className="stat-subtext">Billable hours</p>
+            <p className="stat-subtext">Invoices + claims for the period</p>
           </div>
           <div className="stat-card">
-            <h3>Active Shifts</h3>
+            <h3>Scheduled Visits</h3>
             <div className="value">{summary.totalShifts || 0}</div>
-            <p className="stat-subtext">Completed</p>
+            <p className="stat-subtext">In period</p>
           </div>
           <div className="stat-card">
-            <h3>Avg Satisfaction</h3>
-            <div className="value">
-              {summary.avgSatisfaction ? `${Number(parseFloat(summary.avgSatisfaction || 0)).toFixed(2)}⭐` : 'N/A'}
+            <h3>Delivered vs Scheduled</h3>
+            <div className="value" style={{ color: (summary.deliveredPct ?? 100) >= 90 ? '#059669' : '#D97706' }}>
+              {summary.deliveredPct != null ? `${summary.deliveredPct}%` : 'N/A'}
             </div>
-            <p className="stat-subtext">Client ratings</p>
+            <p className="stat-subtext">{Number(parseFloat(summary.workedHours || 0)).toFixed(1)}h worked</p>
           </div>
         </div>
 
@@ -297,20 +297,31 @@ const ReportsAnalytics = ({ token }) => {
               <thead>
                 <tr>
                   <th>Caregiver</th>
-                  <th>Total Hours</th>
+                  <th>Scheduled</th>
+                  <th>Worked</th>
+                  <th>Variance</th>
                   <th>Clients</th>
                   <th>Avg Shift</th>
                 </tr>
               </thead>
               <tbody>
-                {caregiverBreakdown.map(cg => (
-                  <tr key={cg.id}>
-                    <td><strong>{cg.first_name} {cg.last_name}</strong></td>
-                    <td><strong>{Number(parseFloat(cg.total_hours || 0)).toFixed(2)}</strong></td>
-                    <td>{cg.client_count || 0}</td>
-                    <td>{Number(parseFloat(cg.avg_shift_hours || 0)).toFixed(2)}h</td>
-                  </tr>
-                ))}
+                {caregiverBreakdown.map(cg => {
+                  const sched = parseFloat(cg.total_hours) || 0;
+                  const worked = parseFloat(cg.worked_hours) || 0;
+                  const variance = worked - sched;
+                  return (
+                    <tr key={cg.id}>
+                      <td><strong>{cg.first_name} {cg.last_name}</strong></td>
+                      <td>{sched.toFixed(2)}</td>
+                      <td><strong>{worked.toFixed(2)}</strong></td>
+                      <td style={{ color: Math.abs(variance) < 1 ? '#6B7280' : variance < 0 ? '#DC2626' : '#D97706' }}>
+                        {variance >= 0 ? '+' : ''}{variance.toFixed(1)}h
+                      </td>
+                      <td>{cg.client_count || 0}</td>
+                      <td>{Number(parseFloat(cg.avg_shift_hours || 0)).toFixed(2)}h</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (
@@ -339,10 +350,11 @@ const ReportsAnalytics = ({ token }) => {
                 <tr>
                   <th>Caregiver</th>
                   <th>Avg Rating</th>
-                  <th>Scheduled Hours</th>
+                  <th>Scheduled</th>
+                  <th>Worked</th>
                   <th>Clients</th>
-                  <th>Incidents Reported</th>
                   <th>On-Time %</th>
+                  <th>GPS Capture</th>
                 </tr>
               </thead>
               <tbody>
@@ -362,18 +374,21 @@ const ReportsAnalytics = ({ token }) => {
                         )}
                       </td>
                       <td>{Number(parseFloat(perf.total_hours || 0)).toFixed(1)}</td>
+                      <td><strong>{Number(parseFloat(perf.worked_hours || 0)).toFixed(1)}</strong></td>
                       <td>{perf.clients_served || 0}</td>
-                      <td>
-                        {(perf.incident_count || 0) > 0 ? (
-                          <span className="value-danger">{perf.incident_count}</span>
-                        ) : (
-                          '0 ✓'
-                        )}
-                      </td>
                       <td>
                         {punct && punct.total_shifts > 0 ? (
                           <span className={parseFloat(punct.on_time_percentage) >= 90 ? 'value-success' : 'value-warning'}>
                             {punct.on_time_percentage}% ({punct.total_shifts} shifts)
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td>
+                        {perf.gps_capture_pct != null ? (
+                          <span className={parseFloat(perf.gps_capture_pct) >= 80 ? 'value-success' : 'value-warning'}>
+                            {perf.gps_capture_pct}%
                           </span>
                         ) : (
                           '—'
@@ -610,15 +625,15 @@ const ReportsAnalytics = ({ token }) => {
     const net = parseFloat(netIncome) || 0;
     const netCash = parseFloat(netIncomeCash) || 0;
     const payerUnclaimedHrs = parseFloat(unbilled.payer_unclaimed_hours) || 0;
+    const payerUnbilledEst = parseFloat(unbilled.payer_unbilled_est) || 0;
+    const payerUnvaluedHrs = parseFloat(unbilled.payer_unvalued_hours) || 0;
     const ppUninvoiced = parseFloat(unbilled.private_pay_uninvoiced_est) || 0;
     return (
       <div>
         <div className="card" style={{ background: '#FEF3C7', borderLeft: '4px solid #D97706', marginBottom: '1rem' }}>
-          <strong>⚠️ Revenue = private-pay invoices + MCO/Medicaid claims recorded in the system.</strong> MCO
-          revenue (My Choice, etc.) only appears once claims are generated for the period in the Claims &amp; EVV
-          Engine — if claims haven&apos;t been entered, that revenue is <strong>missing here</strong> and Net
-          Income is understated. Payroll is an estimate from cleaned clock times, not the finalized payroll run.
-          Directional view, not a filed P&amp;L.
+          <strong>⚠️ Earned-basis view.</strong> Revenue = what was billed (invoices + claims) plus the estimated
+          value of work done but not yet invoiced/claimed, at real client and payer rates. Payroll is an
+          estimate from cleaned clock times, not the finalized payroll run. Directional view, not a filed P&amp;L.
         </div>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <div className="stat-card">
@@ -644,9 +659,10 @@ const ReportsAnalytics = ({ token }) => {
 
         {(ppUninvoiced > 0.005 || payerUnclaimedHrs > 0.01) && (
           <div className="card" style={{ background: '#EFF6FF', borderLeft: '4px solid #2563EB', marginBottom: '1rem' }}>
-            <strong>Work done this period that isn&apos;t billed yet:</strong>{' '}
-            {ppUninvoiced > 0.005 && <>≈{money(ppUninvoiced)} of private-pay hours not yet invoiced (valued at each client&apos;s rate). </>}
-            {payerUnclaimedHrs > 0.01 && <>{payerUnclaimedHrs.toFixed(1)} payer-billed (MCO/Medicaid/VA) hours with no claim generated — that revenue has no dollar figure here until claims are created.</>}
+            <strong>Work done this period that isn&apos;t billed yet (counted in earned revenue):</strong>{' '}
+            {ppUninvoiced > 0.005 && <>≈{money(ppUninvoiced)} of private-pay hours not yet invoiced (each client&apos;s own rate). </>}
+            {payerUnbilledEst > 0.005 && <>≈{money(payerUnbilledEst)} of payer-billed (MCO/Medicaid/VA) hours with no claim generated yet — valued at the payer&apos;s contracted rate; generate the claims to actually bill it. </>}
+            {payerUnvaluedHrs > 0.01 && <><strong>{payerUnvaluedHrs.toFixed(1)} payer hours have no rate on file</strong> (client missing payer or care-type rate) and are counted at $0 — fix the rate table to value them.</>}
           </div>
         )}
 
@@ -685,6 +701,7 @@ const ReportsAnalytics = ({ token }) => {
             <tbody>
               <tr><td>Revenue billed (invoices + claims)</td><td style={{ textAlign: 'right' }}>{money(revenue.total_billed)}</td></tr>
               <tr><td>+ Private-pay work not yet invoiced (est.)</td><td style={{ textAlign: 'right' }}>{money(ppUninvoiced)}</td></tr>
+              <tr><td>+ Payer work not yet claimed (est. at contract rates)</td><td style={{ textAlign: 'right' }}>{money(payerUnbilledEst)}</td></tr>
               <tr><td>&minus; Payroll (incl. est. taxes)</td><td style={{ textAlign: 'right' }}>&minus;{money(payroll.total)}</td></tr>
               <tr><td>&minus; Expenses</td><td style={{ textAlign: 'right' }}>&minus;{money(expenses.total)}</td></tr>
               <tr style={{ fontWeight: 700, borderTop: '2px solid #E5E7EB' }}>
