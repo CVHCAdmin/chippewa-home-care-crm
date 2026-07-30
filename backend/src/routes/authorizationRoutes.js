@@ -180,67 +180,132 @@ router.get('/check/:clientId', auth, async (req, res) => {
 });
 
 // ─── IMPORT FROM MIDAS CSV ────────────────────────────────────────────────────
-// MIDAS doesn't have an API - export CSV from portal, import here
-// Expected columns: MemberID, AuthNumber, ServiceCode, AuthorizedUnits, StartDate, EndDate
+// MIDAS doesn't have an API — export the "Authorization List" from the portal
+// as CSV (comma) and upload it AS-IS. The real export (verified against a live
+// file 2026-07-30) has a title line above the header row, quoted names with
+// commas, padded member IDs, M/D/YYYY dates, columns named "MIDAS Auth
+// Number" / "Units" / "Service Start" / "Service End", weekly 15-min units,
+// and repeat rows for revisions (later row wins). Parsing happens HERE with
+// papaparse — the old frontend comma-split shredded the quoted fields and
+// read the title line as headers, so every import reported 0.
+const Papa = require('papaparse');
+
+const parseMidasDate = (s) => {
+  if (!s) return null;
+  s = String(s).trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return null;
+};
+
 router.post('/import-csv', auth, requireAdmin, async (req, res) => {
   try {
-    const { rows } = req.body; // Array of parsed CSV rows from frontend
+    let { rows, text } = req.body;
+    if (text) {
+      // Skip everything above the real header row (MIDAS puts a title line first)
+      const lines = String(text).split(/\r?\n/);
+      const headerIdx = lines.findIndex(l => l.includes('Member ID'));
+      if (headerIdx === -1) return res.status(400).json({ error: 'Could not find a "Member ID" header row — is this the MIDAS Authorization List CSV (comma format)?' });
+      const parsed = Papa.parse(lines.slice(headerIdx).join('\n'), { header: true, skipEmptyLines: true });
+      rows = parsed.data;
+    }
     if (!rows || !rows.length) return res.status(400).json({ error: 'No data provided' });
 
-    let imported = 0, skipped = 0, errors = [];
+    const g = (row, ...names) => {
+      for (const n of names) {
+        if (row[n] != null && String(row[n]).trim() !== '') return String(row[n]).trim();
+      }
+      return '';
+    };
+
+    let imported = 0, skipped = 0;
+    const errors = [];
+    const matchedClients = new Set();
 
     for (const row of rows) {
       try {
-        // Match member ID to client
-        const client = await db.query(`
+        const memberId = g(row, 'Member ID', 'MemberID', 'member_id');
+        const memberName = g(row, 'Member Name');
+        const authNumber = g(row, 'MIDAS Auth Number', 'AuthNumber', 'Auth Number', 'auth_number');
+        if (!authNumber) { continue; } // blank/trailer line
+
+        // 1. Match by member ID against Medicaid / MCO member IDs
+        let client = await db.query(`
           SELECT id FROM clients
-          WHERE medicaid_id = $1 OR mco_member_id = $1
-          LIMIT 1
-        `, [row.MemberID || row.member_id || row['Member ID']]);
+          WHERE TRIM(medicaid_id) = $1 OR TRIM(mco_member_id) = $1
+          ORDER BY is_active DESC LIMIT 1
+        `, [memberId]);
+
+        // 2. Fall back to the "Last, First M" member name against active clients
+        if (!client.rows.length && memberName.includes(',')) {
+          const [last, rest] = memberName.split(',').map(s => s.trim());
+          const first = (rest || '').split(/\s+/)[0] || '';
+          client = await db.query(`
+            SELECT id FROM clients
+            WHERE is_active = true
+              AND LOWER(TRIM(last_name)) = LOWER($1)
+              AND LOWER(SPLIT_PART(TRIM(first_name), ' ', 1)) = LOWER($2)
+            ORDER BY created_at LIMIT 1
+          `, [last, first]);
+        }
 
         if (!client.rows.length) {
           skipped++;
-          errors.push(`No client found for Member ID: ${row.MemberID || row.member_id}`);
+          errors.push(`No client match for ${memberName || 'Member ID ' + memberId} — add their MCO Member ID (${memberId}) to the client profile and re-import`);
           continue;
         }
-
         const clientId = client.rows[0].id;
-        const authNumber = row.AuthNumber || row.auth_number || row['Auth Number'];
-        const procedureCode = row.ServiceCode || row.service_code || row['Service Code'] || 'T1019';
-        const authorizedUnits = parseFloat(row.AuthorizedUnits || row.authorized_units || row['Authorized Units'] || 0);
-        const startDate = row.StartDate || row.start_date || row['Start Date'];
-        const endDate = row.EndDate || row.end_date || row['End Date'];
 
+        const procedureCode = g(row, 'ProcedureCode', 'ServiceCode', 'Service Code') || 'T1019';
+        const authorizedUnits = parseFloat(g(row, 'Units', 'AuthorizedUnits', 'Authorized Units') || 0);
+        const unitType = /15\s*min/i.test(g(row, 'Unit Type')) ? '15min' : 'hours';
+        const frequency = g(row, 'Frequency');
+        const startDate = parseMidasDate(g(row, 'Service Start', 'StartDate', 'Start Date'));
+        const endDate = parseMidasDate(g(row, 'Service End', 'EndDate', 'End Date'));
+        const cancelFlag = g(row, 'CancelFlag');
+        const midasId = g(row, 'MIDAS ID');
+
+        if (frequency && !/week/i.test(frequency)) {
+          skipped++;
+          errors.push(`Auth ${authNumber} (${memberName}): frequency "${frequency}" is not weekly — enter it by hand, the tracker stores weekly units`);
+          continue;
+        }
         if (!authorizedUnits || !startDate || !endDate) {
           skipped++;
-          errors.push(`Missing data for auth ${authNumber}`);
+          errors.push(`Missing units/dates for auth ${authNumber} (${memberName})`);
           continue;
         }
 
-        // Check for existing auth with same number
+        const cancelled = cancelFlag !== '' && cancelFlag !== '0';
         const existing = await db.query(
           `SELECT id FROM authorizations WHERE auth_number = $1 AND client_id = $2`,
           [authNumber, clientId]
         );
 
         if (existing.rows.length) {
-          // Update existing
           await db.query(`
             UPDATE authorizations SET
-              authorized_units = $1, start_date = $2, end_date = $3,
-              status = CASE WHEN $3::date < CURRENT_DATE THEN 'expired' ELSE 'active' END,
+              authorized_units = $1, unit_type = $2, start_date = $3, end_date = $4,
+              procedure_code = $5, midas_auth_id = COALESCE($6, midas_auth_id),
+              status = CASE WHEN $8 THEN 'cancelled'
+                            WHEN $4::date < CURRENT_DATE THEN 'expired' ELSE 'active' END,
               imported_from = 'midas_csv', updated_at = NOW()
-            WHERE id = $4
-          `, [authorizedUnits, startDate, endDate, existing.rows[0].id]);
+            WHERE id = $7
+          `, [authorizedUnits, unitType, startDate, endDate, procedureCode, midasId || null, existing.rows[0].id, cancelled]);
+        } else if (cancelled) {
+          skipped++;
+          continue; // cancelled auth we never tracked — nothing to do
         } else {
           await db.query(`
-            INSERT INTO authorizations (id, client_id, auth_number, procedure_code,
+            INSERT INTO authorizations (id, client_id, auth_number, midas_auth_id, procedure_code,
               authorized_units, unit_type, start_date, end_date, status, imported_from, created_by)
-            VALUES ($1,$2,$3,$4,$5,'15min',$6,$7,
-              CASE WHEN $7::date < CURRENT_DATE THEN 'expired' ELSE 'active' END,
-              'midas_csv',$8)
-          `, [uuidv4(), clientId, authNumber, procedureCode, authorizedUnits, startDate, endDate, req.user.id]);
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+              CASE WHEN $9::date < CURRENT_DATE THEN 'expired' ELSE 'active' END,
+              'midas_csv',$10)
+          `, [uuidv4(), clientId, authNumber, midasId || null, procedureCode, authorizedUnits, unitType, startDate, endDate, req.user.id]);
         }
+        matchedClients.add(clientId);
         imported++;
       } catch (e) {
         errors.push(`Row error: ${e.message}`);
@@ -248,7 +313,22 @@ router.post('/import-csv', auth, requireAdmin, async (req, res) => {
       }
     }
 
-    res.json({ imported, skipped, errors: errors.slice(0, 20) });
+    // Retire the old hand-entered auths for every client this import covered —
+    // the Forecast sums all active auths per client (paper dates are ignored),
+    // so leaving them active would double the authorized weekly hours.
+    let retired = 0;
+    if (matchedClients.size > 0) {
+      const r = await db.query(`
+        UPDATE authorizations SET status = 'superseded', updated_at = NOW()
+        WHERE client_id = ANY($1::uuid[])
+          AND status = 'active'
+          AND COALESCE(imported_from, '') <> 'midas_csv'
+        RETURNING id
+      `, [[...matchedClients]]);
+      retired = r.rows.length;
+    }
+
+    res.json({ imported, skipped, retired, errors: errors.slice(0, 25) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

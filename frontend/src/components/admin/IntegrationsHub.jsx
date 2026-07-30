@@ -70,6 +70,7 @@ const IntegrationsHub = ({ token }) => {
   const [evvData, setEvvData] = useState(null);
   const [authSummary, setAuthSummary] = useState(null);
   const [authorizations, setAuthorizations] = useState([]);
+  const [authImportErrors, setAuthImportErrors] = useState([]);
   const [ediBatches, setEdiBatches] = useState([]);
   const [remittanceBatches, setRemittanceBatches] = useState([]);
   const [payerSummary, setPayerSummary] = useState([]);
@@ -362,24 +363,35 @@ const IntegrationsHub = ({ token }) => {
           <span style={{fontSize:'1.5rem'}}>📥</span>
           <div>
             <p style={{margin:'0 0 0.25rem',fontWeight:'700',color:'#3730A3',fontSize:'0.875rem'}}>Import from MIDAS</p>
-            <p style={{margin:'0 0 0.5rem',fontSize:'0.82rem',color:'#4338CA'}}>Export authorizations from the MIDAS portal as CSV, then import here. Expected columns: MemberID, AuthNumber, ServiceCode, AuthorizedUnits, StartDate, EndDate</p>
+            <p style={{margin:'0 0 0.5rem',fontSize:'0.82rem',color:'#4338CA'}}>Download the <strong>Authorization List</strong> from MIDAS as <strong>CSV (comma)</strong> and upload it here exactly as downloaded — no editing needed. Clients match by MCO Member ID, or by name as a fallback.</p>
             <label style={{padding:'0.4rem 0.875rem',background:'#6366F1',color:'#fff',borderRadius:'8px',cursor:'pointer',fontWeight:'700',fontSize:'0.82rem'}}>
               📂 Import MIDAS CSV
               <input type="file" accept=".csv" style={{display:'none'}} onChange={async e=>{
                 const file = e.target.files[0]; if(!file) return;
                 const text = await file.text();
-                const lines = text.split('\n'); if(!lines[0]) return toast('CSV file is empty','error');
-                const csvHeaders = lines[0].split(',').map(h=>h.trim());
-                const rows = lines.slice(1).filter(l=>l.trim()).map(l=>{
-                  const vals = l.split(','); const obj={};
-                  csvHeaders.forEach((h,i)=>obj[h]=vals[i]?.trim()||''); return obj;
-                });
-                const r = await fetch(`${API_BASE_URL}/api/authorizations/import-csv`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({rows})});
+                if(!text.trim()) return toast('CSV file is empty','error');
+                // Raw text goes to the server — it handles MIDAS's title row,
+                // quoted names and column naming. The old client-side comma
+                // split shredded the real file and always imported 0.
+                const r = await fetch(`${API_BASE_URL}/api/authorizations/import-csv`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({text})});
                 const d = await r.json();
-                if(r.ok){toast(`Imported ${d.imported} authorizations`,'success');get('/api/authorizations').then(d=>d&&setAuthorizations(d));}
+                if(r.ok){
+                  toast(`Imported ${d.imported} authorizations${d.retired?`, retired ${d.retired} old hand-entered`:''}${d.skipped?`, ${d.skipped} skipped`:''}`, d.imported>0?'success':'error');
+                  setAuthImportErrors(d.errors||[]);
+                  get('/api/authorizations').then(d=>d&&setAuthorizations(d));
+                }
                 else toast(d.error||'Import failed','error');
+                e.target.value='';
               }}/>
             </label>
+            {authImportErrors.length > 0 && (
+              <div style={{marginTop:'0.6rem',background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:'8px',padding:'0.6rem 0.75rem',fontSize:'0.78rem',color:'#92400E'}}>
+                <strong>Skipped rows:</strong>
+                <ul style={{margin:'0.3rem 0 0',paddingLeft:'1.1rem'}}>
+                  {authImportErrors.map((er,i)=><li key={i}>{er}</li>)}
+                </ul>
+              </div>
+            )}
           </div>
         </div>
       </Card>
