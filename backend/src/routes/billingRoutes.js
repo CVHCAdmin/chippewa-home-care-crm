@@ -290,6 +290,36 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     return covered > (ve - vs) * 0.5;
   };
 
+  // Coverage extension: when a caregiver stays past their own shift and their
+  // punch swallows another (unclocked) scheduled window, coveredByActualWork
+  // suppresses that window's line — but the cap below would still bill only the
+  // puncher's own scheduled block, so the covered hours billed to NOBODY
+  // (Linda Wright 2026-07-29: Patricia 8:01–1:10 on an 8–10 schedule absorbed
+  // Sue's 10–1; 5.15 worked hours billed as 2). Credit each suppressed window's
+  // scheduled minutes to the matched punch that covers it (>50% overlap), so
+  // the coverer bills the combined scheduled block. Actual minutes still bound
+  // the bill (beyond the 7-min grace), so this never charges more than worked.
+  const matchedPunchWindows = visitsWithMatch
+    .filter(x => x.entry && x.entry.end_time)
+    .map(x => ({ entryId: x.entry.time_entry_id, day: ymd(x.entry.start_time), start: chiMin(x.entry.start_time), end: chiMin(x.entry.end_time) }));
+  const extraSchedMinByEntry = new Map();
+  for (const { visit, entry } of visitsWithMatch) {
+    if (entry) continue;
+    if (duplicatesWorkedShift(visit)) continue; // duplicate schedule row — no extra care behind it
+    if (!coveredByActualWork(visit)) continue;  // bills normally as a scheduled line
+    const vs = minutesOf(visit.start_time), ve = minutesOf(visit.end_time);
+    if (vs == null || ve == null || ve <= vs) continue;
+    let best = null, bestOverlap = 0;
+    for (const w of matchedPunchWindows) {
+      if (w.day !== ymd(visit.date) || w.start == null || w.end == null || w.end <= w.start) continue;
+      const ov = Math.max(0, Math.min(ve, w.end) - Math.max(vs, w.start));
+      if (ov > bestOverlap) { bestOverlap = ov; best = w; }
+    }
+    if (best && bestOverlap > (ve - vs) * 0.5) {
+      extraSchedMinByEntry.set(best.entryId, (extraSchedMinByEntry.get(best.entryId) || 0) + (ve - vs));
+    }
+  }
+
   for (const { visit, entry } of visitsWithMatch) {
     // Skip a no-clock-in scheduled visit that duplicates an already-worked shift
     // (same-caregiver overlapping schedules, or a substitute's punch covering it).
@@ -313,8 +343,12 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       } else if (entry.start_time && entry.end_time) {
         actualMin = (new Date(entry.end_time) - new Date(entry.start_time)) / 60000;
       }
-      const schedMin = (minutesOf(visit.start_time) != null && minutesOf(visit.end_time) != null)
+      let schedMin = (minutesOf(visit.start_time) != null && minutesOf(visit.end_time) != null)
         ? minutesOf(visit.end_time) - minutesOf(visit.start_time) : null;
+      // Coverage extension (see above): this punch also absorbed another
+      // caregiver's suppressed window — bill the combined scheduled block.
+      const extraMin = extraSchedMinByEntry.get(entry.time_entry_id) || 0;
+      if (schedMin != null && extraMin > 0) schedMin += extraMin;
       const PAY_GRACE_MIN = 7; // same grace payroll reconciliation uses
       const billedMin = (schedMin != null && schedMin > 0 && actualMin >= schedMin - PAY_GRACE_MIN)
         ? schedMin : actualMin;
