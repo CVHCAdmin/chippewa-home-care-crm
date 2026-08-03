@@ -147,7 +147,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
           city: formData.city || null,
           state: formData.state || null,
           zip: formData.zip || null,
-          referralSourceId: formData.referralSourceId || null,
+          referralSourceId: formData.isPrivatePay ? null : (formData.referralSourceId || null),
           careTypeId: formData.careTypeId || null,
           isPrivatePay: formData.isPrivatePay,
           privatePayRate: formData.isPrivatePay ? parseFloat(formData.privatePayRate) : null,
@@ -565,7 +565,13 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                   <input
                     type="checkbox"
                     checked={formData.isPrivatePay}
-                    onChange={(e) => setFormData({ ...formData, isPrivatePay: e.target.checked })}
+                    onChange={(e) => setFormData({
+                      ...formData,
+                      isPrivatePay: e.target.checked,
+                      // Clear the referral source when going private pay — the field is
+                      // hidden below, and a stale value silently billed the payer's rate.
+                      referralSourceId: e.target.checked ? '' : formData.referralSourceId,
+                    })}
                   />
                   Private Pay (Client pays directly, no referral source)
                 </label>

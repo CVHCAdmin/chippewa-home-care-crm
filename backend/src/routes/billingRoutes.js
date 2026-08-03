@@ -84,6 +84,17 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
   let rate = 25.00;
   let rateType = 'hourly';
 
+  // Private pay wins over any lingering referral source. The client edit form
+  // hides the referral-source field when Private Pay is checked but used to
+  // keep the old value, so a converted client could silently bill at the
+  // payer's contract rate instead of their own (Wava Peterson, July 2026).
+  const clientBilling = await db.query(
+    `SELECT is_private_pay, private_pay_rate, private_pay_rate_type FROM clients WHERE id = $1`,
+    [clientId]
+  );
+  const cb = clientBilling.rows[0] || {};
+  if (cb.is_private_pay) referralSourceId = null;
+
   if (referralSourceId) {
     const rateResult = await db.query(`
       SELECT rate_amount, rate_type
@@ -107,15 +118,19 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
 
   // Fall back to private-pay rate if no referral-source rate found
   if (rate === 25.00 && !referralSourceId) {
-    const clientRate = await db.query(
-      `SELECT private_pay_rate, private_pay_rate_type FROM clients WHERE id = $1`,
-      [clientId]
-    );
-    if (clientRate.rows[0]?.private_pay_rate) {
-      rate = parseFloat(clientRate.rows[0].private_pay_rate);
-      rateType = clientRate.rows[0].private_pay_rate_type || 'hourly';
+    if (cb.private_pay_rate) {
+      rate = parseFloat(cb.private_pay_rate);
+      rateType = cb.private_pay_rate_type || 'hourly';
     }
   }
+
+  // A non-hourly rate is PER 15-MINUTE UNIT, same convention as the claims
+  // engine (claimsEngine.js): bill units × rate, units = minutes/15 to 2dp.
+  // This used to bill the unit rate once per visit flat — a 3-hour visit at
+  // $7.56/unit billed $7.56 instead of 12 × $7.56.
+  const lineAmount = (hours) => rateType === 'hourly'
+    ? hours * rate
+    : (Math.round(hours * 4 * 100) / 100) * rate;
 
   // is_training column was added in migration_v50. Pre-migration this column
   // doesn't exist, so we guard the filter behind a one-time existence check.
@@ -319,7 +334,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
 
     if (hours <= 0) continue;
 
-    const amount = rateType === 'hourly' ? hours * rate : rate;
+    const amount = lineAmount(hours);
     invoiceTotal += amount;
 
     // Notes (time-entry/visit) are internal and must NOT appear on invoices.
@@ -365,7 +380,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     const hours = minutes / 60.0;
     if (minutes < 1) continue; // sub-minute "visits" are taps, not care
 
-    const amount = rateType === 'hourly' ? hours * rate : rate;
+    const amount = lineAmount(hours);
     invoiceTotal += amount;
 
     const st = new Date(entry.start_time);
