@@ -196,8 +196,8 @@ router.get('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
     const { invoiceId } = req.params;
 
     const invoiceResult = await db.query(`
-      SELECT 
-        i.id, i.invoice_number, i.total, i.amount_paid, i.payment_status,
+      SELECT
+        i.id, i.invoice_number, i.total, i.amount_paid, i.payment_status, i.sent_at,
         i.billing_period_start, i.billing_period_end,
         c.first_name, c.last_name
       FROM invoices i
@@ -210,6 +210,14 @@ router.get('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
     }
 
     const invoice = invoiceResult.rows[0];
+
+    // Drafts include rescinded invoices (sent_at cleared) — an old emailed pay
+    // link must stop working, so treat them as gone. Pre-v55 invoices were all
+    // backfilled with sent_at, so this only ever hits true drafts.
+    if (!invoice.sent_at) {
+      return res.status(404).json({ error: 'This invoice is no longer available. Please contact the office.' });
+    }
+
     const amountDue = parseFloat(invoice.total) - parseFloat(invoice.amount_paid || 0);
 
     // Per-line breakdown so the client can see the days/hours they're paying for.
@@ -267,6 +275,12 @@ router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
     }
 
     const invoice = invoiceResult.rows[0];
+
+    // Same draft/rescinded gate as the GET above — no checkout session for an
+    // invoice that has been pulled back.
+    if (!invoice.sent_at) {
+      return res.status(404).json({ error: 'This invoice is no longer available. Please contact the office.' });
+    }
 
     if (invoice.payment_status === 'paid') {
       return res.status(400).json({ error: 'Invoice already paid' });

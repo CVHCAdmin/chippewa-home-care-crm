@@ -378,11 +378,31 @@ router.post('/clock-in', verifyToken, async (req, res) => {
         code: 'no_active_occurrence',
       });
     }
-    const result = await db.query(
-      `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, clock_in_location, schedule_id, allotted_minutes)
-       VALUES ($1,$2,$3,NOW(),$4,$5,$6) RETURNING *`,
-      [entryId, req.user.id, clientId, latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, linkedScheduleId, allottedMinutes]
-    );
+    let result;
+    try {
+      result = await db.query(
+        `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, clock_in_location, schedule_id, allotted_minutes)
+         VALUES ($1,$2,$3,NOW(),$4,$5,$6) RETURNING *`,
+        [entryId, req.user.id, clientId, latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, linkedScheduleId, allottedMinutes]
+      );
+    } catch (insertErr) {
+      // uniq_open_time_entry_per_caregiver (v56): two concurrent submits of the
+      // same clock-in tap both pass the open-entry check above, and both used to
+      // insert — creating twin entries 1ms apart that billed the shift twice.
+      // The index makes the second insert lose; return the winner idempotently,
+      // exactly like the 30-second duplicate path above.
+      if (insertErr.code === '23505') {
+        const winner = await db.query(
+          `SELECT id, client_id, start_time FROM time_entries
+            WHERE caregiver_id = $1 AND end_time IS NULL`,
+          [req.user.id]
+        );
+        if (winner.rows[0]) {
+          return res.status(200).json({ ...winner.rows[0], duplicate: true });
+        }
+      }
+      throw insertErr;
+    }
     await auditLog(req.user.id, 'CREATE', 'time_entries', entryId, null, result.rows[0]);
     try {
       const { sendPushToUser } = require('./pushNotificationRoutes');

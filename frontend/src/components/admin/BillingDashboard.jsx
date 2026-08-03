@@ -610,6 +610,28 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     }
   };
 
+  // Pulls a sent invoice back to draft: it disappears from the family portal
+  // and its public pay link stops working. The server refuses once a payment
+  // is recorded (the portal shows paid/partial invoices regardless).
+  const handleRescindInvoice = async (invoice) => {
+    if (!invoice?.id) return;
+    const ok = await confirm(`Rescind invoice #${invoice.invoice_number}? It will disappear from the family portal and its pay link will stop working. If it was already emailed, the family still has that copy.`);
+    if (!ok) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/${invoice.id}/rescind`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to rescind');
+      toast('Invoice rescinded — back to draft, hidden from the family portal', 'success');
+      setSelectedInvoice(prev => prev && prev.id === invoice.id ? { ...prev, sent_at: null } : prev);
+      loadData();
+    } catch (error) {
+      toast('Failed to rescind: ' + error.message, 'error');
+    }
+  };
+
   const handleSendInvoiceReminder = async (invoice) => {
     if (!invoice?.id) return;
     if (invoice.payment_status === 'paid') {
@@ -2046,6 +2068,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <div className="modal-actions no-print" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #eee' }}>
               {!selectedInvoice.sent_at && (
                 <button className="btn btn-success" onClick={() => handleReleaseToPortal(selectedInvoice)}>👁️ Release to Portal</button>
+              )}
+              {selectedInvoice.sent_at && !['paid', 'partial'].includes(selectedInvoice.payment_status) && (
+                <button className="btn btn-warning" onClick={() => handleRescindInvoice(selectedInvoice)}>↩️ Rescind (hide from portal)</button>
               )}
               {selectedInvoice.payment_status !== 'paid' && (
                 <>

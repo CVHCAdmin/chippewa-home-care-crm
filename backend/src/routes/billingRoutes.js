@@ -15,9 +15,11 @@ const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 // Old invoices may have descriptions like "Home Care Services (13:30 - 17:30)"
 // that were stored before we converted to 12h on the way in. Reformat on read
 // so the printed invoice shows AM/PM regardless of when the row was created.
+// Times already carrying AM/PM must be left alone — reformatting "3:00 PM"
+// re-read the 3 as 3am and printed "3:00 AM PM" on every invoice.
 const reformatTimesIn = (text) => {
   if (typeof text !== 'string') return text;
-  return text.replace(/\b(\d{1,2}):(\d{2})\b/g, (match, h, m) => {
+  return text.replace(/\b(\d{1,2}):(\d{2})\b(?!\s*[AaPp][Mm]\b)/g, (match, h, m) => {
     const hr = parseInt(h, 10);
     if (hr < 0 || hr > 23) return match;
     const ampm = hr < 12 ? 'AM' : 'PM';
@@ -363,6 +365,26 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     });
   }
 
+  // Twin-punch guard: a duplicate clock-in (double-insert race, closed by the
+  // v56 unique index) leaves a second completed entry covering the same minutes
+  // as one already billed. An orphan whose window is mostly (>50%) covered by
+  // this invoice's already-billed punches for the same caregiver is that twin,
+  // not a second visit — billing it double-bills the shift (Linda Wright
+  // 2026-07-28: a $134.85 phantom "unscheduled" line next to the real 4h line).
+  const billedWindows = visitsWithMatch
+    .filter(x => x.entry && x.entry.end_time)
+    .map(x => ({ caregiver_id: x.visit.caregiver_id, day: ymd(x.entry.start_time), start: chiMin(x.entry.start_time), end: chiMin(x.entry.end_time) }));
+  const mostlyBilledAlready = (entry) => {
+    const es = chiMin(entry.start_time), ee = entry.end_time ? chiMin(entry.end_time) : null;
+    if (es == null || ee == null || ee <= es) return false;
+    let covered = 0;
+    for (const w of billedWindows) {
+      if (w.caregiver_id !== entry.caregiver_id || w.day !== ymd(entry.start_time) || w.start == null || w.end == null || w.end <= w.start) continue;
+      covered += Math.max(0, Math.min(ee, w.end) - Math.max(es, w.start));
+    }
+    return covered > (ee - es) * 0.5;
+  };
+
   // Orphan time entries (worked but not on schedule) → bill as unscheduled.
   // Prefer billable_minutes: the clock-out path already zeroes accidental
   // double-taps (<60s) and caps implausibly long shifts there — billing raw
@@ -379,9 +401,14 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     }
     const hours = minutes / 60.0;
     if (minutes < 1) continue; // sub-minute "visits" are taps, not care
+    if (mostlyBilledAlready(entry)) continue; // twin punch of a billed shift
 
     const amount = lineAmount(hours);
     invoiceTotal += amount;
+
+    // Later orphans check against this one too — twin pairs where NEITHER
+    // matched a schedule must still only bill once.
+    if (entry.end_time) billedWindows.push({ caregiver_id: entry.caregiver_id, day: ymd(entry.start_time), start: chiMin(entry.start_time), end: chiMin(entry.end_time) });
 
     const st = new Date(entry.start_time);
     const et = entry.end_time ? new Date(entry.end_time) : null;
@@ -1188,6 +1215,38 @@ router.post('/invoices/:id/release', auth, async (req, res) => {
     res.json({ success: true, sent_at: r.rows[0].sent_at });
   } catch (error) {
     console.error('Error releasing invoice:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/billing/invoices/:id/rescind
+// Pulls a sent invoice back to draft: the family portal hides it again and its
+// public pay link stops working (stripeRoutes refuses drafts). Refused once a
+// payment is recorded — the portal shows paid/partial invoices regardless of
+// sent_at, so a rescind couldn't hide those. An email already delivered can't
+// be recalled; the client keeps that copy.
+router.post('/invoices/:id/rescind', auth, async (req, res) => {
+  try {
+    const cur = await db.query(
+      'SELECT id, sent_at, payment_status, amount_paid FROM invoices WHERE id = $1',
+      [req.params.id]
+    );
+    if (cur.rows.length === 0) return res.status(404).json({ error: 'Invoice not found' });
+    const inv = cur.rows[0];
+    if (!inv.sent_at) {
+      return res.status(400).json({ error: 'Invoice is already a draft — nothing to rescind.' });
+    }
+    if (parseFloat(inv.amount_paid || 0) > 0 || ['paid', 'partial'].includes(inv.payment_status)) {
+      return res.status(400).json({ error: 'A payment has been recorded on this invoice, so the portal will show it regardless. Adjust or refund the payment first.' });
+    }
+    await db.query(`
+      UPDATE invoices
+      SET sent_at = NULL, notes = COALESCE(notes, '') || $1, updated_at = NOW()
+      WHERE id = $2
+    `, [`\nRescinded (returned to draft) on ${new Date().toLocaleDateString()}`, req.params.id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error rescinding invoice:', error);
     res.status(500).json({ error: error.message });
   }
 });
