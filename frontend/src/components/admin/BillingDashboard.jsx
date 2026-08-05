@@ -298,13 +298,18 @@ const BillingDashboard = ({ token }) => {
   const handleManualInvoice = async (e) => {
     e.preventDefault();
     
-    // Validate line items
-    const validLineItems = manualLineItems.filter(item => 
-      parseFloat(item.hours) > 0 && parseFloat(item.rate) > 0
-    );
-    
+    if (!manualRate) {
+      toast('This client has no billing rate configured. Set it on the client (Clients → Edit) first.', 'error');
+      return;
+    }
+
+    // Rate is stamped from the client record server-side; only hours are entered here.
+    const validLineItems = manualLineItems
+      .filter(item => parseFloat(item.hours) > 0)
+      .map(item => ({ ...item, rate: manualRate.rate }));
+
     if (validLineItems.length === 0) {
-      toast('Please add at least one line item with hours and rate');
+      toast('Please add at least one line item with hours');
       return;
     }
 
@@ -393,10 +398,28 @@ const BillingDashboard = ({ token }) => {
     setManualLineItems(updated);
   };
 
+  // The rate belongs to the client, not to the invoice form. It used to be a
+  // per-line number input, and its spinner quietly moved rates a cent at a time
+  // (invoice #67 billed $33.02/$33.03 against a $33.00 client). The server now
+  // stamps this same value regardless of what we send; we resolve it here only
+  // so the operator can see what they're billing before they save.
+  const effectiveRateFor = (clientId) => {
+    const c = clients.find(x => x.id === clientId);
+    if (!c) return null;
+    if (!c.is_private_pay && c.referral_source_id) {
+      const r = rates.find(x => x.referral_source_id === c.referral_source_id
+        && (x.care_type_id === c.care_type_id || !x.care_type_id)
+        && (x.is_active === true || x.is_active == null));
+      if (r) return { rate: parseFloat(r.rate_amount), source: 'payer contract rate' };
+    }
+    if (c.private_pay_rate) return { rate: parseFloat(c.private_pay_rate), source: 'client private-pay rate' };
+    return null;
+  };
+  const manualRate = effectiveRateFor(manualFormData.clientId);
+
   const calculateManualTotal = () => {
-    return manualLineItems.reduce((sum, item) => {
-      return sum + (parseFloat(item.hours || 0) * parseFloat(item.rate || 0));
-    }, 0);
+    const rate = manualRate?.rate || 0;
+    return manualLineItems.reduce((sum, item) => sum + (parseFloat(item.hours || 0) * rate), 0);
   };
 
   const handleBatchGenerate = async (e) => {
@@ -494,7 +517,10 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     setEditingInvoice(invoice);
   };
 
-  const editLineAmount = (l) => parseFloat(l.hours || 0) * parseFloat(l.rate || 0);
+  // Rate follows the invoice's client, same as creation — the server stamps it
+  // either way, so showing anything else here would just lie about the total.
+  const editRate = editingInvoice ? (effectiveRateFor(editingInvoice.client_id)?.rate ?? null) : null;
+  const editLineAmount = (l) => parseFloat(l.hours || 0) * (editRate || 0);
   const editGrandTotal = () => editLines.reduce((s, l) => s + editLineAmount(l), 0);
   const updateEditLine = (idx, field, value) => setEditLines(prev => prev.map((l, i) => i === idx ? { ...l, [field]: value } : l));
   const addEditLine = () => setEditLines(prev => [...prev, { description: 'Home Care Services', hours: '', rate: '', service_date: '', caregiver_id: null, time_entry_id: null }]);
@@ -503,11 +529,12 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   const saveLineItems = async () => {
     if (!editingInvoice?.id) return;
     const cleaned = editLines
-      .filter(l => (l.description || '').trim() || parseFloat(l.hours || 0) || parseFloat(l.rate || 0))
+      .filter(l => (l.description || '').trim() || parseFloat(l.hours || 0))
+      // No rate is sent: the server stamps the client's configured rate. Sending
+      // 0 here would read as a deliberate write-off and bill the line at nothing.
       .map(l => ({
         description: (l.description || '').trim() || 'Home Care Services',
         hours: parseFloat(l.hours || 0),
-        rate: parseFloat(l.rate || 0),
         serviceDate: l.service_date || null,
         caregiver_id: l.caregiver_id || null,
         time_entry_id: l.time_entry_id || null,
@@ -1093,22 +1120,23 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                   </div>
                   
                   <div className="form-group" style={{ margin: 0 }}>
-                    <label style={{ fontSize: '0.8rem' }}>Rate *</label>
-                    <input 
-                      type="number" 
-                      step="0.01" 
-                      min="0" 
-                      value={item.rate} 
-                      onChange={(e) => updateManualLineItem(index, 'rate', e.target.value)}
-                      placeholder="0.00"
-                      required
-                    />
+                    <label style={{ fontSize: '0.8rem' }}>Rate</label>
+                    <div
+                      title={manualRate ? `From the ${manualRate.source} — change it on the client, not here` : 'Select a client with a configured rate'}
+                      style={{
+                        padding: '0.5rem 0.6rem', background: '#F3F4F6', border: '1px solid #E5E7EB',
+                        borderRadius: 6, color: manualRate ? '#111827' : '#B91C1C', fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {manualRate ? `$${manualRate.rate.toFixed(2)}` : 'No rate set'}
+                    </div>
                   </div>
-                  
+
                   <div className="form-group" style={{ margin: 0 }}>
                     <label style={{ fontSize: '0.8rem' }}>Amount</label>
                     <div style={{ padding: '0.6rem', background: '#e8f5e9', borderRadius: '6px', fontWeight: '600', color: '#2e7d32' }}>
-                      {formatCurrency((parseFloat(item.hours) || 0) * (parseFloat(item.rate) || 0))}
+                      {formatCurrency((parseFloat(item.hours) || 0) * (manualRate?.rate || 0))}
                     </div>
                   </div>
                 </div>
@@ -1530,7 +1558,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     <td><input type="text" value={l.description} onChange={(e) => updateEditLine(idx, 'description', e.target.value)} placeholder="Home Care Services" style={{ width: '100%' }} /></td>
                     <td><input type="date" value={l.service_date} onChange={(e) => updateEditLine(idx, 'service_date', e.target.value)} /></td>
                     <td><input type="number" step="0.01" min="0" value={l.hours} onChange={(e) => updateEditLine(idx, 'hours', e.target.value)} style={{ width: 80 }} /></td>
-                    <td><input type="number" step="0.01" min="0" value={l.rate} onChange={(e) => updateEditLine(idx, 'rate', e.target.value)} style={{ width: 80 }} /></td>
+                    <td title="Set on the client (Clients → Edit), not per line">
+                      {editRate != null ? formatCurrency(editRate) : <span style={{ color: '#B91C1C' }}>No rate set</span>}
+                    </td>
                     <td>{formatCurrency(editLineAmount(l))}</td>
                     <td><button type="button" className="btn btn-secondary" onClick={() => removeEditLine(idx)} title="Remove line">🗑️</button></td>
                   </tr>

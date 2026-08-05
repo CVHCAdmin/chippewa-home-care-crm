@@ -497,6 +497,66 @@ function clampLineItemDescription(desc) {
   return base.slice(0, room - 1).trimEnd() + '…' + suffix;
 }
 
+/**
+ * The client record is the ONLY source of a billing rate.
+ *
+ * Rates used to be typed per line in the manual invoice form, where the field was
+ * a number spinner — one stray arrow key or mouse wheel moved it a cent, and the
+ * old sanity check only rejected rates below 50% or above 200% of the configured
+ * rate, so the drift billed silently (invoice #67, Diane Shantz: $33.02/$33.03
+ * against her $33.00; invoice #44, Mike Mattson: $33.03). Callers no longer get a
+ * say — both write paths stamp what this returns. To change a rate, edit the
+ * client (private pay) or the referral-source rate table (payer).
+ *
+ * Returns { rate, rateType, source } or null when nothing is configured, so the
+ * caller can fail loudly instead of billing a silent default.
+ */
+async function resolveClientRate(dbc, client, periodStart, periodEnd) {
+  // Private pay wins over any lingering referral source — the client edit form
+  // hides that field when Private Pay is checked but keeps the old value.
+  if (!client.is_private_pay && client.referral_source_id) {
+    const r = await dbc.query(
+      `SELECT rate_amount, rate_type FROM referral_source_rates
+         WHERE referral_source_id = $1
+           AND (care_type_id = $2 OR care_type_id IS NULL)
+           AND (is_active = true OR is_active IS NULL)
+           AND (effective_date IS NULL OR effective_date <= $3)
+           AND (end_date IS NULL OR end_date >= $4)
+         ORDER BY CASE WHEN care_type_id = $2 THEN 0 ELSE 1 END,
+                  effective_date DESC NULLS LAST
+         LIMIT 1`,
+      [client.referral_source_id, client.care_type_id, periodEnd, periodStart]
+    );
+    if (r.rows[0]) {
+      return {
+        rate: parseFloat(r.rows[0].rate_amount),
+        rateType: r.rows[0].rate_type || 'hourly',
+        source: 'referral_source_rate',
+      };
+    }
+  }
+  if (client.private_pay_rate) {
+    return {
+      rate: parseFloat(client.private_pay_rate),
+      rateType: client.private_pay_rate_type || 'hourly',
+      source: 'client_private_pay_rate',
+    };
+  }
+  return null;
+}
+
+// Stamp the authoritative rate onto a submitted line and recompute its amount.
+// An explicit rate of 0 is preserved: a deliberate no-charge/write-off line is
+// unambiguous (you cannot fat-finger 0.01 into 0), and forcing it to the client
+// rate would silently start billing lines someone zeroed on purpose.
+function applyRate(item, resolved) {
+  const hours = parseFloat(item.hours || 0);
+  const submitted = item.rate === '' || item.rate == null ? null : parseFloat(item.rate);
+  const isWriteOff = submitted === 0;
+  const rate = isWriteOff ? 0 : resolved.rate;
+  return { hours, rate, amount: Math.round(hours * rate * 100) / 100 };
+}
+
 async function insertLineItems(invoiceId, lineItems, dbClient = db) {
   for (const item of lineItems) {
     await dbClient.query(`
@@ -745,7 +805,7 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
 
 // Create manual invoice with custom line items
 router.post('/invoices/manual', auth, async (req, res) => {
-  const { clientId, billingPeriodStart, billingPeriodEnd, notes, lineItems, detailedMode, acknowledgeRateWarning } = req.body;
+  const { clientId, billingPeriodStart, billingPeriodEnd, notes, lineItems, detailedMode } = req.body;
 
   if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
     return res.status(400).json({ error: 'Client and billing period are required' });
@@ -760,7 +820,7 @@ router.post('/invoices/manual', auth, async (req, res) => {
     // Get client info
     const clientResult = await dbClient.query(`
       SELECT id, first_name, last_name, referral_source_id, care_type_id, is_private_pay,
-             private_pay_rate
+             private_pay_rate, private_pay_rate_type
       FROM clients WHERE id = $1
     `, [clientId]);
 
@@ -770,45 +830,14 @@ router.post('/invoices/manual', auth, async (req, res) => {
 
     const client = clientResult.rows[0];
 
-    // Rate sanity warning: catch obvious typos like $0.05 instead of $33,
-    // or $300 instead of $30. Compare each line's rate to the client's
-    // configured rate and refuse if any is <50% or >200% off, unless the
-    // caller has explicitly acknowledged the warning. Skips lines with rate=0
-    // (write-offs / adjustments) and lines with no expected rate to compare.
-    if (!acknowledgeRateWarning) {
-      let expectedRate = null;
-      if (client.referral_source_id) {
-        const r = await dbClient.query(
-          `SELECT rate_amount FROM referral_source_rates
-             WHERE referral_source_id = $1
-               AND (care_type_id = $2 OR care_type_id IS NULL)
-               AND (is_active = true OR is_active IS NULL)
-               AND (effective_date IS NULL OR effective_date <= $3)
-               AND (end_date IS NULL OR end_date >= $4)
-             ORDER BY CASE WHEN care_type_id = $2 THEN 0 ELSE 1 END,
-                      effective_date DESC NULLS LAST
-             LIMIT 1`,
-          [client.referral_source_id, client.care_type_id, billingPeriodEnd, billingPeriodStart]
-        );
-        if (r.rows[0]) expectedRate = parseFloat(r.rows[0].rate_amount);
-      }
-      if (expectedRate == null && client.private_pay_rate) {
-        expectedRate = parseFloat(client.private_pay_rate);
-      }
-      if (expectedRate && expectedRate > 0) {
-        const offendingLines = lineItems
-          .map((item, idx) => ({ idx, rate: parseFloat(item.rate || 0), hours: parseFloat(item.hours || 0) }))
-          .filter(l => l.rate > 0 && l.hours > 0 && (l.rate < expectedRate * 0.5 || l.rate > expectedRate * 2));
-        if (offendingLines.length > 0) {
-          return res.status(409).json({
-            error: 'Rate looks wrong',
-            message: `One or more line items have a rate that's well outside the client's configured rate of $${expectedRate.toFixed(2)}/hr. Double-check before saving.`,
-            expectedRate,
-            offendingLines: offendingLines.map(l => ({ lineIndex: l.idx, rate: l.rate })),
-            hint: 'Resubmit with acknowledgeRateWarning: true if the rate is correct.',
-          });
-        }
-      }
+    // The rate comes from the client record, never from the request. Any rate
+    // the caller sent is ignored (see resolveClientRate).
+    const resolved = await resolveClientRate(dbClient, client, billingPeriodStart, billingPeriodEnd);
+    if (!resolved || !(resolved.rate > 0)) {
+      return res.status(400).json({
+        error: 'No billing rate configured for this client',
+        message: `${client.first_name} ${client.last_name} has no rate set. Add it on the client (Clients → Edit → Private Pay Rate), or set a referral-source rate for their payer, then create the invoice.`,
+      });
     }
 
     // Check for existing invoice
@@ -825,11 +854,10 @@ router.post('/invoices/manual', auth, async (req, res) => {
       });
     }
 
-    // Calculate total from line items
+    // Calculate total from line items at the client's configured rate
     let total = 0;
     for (const item of lineItems) {
-      const amount = parseFloat(item.hours || 0) * parseFloat(item.rate || 0);
-      total += amount;
+      total += applyRate(item, resolved).amount;
     }
 
     // Generate invoice number
@@ -863,7 +891,7 @@ router.post('/invoices/manual', auth, async (req, res) => {
     // Insert line items with optional service_date and times
     const insertedLineItems = [];
     for (const item of lineItems) {
-      const amount = parseFloat(item.hours || 0) * parseFloat(item.rate || 0);
+      const { hours: lineHours, rate: lineRate, amount } = applyRate(item, resolved);
 
       // Build description with time info if provided. Convert the 24h
       // "HH:MM" dropdown values into 12h AM/PM so the printed invoice
@@ -888,8 +916,8 @@ router.post('/invoices/manual', auth, async (req, res) => {
         invoice.id,
         item.caregiverId || null,
         clampLineItemDescription(description),
-        item.hours,
-        item.rate,
+        lineHours,
+        lineRate,
         amount,
         item.serviceDate || null
       ]);
@@ -900,8 +928,8 @@ router.post('/invoices/manual', auth, async (req, res) => {
         caregiver_last_name: item.caregiverName?.split(' ').slice(1).join(' ') || '',
         description: description,
         service_date: item.serviceDate,
-        hours: item.hours,
-        rate: item.rate,
+        hours: lineHours,
+        rate: lineRate,
         amount: amount
       });
     }
@@ -1157,7 +1185,12 @@ router.put('/invoices/:id/line-items', auth, async (req, res) => {
   const dbClient = await db.pool.connect();
   try {
     const invResult = await dbClient.query(
-      'SELECT id, payment_status, amount_paid, tax FROM invoices WHERE id = $1', [id]
+      `SELECT i.id, i.payment_status, i.amount_paid, i.tax,
+              i.billing_period_start, i.billing_period_end,
+              c.first_name, c.last_name, c.referral_source_id, c.care_type_id,
+              c.is_private_pay, c.private_pay_rate, c.private_pay_rate_type
+         FROM invoices i JOIN clients c ON c.id = i.client_id
+        WHERE i.id = $1`, [id]
     );
     if (invResult.rows.length === 0) return res.status(404).json({ error: 'Invoice not found' });
     const invoice = invResult.rows[0];
@@ -1165,6 +1198,16 @@ router.put('/invoices/:id/line-items', auth, async (req, res) => {
     // Refuse once any money has been collected — never alter a paid invoice.
     if (invoice.payment_status === 'paid' || parseFloat(invoice.amount_paid || 0) > 0) {
       return res.status(409).json({ error: 'This invoice has a payment recorded and can no longer be edited.' });
+    }
+
+    // Same rule as creation: the rate comes from the client record, not the form.
+    const resolved = await resolveClientRate(
+      dbClient, invoice, invoice.billing_period_start, invoice.billing_period_end);
+    if (!resolved || !(resolved.rate > 0)) {
+      return res.status(400).json({
+        error: 'No billing rate configured for this client',
+        message: `${invoice.first_name} ${invoice.last_name} has no rate set. Add it on the client (Clients → Edit → Private Pay Rate), or set a referral-source rate for their payer, then edit these lines.`,
+      });
     }
 
     // Same 24h -> 12h conversion the manual-create path uses for printed times.
@@ -1178,9 +1221,7 @@ router.put('/invoices/:id/line-items', auth, async (req, res) => {
 
     let subtotal = 0;
     const prepared = lineItems.map((item) => {
-      const hours = parseFloat(item.hours || 0);
-      const rate = parseFloat(item.rate || 0);
-      const amount = hours * rate;
+      const { hours, rate, amount } = applyRate(item, resolved);
       subtotal += amount;
       let description = item.description || 'Home Care Services';
       if (detailedMode && item.startTime && item.endTime) {
@@ -1995,3 +2036,5 @@ module.exports = router;
 module.exports.clampLineItemDescription = clampLineItemDescription;
 module.exports.MAX_LINE_ITEM_DESC = MAX_LINE_ITEM_DESC;
 module.exports.generateLineItems = generateLineItems;
+module.exports.applyRate = applyRate;
+module.exports.resolveClientRate = resolveClientRate;
