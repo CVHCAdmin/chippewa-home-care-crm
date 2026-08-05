@@ -11,6 +11,7 @@ import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
+import { setShiftBusy } from '../shiftGuard';
 import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
 import SignaturePad from './SignaturePad';
@@ -624,6 +625,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // Clock-out takes seconds (GPS snapshot + request) with no visual change — people
   // think the tap didn't register and tap again. Show a working state immediately.
   const [clockingOut, setClockingOut] = useState(false);
+
+  // Tell VersionWatcher when a reload would be destructive. It auto-reloads the
+  // installed PWA onto new builds (that app has no reload button of its own), so
+  // it has to hold off while a shift is open or a punch is in flight.
+  useEffect(() => {
+    setShiftBusy(!!activeSession || clockingIn || clockingOut);
+    return () => setShiftBusy(false);
+  }, [activeSession, clockingIn, clockingOut]);
 
   // Track the browser's geolocation permission so caregivers with EVV (payer-billed)
   // clients see a persistent fix-it banner when location is denied — the one failure
@@ -1519,6 +1528,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                   return displayClients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>);
                 })()}
               </select>
+              {/* An empty list is the dead end that strands people: the dropdown told
+                  them to "try refreshing" inside an app with nothing to refresh with.
+                  Give them the actual button. */}
+              {clients.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  style={{
+                    width: '100%', marginTop: '0.6rem', padding: '0.8rem',
+                    background: '#2563eb', color: '#fff', border: 'none',
+                    borderRadius: 10, fontWeight: 800, fontSize: '1rem', cursor: 'pointer',
+                  }}
+                >🔄 Refresh App</button>
+              )}
               {(() => {
                 const todayClientIds = getTodaysAppointments().map(a => a.client_id);
                 const hasTodayClients = clients.some(c => todayClientIds.includes(c.id));
@@ -2075,6 +2098,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         <div className="sidebar-user">
           <div className="sidebar-user-name">{user.name || `${user.first_name || ''} ${user.last_name || ''}`}</div>
           <div className="sidebar-user-role">Caregiver</div>
+          {/* Refresh is NOT a nicety in the installed app — it has no reload button
+              of its own, and a stale bundle is what breaks clock-in. Keep it above
+              Logout so nobody logs out just to get a fresh page. */}
+          <button
+            className="btn-logout"
+            style={{ background: 'rgba(255,255,255,0.15)', marginBottom: '0.5rem' }}
+            onClick={() => window.location.reload()}
+          >🔄 Refresh App</button>
           <button className="btn-logout" onClick={onLogout}>Logout</button>
         </div>
       </div>
