@@ -62,9 +62,15 @@
       padding-bottom: env(safe-area-inset-bottom);
       padding-left: env(safe-area-inset-left);
       padding-right: env(safe-area-inset-right);
-      overscroll-behavior: none; /* prevents pull-to-refresh on iOS PWA */
       -webkit-tap-highlight-color: transparent;
       -webkit-touch-callout: none;
+    }
+    /* Pull-to-refresh stays DISABLED on iOS only. On Android it is the caregiver's
+       manual escape hatch: the installed PWA has no address bar and no reload
+       button, so killing the gesture there left them stranded on a stale bundle
+       with clock-in broken. @supports (-webkit-touch-callout) matches iOS Safari. */
+    @supports (-webkit-touch-callout: none) {
+      body { overscroll-behavior: none; }
     }
     /* Prevent text selection on buttons (feels more native) */
     button { -webkit-user-select: none; user-select: none; }

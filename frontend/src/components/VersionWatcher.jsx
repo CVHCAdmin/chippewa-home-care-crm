@@ -1,11 +1,23 @@
 import React, { useState, useEffect } from 'react';
+import { isShiftBusy } from '../shiftGuard';
 
-// Detects when a newer build has been deployed and offers a reload. The app is a
-// long-lived SPA (caregivers/admins keep it open all day), so without this they
-// can run stale code for hours after a deploy. Polls /version.json (emitted at
-// build time) and compares to the build baked into this bundle. Reload is MANUAL
-// — never auto-reload, so it can't interrupt someone mid clock-in.
+// Detects when a newer build has been deployed and gets the app onto it.
+//
+// The installed PWA (display: standalone) has no address bar and no reload
+// button, and Android resumes a long-lived page instead of re-navigating — so a
+// caregiver can sit on a days-old bundle with no way to escape it. That is why
+// clock-in worked from the browser but not from the installed app.
+//
+// So: when a new build is out we reload automatically, but ONLY when nothing is
+// in flight (no open shift, no punch in progress). If a shift IS open we fall
+// back to the manual banner, which is the old behaviour — a reload must never
+// interrupt someone mid clock-in.
 const CURRENT_BUILD = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : null;
+
+// Remembers the build we already auto-reloaded for. If a reload somehow doesn't
+// land us on that build (stale edge, bad deploy) we show the banner instead of
+// reloading forever. sessionStorage survives the reload but not a fresh launch.
+const RELOADED_FOR = 'vw_autoreloaded_build';
 
 export default function VersionWatcher() {
   const [stale, setStale] = useState(false);
@@ -13,19 +25,41 @@ export default function VersionWatcher() {
   useEffect(() => {
     if (!CURRENT_BUILD) return;
     let cancelled = false;
+
     const check = async () => {
       try {
         const r = await fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' });
         if (!r.ok) return; // dev / not deployed yet
         const d = await r.json();
-        if (!cancelled && d && d.build && String(d.build) !== String(CURRENT_BUILD)) {
-          setStale(true);
-        }
+        if (cancelled || !d || !d.build) return;
+        if (String(d.build) === String(CURRENT_BUILD)) return;
+
+        if (isShiftBusy()) { setStale(true); return; }
+
+        let alreadyTried = false;
+        try { alreadyTried = sessionStorage.getItem(RELOADED_FOR) === String(d.build); } catch (_) {}
+        if (alreadyTried) { setStale(true); return; }
+
+        try { sessionStorage.setItem(RELOADED_FOR, String(d.build)); } catch (_) {}
+        window.location.reload();
       } catch (_) { /* offline — ignore */ }
     };
+
     check();
-    const id = setInterval(check, 5 * 60 * 1000); // every 5 min
-    return () => { cancelled = true; clearInterval(id); };
+    const id = setInterval(check, 5 * 60 * 1000);
+
+    // The moment that actually matters: she taps the icon and the PWA resumes a
+    // page that may be days old. Poll-on-interval alone never catches this.
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
   }, []);
 
   if (!stale) return null;
