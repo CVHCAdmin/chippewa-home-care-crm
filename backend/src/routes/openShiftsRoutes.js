@@ -96,7 +96,7 @@ router.post('/:id/smart-fill', auth, async (req, res) => {
       }).catch(() => {});
     } catch {}
 
-    res.json({ success: true, openShiftId: s.id, assignedTo: caregiverId });
+    res.json({ success: true, openShiftId: s.id, assignedTo: caregiverId, authWarnings });
   } catch (error) {
     console.error('[openShifts smart-fill]', error);
     res.status(500).json({ error: error.message });
@@ -328,7 +328,7 @@ router.post('/:id/approve', auth, async (req, res) => {
       UPDATE open_shift_claims SET status = 'approved' WHERE open_shift_id = $1 AND caregiver_id = $2
     `, [id, s.claimed_by]);
 
-    res.json({ success: true });
+    res.json({ success: true, authWarnings: approveAuthWarnings });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
