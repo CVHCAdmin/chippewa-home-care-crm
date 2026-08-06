@@ -8,11 +8,22 @@ import React from 'react';
 
 const reload = vi.fn();
 
+// Auto-reload only fires in the installed (standalone) app. Default the suite to
+// that context; the browser-tab case is asserted explicitly below.
+const setDisplayMode = (standalone) => {
+  window.matchMedia = (q) => ({
+    matches: standalone && String(q).includes('standalone'),
+    media: String(q), addListener() {}, removeListener() {},
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; },
+  });
+};
+
 beforeEach(() => {
   vi.resetModules();
   reload.mockClear();
   sessionStorage.clear();
   vi.stubGlobal('__BUILD_ID__', 'OLD_BUILD');
+  setDisplayMode(true);
   // jsdom's location is read-only; replace it wholesale so reload is observable.
   delete window.location;
   window.location = { reload, href: 'http://localhost/' };
@@ -40,6 +51,14 @@ describe('VersionWatcher', () => {
     serveBuild('OLD_BUILD');
     await mount();
     await new Promise((r) => setTimeout(r, 50));
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  test('does NOT reload in a normal browser tab — that would yank an admin out of their work', async () => {
+    setDisplayMode(false);
+    serveBuild('NEW_BUILD');
+    const { findByText } = await mount();
+    expect(await findByText(/new version is available/i)).toBeInTheDocument();
     expect(reload).not.toHaveBeenCalled();
   });
 
