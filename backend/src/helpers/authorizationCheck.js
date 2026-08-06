@@ -1,13 +1,33 @@
 // helpers/authorizationCheck.js
-// Shared authorization enforcement — called before any schedule creation
+// Authorization ADVICE for schedule creation. It never blocks.
+//
+// This used to hard-block schedule creation when a client's authorized units ran
+// out (commit 1df6a2c, March 2026). That was wrong twice over:
+//
+//  1. Scheduling is not billing. A client needs care whether or not the payer has
+//     approved units yet. Refusing to staff a shift is the most expensive possible
+//     response to a paperwork gap — it should be surfaced at billing time instead.
+//  2. It was comparing two different quantities. `authorized_units` from the MIDAS
+//     import is a WEEKLY allowance (Becky Tharp: 17 units = 4.25 h/wk) while
+//     `used_units` accumulates across the whole authorization period (221 units =
+//     55 h since June 7). A weekly cap measured against a running total goes
+//     negative in week two and never recovers.
+//
+// By 2026-08-06 that combination silently 400'd schedule creation for 8 of 25
+// active payer clients — discovered when a new caregiver could not be scheduled
+// for Becky Tharp and the UI showed nothing at all.
+//
+// So: every shortfall is a warning now. Callers must surface `warnings`; they must
+// not refuse the write. `allowed` is retained (always true) so older callers that
+// check it keep working.
 
 const db = require('../db');
 
 /**
- * Check if a client has sufficient authorized units for a shift.
+ * Assess a client's authorization balance for a proposed shift. Advisory only.
  * @param {string} clientId - Client UUID
  * @param {number} shiftHours - Duration of the proposed shift in hours
- * @returns {{ allowed: boolean, warnings: string[], error: string|null, authorization: object|null }}
+ * @returns {{ allowed: true, warnings: string[], error: null, authorization: object|null }}
  */
 async function checkAuthorizationBalance(clientId, shiftHours) {
   const warnings = [];
@@ -61,24 +81,17 @@ async function checkAuthorizationBalance(clientId, shiftHours) {
     default:       requestedUnits = shiftHours * 4; break; // 15-min units (default)
   }
 
-  // Hard block: authorization expired (shouldn't happen given query, but safety check)
+  // Expired authorization — warn, schedule anyway. Care still has to be staffed.
   if (auth.health_status === 'expired') {
-    return {
-      allowed: false,
-      warnings: [],
-      error: 'Authorization has expired',
-      authorization: auth
-    };
+    warnings.push(`Authorization ${auth.auth_number || ''} expired on ${String(auth.end_date).slice(0, 10)} — this shift may not be billable until it's renewed`.trim());
   }
 
-  // Hard block: insufficient units
+  // Over the authorized balance — warn, schedule anyway. Note this reads negative
+  // for most payer clients today because of the weekly-vs-cumulative mismatch
+  // described at the top of this file, so it is deliberately worded as "check",
+  // not "you have overrun your authorization".
   if (remaining < requestedUnits) {
-    return {
-      allowed: false,
-      warnings: [],
-      error: `Insufficient authorized units: ${remaining} remaining, ${requestedUnits} needed`,
-      authorization: auth
-    };
+    warnings.push(`Authorization balance looks short: ${remaining} ${auth.unit_type || 'unit'} remaining, ${requestedUnits} needed for this shift — check ${auth.auth_number ? 'auth ' + auth.auth_number : 'the authorization'} before billing`);
   }
 
   // Soft warnings

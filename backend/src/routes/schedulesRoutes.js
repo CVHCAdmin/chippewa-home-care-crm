@@ -111,16 +111,14 @@ router.post('/', verifyToken, async (req, res) => {
   try {
     const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, effectiveDate, isTraining } = req.body;
 
-    // Authorization enforcement — skip for training shifts (not billed, so
-    // they don't consume the client's authorization balance).
+    // Authorization is advisory — see helpers/authorizationCheck.js. Never blocks
+    // schedule creation; warnings ride back on the response. Skipped for training
+    // shifts, which don't bill and so don't touch the client's balance.
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
     const hours = shiftHours(startTime, endTime);
     let authCheck = { allowed: true, warnings: [] };
     if (!isTraining) {
       authCheck = await checkAuthorizationBalance(clientId, hours);
-      if (!authCheck.allowed && req.query.force !== 'true') {
-        return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
-      }
     }
 
     // Recurring schedules MUST have an effective_date — otherwise expansion

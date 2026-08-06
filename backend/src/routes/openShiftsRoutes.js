@@ -57,20 +57,17 @@ router.post('/:id/smart-fill', auth, async (req, res) => {
     const s = shift.rows[0];
     if (s.status !== 'open') return res.status(409).json({ error: `Shift is ${s.status}, not open` });
 
-    // Auth balance re-check (same shape as approve endpoint)
+    // Auth balance is advisory — see helpers/authorizationCheck.js. Filling an
+    // uncovered shift must never be refused over paperwork; the client still
+    // needs the visit and someone just volunteered to take it.
+    let authWarnings = [];
     try {
       const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
       const startStr = typeof s.start_time === 'string' ? s.start_time : s.start_time.toISOString().slice(11,16);
       const endStr   = typeof s.end_time   === 'string' ? s.end_time   : s.end_time.toISOString().slice(11,16);
       const shiftHours = (new Date(`2000-01-01T${endStr}`) - new Date(`2000-01-01T${startStr}`)) / 3600000;
       const authCheck = await checkAuthorizationBalance(s.client_id, shiftHours);
-      if (!authCheck.allowed && req.query.force !== 'true') {
-        return res.status(400).json({
-          error: authCheck.error || 'Authorization exhausted',
-          authorization: authCheck.authorization, type: 'authorization',
-          hint: 'Pass ?force=true to assign anyway',
-        });
-      }
+      authWarnings = authCheck.warnings || [];
     } catch (e) { console.error('[openShifts smart-fill] auth recheck failed:', e.message); }
 
     // Same as approve: update existing schedule or create one
@@ -293,23 +290,17 @@ router.post('/:id/approve', auth, async (req, res) => {
       return res.status(400).json({ error: 'No claim to approve' });
     }
 
-    // Re-check authorization at approval time. Auth could have been consumed
-    // between claim creation and approval; without this re-check, an approved
-    // shift could push the client over their authorized units.
+    // Authorization is advisory at approval time too — see
+    // helpers/authorizationCheck.js. Report the balance, never withhold approval
+    // from a caregiver who has already claimed the shift.
+    let approveAuthWarnings = [];
     try {
       const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
       const startStr = typeof s.start_time === 'string' ? s.start_time : s.start_time.toISOString().slice(11,16);
       const endStr   = typeof s.end_time   === 'string' ? s.end_time   : s.end_time.toISOString().slice(11,16);
       const shiftHours = (new Date(`2000-01-01T${endStr}`) - new Date(`2000-01-01T${startStr}`)) / 3600000;
       const authCheck = await checkAuthorizationBalance(s.client_id, shiftHours);
-      if (!authCheck.allowed && req.query.force !== 'true') {
-        return res.status(400).json({
-          error: authCheck.error || 'Authorization exhausted',
-          authorization: authCheck.authorization,
-          type: 'authorization',
-          hint: 'Pass ?force=true to approve anyway',
-        });
-      }
+      approveAuthWarnings = authCheck.warnings || [];
     } catch (e) {
       console.error('[openShifts approve] auth recheck failed:', e.message);
     }

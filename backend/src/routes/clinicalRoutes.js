@@ -315,26 +315,13 @@ router.post('/care-plans/:id/generate-schedule', verifyToken, requireAdmin, asyn
     if (planResult.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
     const plan = planResult.rows[0];
 
-    // Authorization check. If auth is exhausted, REFUSE to generate the
-    // schedules — old code only appended a warning and proceeded, which
-    // silently created out-of-auth recurring shifts. Pass ?force=true to
-    // override (rare; admin needs to be explicit).
+    // Authorization is advisory — see helpers/authorizationCheck.js. A shortfall
+    // is reported back as a warning; it never stops the schedule being generated.
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
     const perShiftHours = shiftHours(startTime, endTime);
     const weeklyHours = perShiftHours * daysOfWeek.length;
     const authCheck = await checkAuthorizationBalance(plan.client_id, weeklyHours);
     const warnings = [...(authCheck.warnings || [])];
-    if (!authCheck.allowed && req.query.force !== 'true') {
-      return res.status(400).json({
-        error: authCheck.error || 'Authorization exhausted',
-        authorization: authCheck.authorization,
-        type: 'authorization',
-        hint: 'Pass ?force=true if you intend to schedule beyond authorized units.',
-      });
-    }
-    if (!authCheck.allowed) {
-      warnings.push(authCheck.error);
-    }
 
     // Create recurring schedules for each day
     const created = [];
@@ -496,8 +483,9 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
       effectiveDate = (effectiveDate && effectiveDate >= today) ? effectiveDate : today;
     }
 
-    // Authorization enforcement — skip for training shifts (they don't bill,
-    // so they don't consume the client's authorization balance).
+    // Authorization is advisory — see helpers/authorizationCheck.js. Never blocks
+    // schedule creation; warnings ride back on the response. Skipped for training
+    // shifts, which don't bill and so don't touch the client's balance.
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
     let totalShiftHours = shiftHours(startTime, endTime);
     if (splitShift?.startTime && splitShift?.endTime) {
@@ -506,9 +494,6 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
     let authCheck = { allowed: true, warnings: [] };
     if (!isTraining) {
       authCheck = await checkAuthorizationBalance(clientId, totalShiftHours);
-      if (!authCheck.allowed && req.query.force !== 'true') {
-        return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
-      }
     }
 
     // ── Split shift handling ──
@@ -547,7 +532,7 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
       const seg2 = await db.query(insertSQL, [id2, ...baseParams.slice(0,5), splitShift.startTime, splitShift.endTime, ...baseParams.slice(5), splitGroupId, 2, !!isTraining]);
 
       // TODO: EVV integration — split shifts may need separate EVV visit records
-      return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]], effectiveDateClamped, effectiveDate });
+      return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]], effectiveDateClamped, effectiveDate, authWarnings: authCheck.warnings || [] });
     }
 
     // ── Standard single shift ──
@@ -563,7 +548,7 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
           LIMIT 1`,
         [caregiverId, clientId, date, startTime, endTime]);
       if (existing.rows.length > 0) {
-        return res.status(200).json({ ...existing.rows[0], duplicate: true, effectiveDateClamped, effectiveDate });
+        return res.status(200).json({ ...existing.rows[0], duplicate: true, effectiveDateClamped, effectiveDate, authWarnings: authCheck.warnings || [] });
       }
     }
     const id = uuidv4();
@@ -572,7 +557,7 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [id, caregiverId, clientId, scheduleType||'recurring', dayOfWeek!=null?dayOfWeek:null, date||null, startTime, endTime, notes||null, frequency||'weekly', effectiveDate||null, anchorDate||null, !!isTraining]
     );
-    res.status(201).json({ ...result.rows[0], effectiveDateClamped, effectiveDate });
+    res.status(201).json({ ...result.rows[0], effectiveDateClamped, effectiveDate, authWarnings: authCheck.warnings || [] });
   } catch (error) {
     if (error.code === '23505') {
       return res.status(409).json({ error: 'This caregiver already has this exact shift (same client, day, and time).', duplicate: true });

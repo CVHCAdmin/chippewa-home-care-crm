@@ -402,14 +402,12 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
       );
       const conflictingIds = existingConflicts.rows.map(r => r.caregiver_id);
 
-      // Auth check — once per shift (per client), not per caregiver
+      // Auth balance — once per shift (per client), not per caregiver. Advisory:
+      // a shortfall is attached to the result, it does not leave the shift
+      // unfilled. See helpers/authorizationCheck.js.
       const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
       const shiftAuthCheck = await checkAuthorizationBalance(shift.client_id, shiftHours);
-      if (!shiftAuthCheck.allowed) {
-        results.push({ shiftId: shift.id, client: `${shift.client_first} ${shift.client_last}`, date: shift.shift_date, time: `${shift.start_time} - ${shift.end_time}`, status: 'unfilled', reason: 'Authorization exhausted' });
-        failed++;
-        continue;
-      }
+      const shiftAuthWarnings = shiftAuthCheck.warnings || [];
 
       const scored = caregivers.rows.map(cg => {
         const weeklyHours = hoursMap[cg.id] || 0;
@@ -442,7 +440,7 @@ router.post('/auto-fill', verifyToken, requireAdmin, async (req, res) => {
         }
         newAssignments.push({ caregiverId: bestMatch.id, date: shift.shift_date, startTime: shift.start_time, endTime: shift.end_time });
         hoursMap[bestMatch.id] = (hoursMap[bestMatch.id]||0) + shiftHours;
-        results.push({ ...shiftResult, status: 'filled' });
+        results.push({ ...shiftResult, status: 'filled', authWarnings: shiftAuthWarnings });
         filled++;
       } else {
         results.push({ shiftId: shift.id, client: `${shift.client_first} ${shift.client_last}`, date: shift.shift_date, time: `${shift.start_time} - ${shift.end_time}`, status: 'unfilled', reason: 'No available caregivers', candidates: scored.filter(s=>s.disqualified).slice(0,3).map(c=>({ name: `${c.first_name} ${c.last_name}`, reason: c.reason })) });
@@ -654,13 +652,11 @@ router.post('/bulk-create', verifyToken, requireAdmin, async (req, res) => {
     const { caregiverId, clientId, template, weeks, startDate, notes } = req.body;
     if (!caregiverId || !clientId || !template?.length) return res.status(400).json({ error: 'Missing required fields' });
 
-    // Authorization check for total weekly hours
+    // Authorization is advisory — see helpers/authorizationCheck.js. Warnings are
+    // returned with the created schedules; a shortfall never stops the bulk build.
     const { checkAuthorizationBalance } = require('../helpers/authorizationCheck');
     const weeklyHours = template.reduce((sum, slot) => sum + hoursOf(slot.startTime, slot.endTime), 0);
     const authCheck = await checkAuthorizationBalance(clientId, weeklyHours);
-    if (!authCheck.allowed && req.query.force !== 'true') {
-      return res.status(400).json({ error: authCheck.error, authorization: authCheck.authorization, type: 'authorization' });
-    }
 
     const numWeeks = Math.min(Math.max(parseInt(weeks)||4, 1), 12);
     const start = startDate ? new Date(startDate) : new Date();
