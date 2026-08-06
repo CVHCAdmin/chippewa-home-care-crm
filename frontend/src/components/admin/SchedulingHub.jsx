@@ -203,12 +203,29 @@ const SchedulingHub = ({ token }) => {
     }
   }, [formData.caregiverId, formData.clientId, formData.date, formData.startTime, formData.endTime, showForm]);
 
+  // Surface the server's own explanation. This used to throw a bare
+  // "Request failed (400)" and drop the response body, so a rejected schedule
+  // looked to the user like nothing had happened at all — the authorization gate
+  // blocked scheduling for 8 clients for months behind this one line.
   const api = async (url, opts = {}) => {
     const res = await fetch(`${API_BASE_URL}${url}`, {
       ...opts, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...opts.headers }
     });
-    if (!res.ok) throw new Error(`Request failed (${res.status})`);
-    return res.json();
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const err = new Error(body.error || body.message || `Request failed (${res.status})`);
+      err.status = res.status;
+      err.body = body;
+      throw err;
+    }
+    return res.json().catch(() => ({}));
+  };
+
+  // Schedule endpoints return authWarnings (authorization balance, etc). They are
+  // advisory — the shift IS created — but they must not be swallowed.
+  const showAuthWarnings = (body) => {
+    const w = body?.authWarnings;
+    if (Array.isArray(w) && w.length) showMsg(`⚠️ ${w[0]}`, 'error');
   };
 
   const loadCoreData = async () => {
@@ -457,38 +474,48 @@ const SchedulingHub = ({ token }) => {
       if (formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') {
         const freq = formData.scheduleType === 'bi-weekly' ? 'biweekly' : 'weekly';
         let created = 0, dup = 0, failed = 0;
+        let firstFailure = null, lastWarnings = null;
         for (const dayOfWeek of selectedDays) {
           try {
-            await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
+            const body = await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
               caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'recurring',
               dayOfWeek, date: null, startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes,
               frequency: freq, effectiveDate: formData.date || today, anchorDate: anchorStr,
               isTraining: formData.isTraining
             })});
+            if (body?.authWarnings?.length) lastWarnings = body.authWarnings;
             created++;
-          } catch (err) { if (String(err.message).includes('(409)')) dup++; else failed++; }
+          } catch (err) {
+            if (err.status === 409 || String(err.message).includes('(409)')) dup++;
+            else { failed++; if (!firstFailure) firstFailure = err.message; }
+          }
         }
         // 409 = the DB duplicate guard rejected an identical active shift.
         const label = freq === 'biweekly' ? 'bi-weekly' : 'recurring';
         let m = `Created ${created} ${label} schedule${created !== 1 ? 's' : ''}`;
         if (dup > 0) m += ` — ${dup} already scheduled`;
-        if (failed > 0) m += ` (${failed} failed)`;
+        // Say WHY, not just how many. "(2 failed)" with no reason is why a
+        // server-side block went undiagnosed for months.
+        if (failed > 0) m += ` — ${failed} failed: ${firstFailure}`;
         if (failed > 0) showMsg(m, 'error'); else showMsg(m);
+        if (lastWarnings) showAuthWarnings({ authWarnings: lastWarnings });
       } else if (formData.scheduleType === 'recurring') {
-        await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
+        const body = await api('/api/schedules-enhanced', { method: 'POST', body: JSON.stringify({
           caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'recurring',
           dayOfWeek: parseInt(formData.dayOfWeek), date: null, startTime: formData.startTime, endTime: formData.endTime,
           notes: formData.notes, frequency: 'weekly', effectiveDate: formData.date || today, anchorDate: null,
           isTraining: formData.isTraining
         })});
         showMsg('Schedule created!');
+        showAuthWarnings(body);
       } else {
-        await api('/api/schedules', { method: 'POST', body: JSON.stringify({
+        const body = await api('/api/schedules', { method: 'POST', body: JSON.stringify({
           caregiverId: formData.caregiverId, clientId: formData.clientId, scheduleType: 'one-time',
           dayOfWeek: null, date: formData.date, startTime: formData.startTime, endTime: formData.endTime, notes: formData.notes,
           isTraining: formData.isTraining
         })});
         showMsg('Schedule created!');
+        showAuthWarnings(body);
       }
       setFormData(prev => ({ ...prev, clientId: '', scheduleType: 'one-time', dayOfWeek: '', date: new Date().toISOString().split('T')[0], startTime: '09:00', endTime: '13:00', notes: '', endDate: '', isTraining: false }));
       setSelectedDays([]);
@@ -496,8 +523,8 @@ const SchedulingHub = ({ token }) => {
       if (scheduleView === 'week') loadWeekView();
       if (scheduleView === 'month') loadCalendarData();
     } catch (e) {
-      if (String(e.message).includes('(409)')) showMsg('That shift is already scheduled for this caregiver.', 'error');
-      else showMsg('Error: ' + e.message, 'error');
+      if (e.status === 409 || String(e.message).includes('(409)')) showMsg('That shift is already scheduled for this caregiver.', 'error');
+      else showMsg('Could not create schedule: ' + e.message, 'error');
     }
     finally { setSaving(false); }
   };

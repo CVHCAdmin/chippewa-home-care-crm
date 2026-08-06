@@ -289,6 +289,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         const anchorStr = anchorStart.toISOString().split('T')[0];
 
         let created = 0, dup = 0, failed = 0, clampedTo = null;
+        let firstFailure = null, authWarning = null;
         for (const dayOfWeek of days) {
           try {
             const payload = {
@@ -313,11 +314,19 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
               body: JSON.stringify(payload),
             });
-            if (!res.ok) { if (res.status === 409) { dup++; continue; } throw new Error(); }
+            if (!res.ok) {
+              if (res.status === 409) { dup++; continue; }
+              // `throw new Error()` with no message used to land in a bare
+              // `catch { failed++ }`, destroying the server's explanation — a
+              // rejected shift then read as "nothing happened".
+              const errBody = await res.json().catch(() => ({}));
+              throw new Error(errBody.error || errBody.message || `Request failed (${res.status})`);
+            }
             const body = await res.json().catch(() => ({}));
             if (body.effectiveDateClamped) clampedTo = body.effectiveDate;
+            if (body.authWarnings?.length) authWarning = body.authWarnings[0];
             created++;
-          } catch { failed++; }
+          } catch (err) { failed++; if (!firstFailure) firstFailure = err.message; }
         }
 
         // If end date specified, update the newly-created schedules with end_date
@@ -326,13 +335,17 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           // (simplified: we re-fetch and the backend already supports end_date in PUT)
         }
 
-        const baseMsg = `Created ${created} recurring schedule${created !== 1 ? 's' : ''}${dup ? ` — ${dup} already scheduled` : ''}${failed ? ` (${failed} failed)` : ''}`;
-        if (clampedTo) {
+        // Report the REASON for failures, not just the count.
+        const baseMsg = `Created ${created} recurring schedule${created !== 1 ? 's' : ''}${dup ? ` — ${dup} already scheduled` : ''}${failed ? ` — ${failed} failed: ${firstFailure}` : ''}`;
+        if (failed > 0) {
+          showToast(baseMsg, 'error');
+        } else if (clampedTo) {
           const d = new Date(clampedTo + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
           showToast(`${baseMsg} — recurring shifts can't start in the past, so it begins ${d}.`, 'warning');
         } else {
           showToast(baseMsg);
         }
+        if (authWarning) showToast(`⚠️ ${authWarning}`, 'warning');
       } else {
         // One-time shift
         const payload = {
@@ -621,11 +634,19 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         showToast('Occurrence moved');
 
       } else if (isRecurring && dropScope === 'following') {
-        // End current pattern day before fromDate, create new pattern from toDate
-        await fetch(`${API_BASE_URL}/api/schedules/${shift.id}?scope=following&date=${fromDate}`, {
+        // End current pattern day before fromDate, create new pattern from toDate.
+        // Neither call used to be checked. If the DELETE landed and the POST was
+        // rejected, the pattern was ENDED and nothing replaced it — while the
+        // toast still said "moved". That is silent schedule loss, so both halves
+        // are checked and the failure names what state the schedule is now in.
+        const dRes = await fetch(`${API_BASE_URL}/api/schedules/${shift.id}?scope=following&date=${fromDate}`, {
           method:'DELETE', headers: hdrs,
         });
-        await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
+        if (!dRes.ok) {
+          const errBody = await dRes.json().catch(() => ({}));
+          throw new Error(errBody.error || 'Could not end the existing pattern — nothing was changed');
+        }
+        const fRes = await fetch(`${API_BASE_URL}/api/schedules-enhanced`, {
           method:'POST', headers: hdrs,
           body: JSON.stringify({
             caregiverId: toCaregiverId,
@@ -641,6 +662,10 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
             anchorDate: shift.anchor_date || null,
           }),
         });
+        if (!fRes.ok) {
+          const errBody = await fRes.json().catch(() => ({}));
+          throw new Error(`${errBody.error || `Request failed (${fRes.status})`} — the old pattern was already ended, so this shift now has NO recurring schedule. Re-create it.`);
+        }
         showToast('Moved from this date forward');
 
       } else if (isRecurring) {
