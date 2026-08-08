@@ -374,8 +374,8 @@ const AlertsManagement = ({ token }) => {
 
       {/* Create Alert Modal */}
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowCreateModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Create Alert</h3>
               <button className="modal-close" onClick={() => setShowCreateModal(false)}>×</button>

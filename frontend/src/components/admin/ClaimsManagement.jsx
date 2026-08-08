@@ -319,8 +319,8 @@ const ClaimsManagement = ({ token }) => {
 
       {/* Create Claim Modal */}
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowCreateModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Create Claim from Invoice</h3>
               <button className="modal-close" onClick={() => setShowCreateModal(false)}>×</button>
@@ -336,8 +336,8 @@ const ClaimsManagement = ({ token }) => {
 
       {/* Update Status Modal */}
       {showStatusModal && currentClaim && (
-        <div className="modal-overlay" onClick={() => setShowStatusModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowStatusModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Update Claim Status</h3>
               <button className="modal-close" onClick={() => setShowStatusModal(false)}>×</button>

@@ -315,8 +315,8 @@ const BackgroundChecks = ({ token }) => {
 
       {/* Add Check Modal */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowAddModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>New Background Check</h3>
               <button className="modal-close" onClick={() => setShowAddModal(false)}>×</button>
@@ -333,8 +333,8 @@ const BackgroundChecks = ({ token }) => {
 
       {/* Update Check Modal */}
       {showDetailModal && currentCheck && (
-        <div className="modal-overlay" onClick={() => setShowDetailModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowDetailModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Update Background Check</h3>
               <button className="modal-close" onClick={() => setShowDetailModal(false)}>×</button>

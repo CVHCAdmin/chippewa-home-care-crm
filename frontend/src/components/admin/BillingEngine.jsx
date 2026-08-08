@@ -224,8 +224,8 @@ const ClaimsTab = ({ token }) => {
 
       {/* Batch Generate Modal */}
       {showBatchGen && (
-        <div className="modal-overlay" onClick={() => setShowBatchGen(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+        <div className="modal active" onClick={() => setShowBatchGen(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
             <div className="modal-header">
               <h3>Generate Claims from EVV Visits</h3>
               <button className="modal-close" onClick={() => setShowBatchGen(false)}>x</button>
@@ -319,8 +319,8 @@ const ClaimsTab = ({ token }) => {
 
       {/* Update Status Modal */}
       {showStatusModal && currentClaim && (
-        <div className="modal-overlay" onClick={() => setShowStatusModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowStatusModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Update Claim Status</h3>
               <button className="modal-close" onClick={() => setShowStatusModal(false)}>x</button>
@@ -666,8 +666,8 @@ const PaymentsTab = ({ token }) => {
 
       {/* Check Scanner Modal */}
       {showScanner && (
-        <div className="modal-overlay" onClick={() => { setShowScanner(false); setScanResult(null); }}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+        <div className="modal active" onClick={() => { setShowScanner(false); setScanResult(null); }}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
             <div className="modal-header">
               <h3>AI Check Scanner</h3>
               <button className="modal-close" onClick={() => { setShowScanner(false); setScanResult(null); }}>x</button>
@@ -705,8 +705,8 @@ const PaymentsTab = ({ token }) => {
 
       {/* Manual Payment Modal */}
       {showManual && (
-        <div className="modal-overlay" onClick={() => setShowManual(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+        <div className="modal active" onClick={() => setShowManual(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
             <div className="modal-header">
               <h3>Record Payment</h3>
               <button className="modal-close" onClick={() => setShowManual(false)}>x</button>
