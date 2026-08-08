@@ -392,8 +392,8 @@ const ADLTracking = ({ token }) => {
 
       {/* Add Requirement Modal */}
       {showAddReqModal && (
-        <div className="modal-overlay" onClick={() => setShowAddReqModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowAddReqModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Add ADL Requirement</h3>
               <button className="modal-close" onClick={() => setShowAddReqModal(false)}>×</button>
@@ -410,8 +410,8 @@ const ADLTracking = ({ token }) => {
 
       {/* Log ADL Modal */}
       {showLogModal && (
-        <div className="modal-overlay" onClick={() => setShowLogModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal active" onClick={() => setShowLogModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Log ADL Activity</h3>
               <button className="modal-close" onClick={() => setShowLogModal(false)}>×</button>
@@ -508,11 +508,18 @@ const RequirementForm = ({ categories, existingCategories, onSubmit, onCancel })
 
 // Log ADL Form Component
 const LogADLForm = ({ categories, requirements, onSubmit, onCancel }) => {
+  // Local "YYYY-MM-DDTHH:MM" for the datetime-local input, defaulting to now.
+  const nowLocal = () => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
   const [formData, setFormData] = useState({
     adlCategory: '',
     status: 'completed',
     assistanceLevel: 'limited_assistance',
-    notes: ''
+    notes: '',
+    performedAt: nowLocal()
   });
 
   // Use requirements to pre-fill assistance level when category is selected
@@ -531,14 +538,29 @@ const LogADLForm = ({ categories, requirements, onSubmit, onCancel }) => {
       toast('Please select an ADL category');
       return;
     }
+    const when = new Date(formData.performedAt);
+    if (!formData.performedAt || isNaN(when.getTime())) {
+      toast('Please enter the date and time this activity was performed');
+      return;
+    }
     onSubmit({
       ...formData,
-      performedAt: new Date().toISOString()
+      performedAt: when.toISOString()
     });
   };
 
   return (
     <form onSubmit={handleSubmit}>
+      <div className="form-group">
+        <label>Date & Time Performed *</label>
+        <input
+          type="datetime-local"
+          value={formData.performedAt}
+          onChange={(e) => setFormData({ ...formData, performedAt: e.target.value })}
+          required
+        />
+      </div>
+
       <div className="form-group">
         <label>ADL Activity *</label>
         <select 
