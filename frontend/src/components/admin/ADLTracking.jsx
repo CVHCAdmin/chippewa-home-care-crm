@@ -7,6 +7,7 @@ import { formatDateTZ, formatTime } from '../../utils/datetime';
 
 const ADLTracking = ({ token }) => {
   const [clients, setClients] = useState([]);
+  const [caregivers, setCaregivers] = useState([]);
   const [selectedClient, setSelectedClient] = useState('');
   const [requirements, setRequirements] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -45,6 +46,7 @@ const ADLTracking = ({ token }) => {
 
   useEffect(() => {
     loadClients();
+    loadCaregivers();
   }, []);
 
   useEffect(() => {
@@ -64,6 +66,19 @@ const ADLTracking = ({ token }) => {
       setClients(Array.isArray(data) ? data.filter(c => c.status === 'active') : []);
     } catch (error) {
       console.error('Failed to load clients:', error);
+    }
+  };
+
+  const loadCaregivers = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/caregivers`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to load caregivers');
+      const data = await res.json();
+      setCaregivers(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Failed to load caregivers:', error);
     }
   };
 
@@ -416,9 +431,10 @@ const ADLTracking = ({ token }) => {
               <h3>Log ADL Activity</h3>
               <button className="modal-close" onClick={() => setShowLogModal(false)}>×</button>
             </div>
-            <LogADLForm 
+            <LogADLForm
               categories={adlCategories}
               requirements={requirements}
+              caregivers={caregivers}
               onSubmit={logADL}
               onCancel={() => setShowLogModal(false)}
             />
@@ -507,7 +523,7 @@ const RequirementForm = ({ categories, existingCategories, onSubmit, onCancel })
 };
 
 // Log ADL Form Component
-const LogADLForm = ({ categories, requirements, onSubmit, onCancel }) => {
+const LogADLForm = ({ categories, requirements, caregivers, onSubmit, onCancel }) => {
   // Local "YYYY-MM-DDTHH:MM" for the datetime-local input, defaulting to now.
   const nowLocal = () => {
     const d = new Date();
@@ -519,7 +535,8 @@ const LogADLForm = ({ categories, requirements, onSubmit, onCancel }) => {
     status: 'completed',
     assistanceLevel: 'limited_assistance',
     notes: '',
-    performedAt: nowLocal()
+    performedAt: nowLocal(),
+    caregiverId: ''
   });
 
   // Use requirements to pre-fill assistance level when category is selected
@@ -559,6 +576,19 @@ const LogADLForm = ({ categories, requirements, onSubmit, onCancel }) => {
           onChange={(e) => setFormData({ ...formData, performedAt: e.target.value })}
           required
         />
+      </div>
+
+      <div className="form-group">
+        <label>Performed By</label>
+        <select
+          value={formData.caregiverId}
+          onChange={(e) => setFormData({ ...formData, caregiverId: e.target.value })}
+        >
+          <option value="">Me (log as myself)</option>
+          {(caregivers || []).map(cg => (
+            <option key={cg.id} value={cg.id}>{cg.first_name} {cg.last_name}</option>
+          ))}
+        </select>
       </div>
 
       <div className="form-group">

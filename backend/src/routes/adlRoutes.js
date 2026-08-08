@@ -103,14 +103,19 @@ router.get('/client/:clientId/logs', auth, async (req, res) => {
 
 // Log ADL activity
 router.post('/log', auth, async (req, res) => {
-  const { clientId, adlCategory, status, assistanceLevel, performedAt, notes } = req.body;
-  
+  const { clientId, adlCategory, status, assistanceLevel, performedAt, notes, caregiverId } = req.body;
+
   try {
+    // Admins may attribute a log to the caregiver who actually performed it
+    // (back-entering visit records); everyone else always logs as themselves.
+    const performedBy = (req.user.role === 'admin' && caregiverId)
+      ? caregiverId
+      : (req.user.caregiverId || req.user.id);
     const result = await db.query(`
       INSERT INTO adl_logs (client_id, caregiver_id, adl_category, status, assistance_level, performed_at, notes)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
-    `, [clientId, req.user.caregiverId || req.user.id, adlCategory, status, assistanceLevel, performedAt || new Date(), notes]);
+    `, [clientId, performedBy, adlCategory, status, assistanceLevel, performedAt || new Date(), notes]);
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
