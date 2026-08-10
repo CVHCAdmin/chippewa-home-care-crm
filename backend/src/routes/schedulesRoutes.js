@@ -102,7 +102,44 @@ router.get('/:caregiverId', verifyToken, async (req, res) => {
     // rescheduled one showed its OLD time, and — worst — the geofence auto-clock-in
     // (CaregiverDashboard "hasScheduledShiftNow") would clock somebody in to a visit the
     // office had cancelled, creating a real time entry that flowed into pay and billing.
-    res.json(await attachExceptions(result.rows));
+    const rows = await attachExceptions(result.rows);
+
+    // Shifts moved ONTO this caregiver for a single day live on ANOTHER caregiver's
+    // schedule row (schedule_exceptions.override_caregiver_id), so the caregiver_id
+    // filter above can never return them — a covered shift was invisible in the
+    // portal. Opt-in via ?includeMovedIn=1: the frozen Android bundle must keep the
+    // old response shape, because its expansion ignores exceptions and would render
+    // a foreign recurring row as this caregiver's shift EVERY week. Each moved-in
+    // occurrence is returned as a synthetic ONE-TIME shift on the override date, so
+    // the client's existing one-time handling renders it with no special cases.
+    if (String(req.query.includeMovedIn) === '1') {
+      const moved = await db.query(`
+        SELECT s.id, s.schedule_type, s.notes, s.is_training,
+               se.exception_date AS date,
+               NULL::int AS day_of_week,
+               COALESCE(se.override_start_time, s.start_time) AS start_time,
+               COALESCE(se.override_end_time,   s.end_time)   AS end_time,
+               $1::uuid AS caregiver_id,
+               COALESCE(se.override_client_id, s.client_id) AS client_id,
+               c.first_name AS client_first_name, c.last_name AS client_last_name,
+               c.address AS client_address, c.city AS client_city,
+               ct.name AS care_type_name,
+               TRUE AS moved_in
+          FROM schedule_exceptions se
+          JOIN schedules s ON s.id = se.schedule_id
+          JOIN clients c   ON c.id = COALESCE(se.override_client_id, s.client_id)
+          LEFT JOIN care_types ct ON c.care_type_id = ct.id
+         WHERE se.override_caregiver_id = $1
+           AND s.caregiver_id <> $1
+           AND se.exception_type = 'modified'
+           AND s.is_active = true
+           AND se.exception_date >= (now() AT TIME ZONE 'America/Chicago')::date
+         ORDER BY se.exception_date
+      `, [req.params.caregiverId]);
+      rows.push(...moved.rows.map(r => ({ ...r, exceptions: [] })));
+    }
+
+    res.json(rows);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

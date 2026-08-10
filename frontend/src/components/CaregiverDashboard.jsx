@@ -283,7 +283,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const loadData = async () => {
     try {
       const [schedulesRes, clientsRes, activeRes, visitsRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/schedules/${user.id}`, {
+        fetch(`${API_BASE_URL}/api/schedules/${user.id}?includeMovedIn=1`, {
           headers: { 'Authorization': `Bearer ${token}` }
         }),
         fetch(`${API_BASE_URL}/api/clients`, {
@@ -1154,7 +1154,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     // Get one-time schedules for today's date
     const oneTime = schedules.filter(s => s.date && s.date.split('T')[0] === todayStr);
 
-    return [...recurring, ...oneTime].sort((a, b) => {
+    // Drop a moved-in (covering) shift that exactly matches an own shift today
+    const ownToday = new Set(recurring.map(s => `${s.client_id}|${s.start_time}|${s.end_time}`));
+    const oneTimeDeduped = oneTime.filter(s => !s.moved_in || !ownToday.has(`${s.client_id}|${s.start_time}|${s.end_time}`));
+
+    return [...recurring, ...oneTimeDeduped].sort((a, b) => {
       const timeA = a.start_time || '00:00';
       const timeB = b.start_time || '00:00';
       return timeA.localeCompare(timeB);
@@ -1826,12 +1830,18 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       }
     });
 
+    // A moved-in shift (covered for another caregiver) can coincide exactly with
+    // one they already have — drop the moved-in copy when an identical own shift
+    // is present, so covering doesn't show as a duplicate line.
+    const ownKeys = new Set(concreteShifts.filter(s => !s.moved_in).map(s => `${s.client_id}|${s.resolvedDate}|${s.start_time}|${s.end_time}`));
+    const dedupedShifts = concreteShifts.filter(s => !s.moved_in || !ownKeys.has(`${s.client_id}|${s.resolvedDate}|${s.start_time}|${s.end_time}`));
+
     // Sort by date then time
-    concreteShifts.sort((a, b) => a.resolvedDate.localeCompare(b.resolvedDate) || (a.start_time || '').localeCompare(b.start_time || ''));
+    dedupedShifts.sort((a, b) => a.resolvedDate.localeCompare(b.resolvedDate) || (a.start_time || '').localeCompare(b.start_time || ''));
 
     // Group by date
     const byDate = {};
-    concreteShifts.forEach(s => {
+    dedupedShifts.forEach(s => {
       if (!byDate[s.resolvedDate]) byDate[s.resolvedDate] = [];
       byDate[s.resolvedDate].push(s);
     });
