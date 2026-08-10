@@ -1080,7 +1080,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const formatDate = (d) => d ? fmtCalDate(d, { weekday: 'short', month: 'short', day: 'numeric' }) : '';
   const getDayName = (n) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][n] || '';
 
-  // Check if a recurring schedule is active for a given date (respects effective_date & biweekly)
+  // Check if a recurring schedule is active for a given date (respects effective_date, end_date & biweekly)
   const isScheduleActiveForDate = (schedule, targetDate) => {
     if (schedule.effective_date) {
       const effDate = new Date(schedule.effective_date);
@@ -1088,6 +1088,16 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       const target = new Date(targetDate);
       target.setHours(0,0,0,0);
       if (target < effDate) return false;
+    }
+    if (schedule.end_date) {
+      // Editing a recurring shift end-dates the old row and creates a
+      // replacement, so an ended pattern must stop expanding — it otherwise
+      // shows as a duplicate/stale shift next to its replacement. Compare by
+      // calendar date string (end_date is an ISO timestamp; Date math here
+      // would drift a day across timezones).
+      const t = new Date(targetDate);
+      const targetStr = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+      if (targetStr > String(schedule.end_date).slice(0, 10)) return false;
     }
     if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
       const anchor = new Date(schedule.anchor_date);
@@ -1098,6 +1108,34 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return true;
   };
 
+  // Per-day exceptions ride along on each recurring row (attached by the API):
+  // 'cancelled' removes that one date, 'modified' changes its times or moves it
+  // to another client/caregiver. The admin grid resolves these server-side (the
+  // "edited" badge) — the portal must apply them too, or caregivers see
+  // cancelled visits and pre-edit times. Returns the shift to display for that
+  // date, or null when it shouldn't appear.
+  const applyExceptionForDate = (schedule, dateStr) => {
+    const ex = (schedule.exceptions || []).find(e => String(e.exception_date).slice(0, 10) === dateStr);
+    if (!ex) return schedule;
+    if (ex.exception_type === 'cancelled') return null;
+    if (ex.exception_type === 'modified') {
+      // Reassigned to a different caregiver that day → not this caregiver's shift
+      if (ex.override_caregiver_id && schedule.caregiver_id && ex.override_caregiver_id !== schedule.caregiver_id) return null;
+      const out = {
+        ...schedule,
+        start_time: ex.override_start_time || schedule.start_time,
+        end_time: ex.override_end_time || schedule.end_time,
+      };
+      if (ex.override_client_id && ex.override_client_id !== schedule.client_id) {
+        out.client_id = ex.override_client_id;
+        const oc = clients.find(c => c.id === ex.override_client_id);
+        if (oc) { out.client_first_name = oc.first_name; out.client_last_name = oc.last_name; }
+      }
+      return out;
+    }
+    return schedule;
+  };
+
   // Get today's appointments from schedules
   const getTodaysAppointments = () => {
     const today = new Date();
@@ -1105,8 +1143,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     const dayOfWeek = today.getDay();
     const todayStr = today.toISOString().split('T')[0];
 
-    // Get recurring schedules for today's day of week (respecting frequency & effective_date)
-    const recurring = schedules.filter(s => s.day_of_week === dayOfWeek && s.day_of_week !== null && !s.date && isScheduleActiveForDate(s, today));
+    // Get recurring schedules for today's day of week (respecting frequency & effective_date),
+    // then apply today's per-day exceptions (cancellations / edited times).
+    // Local calendar date — todayStr above is UTC-based and rolls over at 7 PM Chicago.
+    const localTodayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const recurring = schedules
+      .filter(s => s.day_of_week === dayOfWeek && s.day_of_week !== null && !s.date && isScheduleActiveForDate(s, today))
+      .map(s => applyExceptionForDate(s, localTodayStr))
+      .filter(Boolean);
     // Get one-time schedules for today's date
     const oneTime = schedules.filter(s => s.date && s.date.split('T')[0] === todayStr);
 
@@ -1767,14 +1811,17 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           concreteShifts.push({ ...s, resolvedDate: s.date.split('T')[0] });
         }
       } else if (s.day_of_week != null) {
-        // Recurring template — expand into concrete dates for next 14 days
+        // Recurring template — expand into concrete dates for next 14 days,
+        // applying that date's exception (cancelled → skip, modified → new times)
         for (let d = 0; d < 14; d++) {
           const target = new Date(today);
           target.setDate(target.getDate() + d);
           if (target.getDay() !== s.day_of_week) continue;
           if (!isScheduleActiveForDate(s, target)) continue;
           const dateStr = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
-          concreteShifts.push({ ...s, resolvedDate: dateStr });
+          const resolved = applyExceptionForDate(s, dateStr);
+          if (!resolved) continue;
+          concreteShifts.push({ ...resolved, resolvedDate: dateStr });
         }
       }
     });
