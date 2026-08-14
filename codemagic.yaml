@@ -142,7 +142,12 @@ workflows:
       - name: Increment build number
         script: |
           cd frontend/ios/App
-          BUILD_NUMBER=$(($(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID") + 1))
+          # First-ever upload: get-latest-build-number errors when the app has
+          # zero builds in App Store Connect — default to 0 so build 1 goes out.
+          LATEST=$(app-store-connect get-latest-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
+          case "$LATEST" in (''|*[!0-9]*) LATEST=0;; esac
+          BUILD_NUMBER=$((LATEST + 1))
+          echo "Using build number $BUILD_NUMBER"
           agvtool new-version -all $BUILD_NUMBER
       - name: Build iOS app
         script: |
