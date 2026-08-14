@@ -114,8 +114,9 @@ workflows:
       vars:
         BUNDLE_ID: com.cvhc.homecare
         # Capacitor 8 uses SPM — there is no CocoaPods App.xcworkspace, only
-        # the xcodeproj. build-ipa must target the project.
-        XCODE_PROJECT: ios/App/App.xcodeproj
+        # the xcodeproj. build-ipa must target the project. Path is from the
+        # repo root: the build step runs there so the IPA lands in build/ios/ipa.
+        XCODE_PROJECT: frontend/ios/App/App.xcodeproj
         XCODE_SCHEME: App
         APP_STORE_APPLE_ID: 6785646689
     scripts:
@@ -127,18 +128,37 @@ workflows:
         script: |
           cd frontend
           npm run build
-      - name: Add iOS platform if missing
+      # Proven pattern from the working Ick pipeline: the native iOS project is
+      # regenerated on the macOS builder EVERY build. cap add ios is not
+      # idempotent, and a project scaffolded on Windows carries backslash SPM
+      # paths in CapApp-SPM/Package.swift that macOS cannot resolve — which is
+      # exactly how showBuildSettings died with exit 74.
+      - name: Set up Capacitor iOS native project
         script: |
           cd frontend
-          if [ ! -d "ios" ]; then
-            npx cap add ios
-          fi
-      - name: Sync Capacitor to iOS
-        script: |
-          cd frontend
+          rm -rf ios
+          npx cap add ios
           npx cap sync ios
-      # No CocoaPods step: Capacitor 8 uses Swift Package Manager — there is no
-      # Podfile, and `pod install` fails the build.
+          if [ ! -d "ios/App/App.xcodeproj" ]; then
+            echo "ERROR: cap add ios did not produce App.xcodeproj" >&2
+            exit 1
+          fi
+      - name: Add Info.plist purpose strings
+        script: |
+          # The regenerated Info.plist has no permission purpose strings, and
+          # Apple rejects binaries referencing location APIs without them
+          # (ITMS-90683). Wording matches the store data-safety declarations.
+          PLIST=frontend/ios/App/App/Info.plist
+          plutil -replace NSLocationWhenInUseUsageDescription -string "CVHC HomeCare records your location only at clock-in and clock-out to verify your visit for Electronic Visit Verification (EVV). Your location is not tracked in the background." "$PLIST"
+          plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "CVHC HomeCare uses your location only while you are using the app, at clock-in and clock-out, for Electronic Visit Verification (EVV). Background location tracking is not used." "$PLIST"
+      - name: Resolve Swift Package dependencies
+        script: |
+          # Xcode resolves SPM automatically during build, but pre-resolving
+          # makes failures legible — network/path issues surface here.
+          cd frontend/ios/App
+          xcodebuild -resolvePackageDependencies \
+            -project App.xcodeproj \
+            -scheme App
       - name: Set up signing
         script: |
           keychain initialize
@@ -159,12 +179,14 @@ workflows:
           agvtool new-version -all $BUILD_NUMBER
       - name: Build iOS app
         script: |
-          cd frontend
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
     artifacts:
-      - frontend/build/ios/ipa/*.ipa
+      # build-ipa writes to build/ios/ipa relative to where it is INVOKED
+      # (repo root here), not next to the xcodeproj — the Ick pipeline hit
+      # a silent "no IPAs found, TestFlight skipped" with the wrong glob.
+      - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
     publishing:
       email:
