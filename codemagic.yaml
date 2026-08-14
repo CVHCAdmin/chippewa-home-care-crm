@@ -101,9 +101,13 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 90
     integrations:
-      # Must match the App Store Connect API key's name in Codemagic:
-      # Team settings -> Integrations -> App Store Connect.
-      app_store_connect: codemagic_api_key
+      # Must match the App Store Connect API key's name in Codemagic
+      # (Team settings -> Integrations -> App Store Connect) IN THE WORKSPACE
+      # the build runs in. The first TestFlight build passed signing with this
+      # name, so it exists in that workspace — a "does not exist" error means
+      # the build was started from the app under a DIFFERENT workspace
+      # (personal vs team); start it from the same app as the first build.
+      app_store_connect: cvhc_app_store
     environment:
       node: 22.11.0
       xcode: latest
