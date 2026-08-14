@@ -113,7 +113,9 @@ workflows:
       xcode: latest
       vars:
         BUNDLE_ID: com.cvhc.homecare
-        XCODE_WORKSPACE: ios/App/App.xcworkspace
+        # Capacitor 8 uses SPM — there is no CocoaPods App.xcworkspace, only
+        # the xcodeproj. build-ipa must target the project.
+        XCODE_PROJECT: ios/App/App.xcodeproj
         XCODE_SCHEME: App
         APP_STORE_APPLE_ID: 6785646689
     scripts:
@@ -159,7 +161,7 @@ workflows:
         script: |
           cd frontend
           xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
+            --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
     artifacts:
       - frontend/build/ios/ipa/*.ipa
