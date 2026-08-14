@@ -41,8 +41,16 @@ workflows:
     environment:
       node: 22.11.0
       java: 21
-      groups:
-        - android_signing
+      # Codemagic-managed keystore (Team settings -> Code signing identities ->
+      # Android keystores). Codemagic decodes it to $CM_KEYSTORE_PATH and
+      # provides CM_KEYSTORE_PASSWORD / CM_KEY_ALIAS / CM_KEY_PASSWORD. The old
+      # android_signing VAR GROUP hand-decoded a pasted base64 blob
+      # (echo $CM_KEYSTORE | base64 --decode) and produced a corrupt file:
+      # signReleaseBundle failed with "Tag number over 30 is not supported".
+      # If the build says the reference below is not found, use the exact
+      # reference name shown for the keystore in the Codemagic UI.
+      android_signing:
+        - keystore_reference
       vars:
         PACKAGE_NAME: com.cvhc.homecare
     scripts:
@@ -61,9 +69,8 @@ workflows:
       - name: Set up release keystore
         script: |
           cd frontend/android
-          echo $CM_KEYSTORE | base64 --decode > release.keystore
           cat <<EOF >> gradle.properties
-          MYAPP_RELEASE_STORE_FILE=release.keystore
+          MYAPP_RELEASE_STORE_FILE=$CM_KEYSTORE_PATH
           MYAPP_RELEASE_KEY_ALIAS=$CM_KEY_ALIAS
           MYAPP_RELEASE_STORE_PASSWORD=$CM_KEYSTORE_PASSWORD
           MYAPP_RELEASE_KEY_PASSWORD=$CM_KEY_PASSWORD
