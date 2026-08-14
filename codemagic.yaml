@@ -162,11 +162,26 @@ workflows:
       - name: Set up signing
         script: |
           keychain initialize
+          # --certificate-key is REQUIRED without the Codemagic integration:
+          # omitting it makes fetch-signing-files mint a certificate with a
+          # throwaway key on the first build — every later VM then has no
+          # private key for that cert, use-profiles silently applies nothing,
+          # and the archive fails with "requires a provisioning profile".
+          # CERTIFICATE_PRIVATE_KEY lives in the appstore_credentials group.
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
+            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
             --create
           keychain add-certificates
           xcode-project use-profiles
+          # Fail HERE with a legible message if nothing usable was applied.
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "--- fetched provisioning profiles ---"
+          ls -la "$PROFILES_DIR" || true
+          if [ -z "$(ls -A "$PROFILES_DIR" 2>/dev/null)" ]; then
+            echo "ERROR: no provisioning profiles were fetched for $BUNDLE_ID" >&2
+            exit 1
+          fi
       - name: Increment build number
         script: |
           cd frontend/ios/App
