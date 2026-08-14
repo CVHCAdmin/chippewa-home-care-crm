@@ -50,7 +50,7 @@ workflows:
       # If the build says the reference below is not found, use the exact
       # reference name shown for the keystore in the Codemagic UI.
       android_signing:
-        - keystore_reference
+        - cvhc_upload_key
       vars:
         PACKAGE_NAME: com.cvhc.homecare
     scripts:
