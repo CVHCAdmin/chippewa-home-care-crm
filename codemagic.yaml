@@ -216,10 +216,13 @@ workflows:
           keychain add-certificates
           xcode-project use-profiles
           # Fail HERE with a legible message if nothing usable was applied.
-          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-          echo "--- fetched provisioning profiles ---"
-          ls -la "$PROFILES_DIR" || true
-          if [ -z "$(ls -A "$PROFILES_DIR" 2>/dev/null)" ]; then
+          # The CLI saves profiles under Developer/Xcode/UserData (NOT only
+          # MobileDevice) — check every location it uses.
+          FOUND=$(find "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                       "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
+                       -name "*.mobileprovision" 2>/dev/null | wc -l | tr -d ' ')
+          echo "--- fetched provisioning profiles: $FOUND ---"
+          if [ "$FOUND" -eq 0 ]; then
             echo "ERROR: no provisioning profiles were fetched for $BUNDLE_ID" >&2
             exit 1
           fi
