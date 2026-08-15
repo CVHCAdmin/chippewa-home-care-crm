@@ -188,11 +188,10 @@ workflows:
           echo "ISSUER_ID length: ${#APP_STORE_CONNECT_ISSUER_ID} (a correct issuer UUID is 36)"
           echo "KEY_IDENTIFIER length: ${#APP_STORE_CONNECT_KEY_IDENTIFIER} (QLUCAX9A2S is 10)"
           export APP_STORE_CONNECT_PRIVATE_KEY="$(cat /tmp/asc_key.p8)"
-          {
-            echo "APP_STORE_CONNECT_PRIVATE_KEY<<CM_ENV_EOF"
-            cat /tmp/asc_key.p8
-            echo "CM_ENV_EOF"
-          } >> "$CM_ENV"
+          # printf normalizes the trailing newline: the .p8 has none, and
+          # without it the closing delimiter glues onto the key's last line
+          # ("Multiline variable ... is not closed with delimiter").
+          printf 'APP_STORE_CONNECT_PRIVATE_KEY<<CM_ENV_EOF\n%s\nCM_ENV_EOF\n' "$(cat /tmp/asc_key.p8)" >> "$CM_ENV"
           keychain initialize
           # --certificate-key is REQUIRED without the Codemagic integration:
           # omitting it makes fetch-signing-files mint a certificate with a
