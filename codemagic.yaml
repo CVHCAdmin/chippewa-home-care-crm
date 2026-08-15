@@ -151,6 +151,9 @@ workflows:
           PLIST=frontend/ios/App/App/Info.plist
           plutil -replace NSLocationWhenInUseUsageDescription -string "CVHC HomeCare records your location only at clock-in and clock-out to verify your visit for Electronic Visit Verification (EVV). Your location is not tracked in the background." "$PLIST"
           plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "CVHC HomeCare uses your location only while you are using the app, at clock-in and clock-out, for Electronic Visit Verification (EVV). Background location tracking is not used." "$PLIST"
+          # Standard HTTPS only — answers the export-compliance question so
+          # every TestFlight build is installable without the manual click.
+          plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$PLIST"
       - name: Resolve Swift Package dependencies
         script: |
           # Xcode resolves SPM automatically during build, but pre-resolving
