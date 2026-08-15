@@ -173,10 +173,19 @@ workflows:
           # throwaway key on the first build — every later VM then has no
           # private key for that cert, use-profiles silently applies nothing,
           # and the archive fails with "requires a provisioning profile".
-          # CERTIFICATE_PRIVATE_KEY lives in the appstore_credentials group.
+          #
+          # The key arrives as SINGLE-LINE base64 (CERTIFICATE_PRIVATE_KEY_B64
+          # in the appstore_credentials group) because multi-line PEM pastes
+          # into the Codemagic variable box kept getting mangled ("not valid").
+          # Whitespace is stripped before decoding so even a wrapped paste works.
+          printf '%s' "$CERTIFICATE_PRIVATE_KEY_B64" | tr -d ' \t\r\n' | base64 --decode > /tmp/certificate_key.pem
+          if ! grep -q "BEGIN RSA PRIVATE KEY" /tmp/certificate_key.pem; then
+            echo "ERROR: CERTIFICATE_PRIVATE_KEY_B64 did not decode to an RSA private key" >&2
+            exit 1
+          fi
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
+            --certificate-key=@file:/tmp/certificate_key.pem \
             --create
           keychain add-certificates
           xcode-project use-profiles
