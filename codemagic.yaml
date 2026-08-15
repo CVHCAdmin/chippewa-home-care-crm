@@ -161,6 +161,12 @@ workflows:
             -scheme App
       - name: Set up signing
         script: |
+          # Ground truth: which credential variables actually reached this build
+          # (names only, values never printed). If a variable added in the UI is
+          # missing here, it was saved to the wrong group/app.
+          echo "--- credential variables visible to this build ---"
+          env | grep -oE '^(APP_STORE_CONNECT|CERTIFICATE)[A-Z_]*' | sort || true
+          echo "---------------------------------------------------"
           keychain initialize
           # --certificate-key is REQUIRED without the Codemagic integration:
           # omitting it makes fetch-signing-files mint a certificate with a
