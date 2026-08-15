@@ -177,6 +177,16 @@ workflows:
             echo "ERROR: APP_STORE_CONNECT_PRIVATE_KEY_B64 did not decode to a private key" >&2
             exit 1
           fi
+          # Byte-verify the decoded .p8 against the known AuthKey_QLUCAX9A2S.p8
+          # and sanity-print the ID shapes (lengths only — values stay masked).
+          ASC_SHA=$(shasum -a 256 /tmp/asc_key.p8 | cut -d' ' -f1)
+          echo "asc .p8 sha256: $ASC_SHA"
+          if [ "$ASC_SHA" != "2e48dc0836cca287f68b32f3c2358a9a3c5d62d9b49968beeb72b70deffe03cb" ]; then
+            echo "ERROR: decoded .p8 is NOT AuthKey_QLUCAX9A2S.p8 — re-paste APP_STORE_CONNECT_PRIVATE_KEY_B64" >&2
+            exit 1
+          fi
+          echo "ISSUER_ID length: ${#APP_STORE_CONNECT_ISSUER_ID} (a correct issuer UUID is 36)"
+          echo "KEY_IDENTIFIER length: ${#APP_STORE_CONNECT_KEY_IDENTIFIER} (QLUCAX9A2S is 10)"
           export APP_STORE_CONNECT_PRIVATE_KEY="$(cat /tmp/asc_key.p8)"
           {
             echo "APP_STORE_CONNECT_PRIVATE_KEY<<CM_ENV_EOF"
