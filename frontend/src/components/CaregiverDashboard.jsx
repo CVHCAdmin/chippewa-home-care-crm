@@ -788,14 +788,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           const cl = clients.find(c => c.id === selectedClient);
           const isEvvClient = cl && cl.is_private_pay !== true;
           if (isEvvClient && snap.error?.code === 1) {
-            await hapticNotify('error');
+            hapticNotify('error');
             toast(gpsErrorMessage({ code: 1 }, 'clock in') + ' Location is required for this client (Medicaid/VA EVV).', 'error');
             return;
           }
         }
       }
 
-      await impact('medium'); // native haptic on button press
+      impact('medium'); // native haptic on button press
 
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/clock-in`, {
         method: 'POST',
@@ -807,7 +807,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         // If offline, service worker queued it — res will have queued:true
         const data = await res.json();
         if (data.queued) {
-          await hapticNotify('warning');
+          hapticNotify('warning');
           toast('Clocked in offline — will sync when reconnected', 'warning');
           setActiveSession({ id: 'offline-' + Date.now(), offline: true });
           return;
@@ -816,7 +816,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       }
 
       const clockInData = await res.json();
-      await hapticNotify('success'); // success haptic
+      hapticNotify('success'); // success haptic
       setActiveSession(clockInData);
       gpsIntervalRef.current = startGPSBreadcrumbs(clockInData.id);
       if (!lat) {
@@ -824,7 +824,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         startLateFixRetries(clockInData.id); // keep trying in the background
       }
     } catch (error) {
-      await hapticNotify('error');
+      hapticNotify('error');
       toast('Failed to clock in: ' + error.message, 'error');
     } finally {
       setClockingIn(false);
@@ -866,7 +866,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     setClockingOut(true);
     cancelLateFixRetries(); // shift is ending — stop any pending late-fix attempts
     try {
-      await impact('heavy'); // strong haptic for clock out
+      impact('heavy'); // strong haptic for clock out
 
       let lat = null;
       let lng = null;
@@ -896,7 +896,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       if (!res.ok) {
         const data = await res.json();
         if (data.queued) {
-          await hapticNotify('warning');
+          hapticNotify('warning');
           toast('Clocked out offline — will sync when reconnected', 'warning');
           setActiveSession(null);
           setSelectedClient('');
@@ -908,7 +908,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         // VA client with no note: keep the modal open so they can add one and retry,
         // rather than closing on a toast and making them start over.
         if (data.code === 'va_note_required') {
-          await hapticNotify('warning');
+          hapticNotify('warning');
           setNoteError(data.error || 'A visit note is required for this client.');
           return;
         }
@@ -933,7 +933,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         if (failed > 0) toast(`${pendingPhotos.length - failed}/${pendingPhotos.length} photos uploaded`, 'warning');
       }
 
-      await hapticNotify('success');
+      hapticNotify('success');
       clockOutFixRef.current = null; // used (or stale) — never carry into a later clock-out
       setActiveSession(null);
       setSelectedClient('');
@@ -943,7 +943,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       setShowNoteModal(false);
       loadData();
     } catch (error) {
-      await hapticNotify('error');
+      hapticNotify('error');
       toast('Failed to clock out: ' + error.message, 'error');
       setShowNoteModal(false); // never trap the caregiver in the notes modal on error
     } finally {

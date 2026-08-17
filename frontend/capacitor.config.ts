@@ -4,6 +4,24 @@ const config: CapacitorConfig = {
   appId: 'com.cvhc.homecare',
   appName: 'CVHC HomeCare',
   webDir: 'dist',
+  // @capacitor-community/background-geolocation is Capacitor-7-only (its
+  // latest release pins cap 7) and has never shipped in a WORKING native
+  // build: the local debug APKs accidentally excluded it (broken node_modules
+  // install), and the first build that DID include it — the Play Store AAB —
+  // froze clock-in on a native bridge call. Exclude it from BOTH platforms;
+  // the web layer lazy-imports it with a null fallback and uses
+  // watchPosition breadcrumbs instead, which is what production has always
+  // actually run.
+  includePlugins: [
+    '@capacitor/geolocation',
+    '@capacitor/haptics',
+    '@capacitor/keyboard',
+    '@capacitor/local-notifications',
+    '@capacitor/network',
+    '@capacitor/push-notifications',
+    '@capacitor/splash-screen',
+    '@capacitor/status-bar',
+  ],
   server: {
     androidScheme: 'https',
     iosScheme: 'https',
@@ -22,22 +40,6 @@ const config: CapacitorConfig = {
     // Allow the in-app webview to load https://api.chippewavalleyhomecare.com etc.
     // (background fetch requires capabilities set in Xcode separately.)
     limitsNavigationsToAppBoundDomains: false,
-    // @capacitor-community/background-geolocation has no Capacitor 8 release —
-    // its SPM manifest pins capacitor-swift-pm 7.x, which conflicts with every
-    // other plugin and breaks iOS package resolution. The web layer lazy-loads
-    // it with a catch(() => null) fallback, so iOS simply runs without it —
-    // consistent with the store declaration of no background tracking.
-    // Android is untouched (no includePlugins override there).
-    includePlugins: [
-      '@capacitor/geolocation',
-      '@capacitor/haptics',
-      '@capacitor/keyboard',
-      '@capacitor/local-notifications',
-      '@capacitor/network',
-      '@capacitor/push-notifications',
-      '@capacitor/splash-screen',
-      '@capacitor/status-bar',
-    ],
   },
   plugins: {
     SplashScreen: {
