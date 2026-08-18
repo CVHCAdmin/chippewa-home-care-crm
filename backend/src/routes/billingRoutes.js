@@ -1111,12 +1111,15 @@ router.put('/invoices/:id/payment-status', auth, async (req, res) => {
   const { status, paymentDate } = req.body;
   
   try {
+    // $1 is both assigned to a varchar column and compared in the CASEs —
+    // without uniform ::text casts Postgres refuses to deduce its type
+    // ("inconsistent types deduced for parameter $1") and every Mark Paid 500s.
     const result = await db.query(`
-      UPDATE invoices 
-      SET payment_status = $1,
+      UPDATE invoices
+      SET payment_status = $1::text,
           payment_date = $2,
-          paid_at = CASE WHEN $1 = 'paid' THEN NOW() ELSE paid_at END,
-          amount_paid = CASE WHEN $1 = 'paid' THEN total ELSE amount_paid END,
+          paid_at = CASE WHEN $1::text = 'paid' THEN NOW() ELSE paid_at END,
+          amount_paid = CASE WHEN $1::text = 'paid' THEN total ELSE amount_paid END,
           updated_at = NOW()
       WHERE id = $3
       RETURNING *
