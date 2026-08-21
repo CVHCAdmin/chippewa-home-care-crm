@@ -1,9 +1,14 @@
 // src/components/Login.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../config';
+import { warmLocation } from '../hooks/useNative';
 
 const Login = ({ onLogin }) => {
   const [email, setEmail] = useState('');
+
+  // Start warming GPS while the password is typed so the first punch after a
+  // fresh login already has a fix. Never prompts — only runs if already granted.
+  useEffect(() => { warmLocation({ requireGranted: true }); }, []);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');

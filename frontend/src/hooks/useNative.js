@@ -48,6 +48,71 @@ export async function getCurrentPositionOnce({ highAccuracy = false, timeout = 8
   });
 }
 
+// ── Location warm-up ─────────────────────────────────────────────────────────
+// A fix the app has ALREADY obtained by the time the caregiver taps Clock In/Out.
+// The at-tap snapshot is hard-capped (~6s) so it can never strand anyone, which
+// means the only way it reliably carries coordinates is if the phone was already
+// warmed up. Before this, warming only began when the dashboard mounted — so a
+// caregiver who logs out after every shift (Ericka, Aug 2026: every punch preceded
+// by a login in the same minute) ALWAYS tapped on a cold phone and ALWAYS timed out.
+// Starting here — on the login screen, on dashboard mount, on client pick — and
+// keeping the fix for 5 minutes makes the punch independent of login habits.
+//
+// Web: only warms when location permission is already granted (Permissions API),
+// so the login screen never pops a permission prompt. Native: checkPermissions.
+let _warmFix = null;       // { latitude, longitude, accuracy, at }
+let _warmInflight = null;  // Promise while a lookup is running
+const WARM_FRESH_MS = 300000;
+
+export function getWarmFix() {
+  const f = _warmFix;
+  return f && Date.now() - f.at < WARM_FRESH_MS ? f : null;
+}
+
+async function locationPermissionGranted() {
+  const Geolocation = await getGeolocation();
+  if (Geolocation && isNative) {
+    const p = await Geolocation.checkPermissions().catch(() => null);
+    return !!(p && (p.location === 'granted' || p.coarseLocation === 'granted'));
+  }
+  try {
+    if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+      const st = await navigator.permissions.query({ name: 'geolocation' });
+      return st.state === 'granted';
+    }
+  } catch (_) { /* Permissions API unavailable (older WebViews) — fall through */ }
+  return null; // unknown
+}
+
+// Idempotent: one lookup at a time, skipped while a fresh fix is held.
+// `requireGranted` (login screen) refuses to start if it would trigger a prompt.
+export function warmLocation({ requireGranted = false } = {}) {
+  if (getWarmFix() || _warmInflight) return _warmInflight || Promise.resolve(getWarmFix());
+  _warmInflight = (async () => {
+    try {
+      if (requireGranted) {
+        const ok = await locationPermissionGranted();
+        if (ok !== true) return null;
+      }
+      // Fast: accept any OS fix from the last 2 min (works indoors, ~1-2s).
+      try {
+        const p = await getCurrentPositionOnce({ highAccuracy: false, timeout: 8000, maximumAge: 120000 });
+        if (p?.latitude && p?.longitude) { _warmFix = { ...p, at: Date.now() }; }
+      } catch (_) { /* fall through to a real satellite lock */ }
+      // Then a proper high-accuracy fix with a long budget (runs in the background;
+      // nobody is waiting on it). Overwrites the coarse one when it lands.
+      const p = await getCurrentPositionOnce({ highAccuracy: true, timeout: 45000, maximumAge: 60000 });
+      if (p?.latitude && p?.longitude) { _warmFix = { ...p, at: Date.now() }; }
+      return getWarmFix();
+    } catch (_) {
+      return getWarmFix();
+    } finally {
+      _warmInflight = null;
+    }
+  })();
+  return _warmInflight;
+}
+
 // ── useNetwork ────────────────────────────────────────────────────────────────
 // Returns { online, connectionType } and listens for changes
 export function useNetwork() {

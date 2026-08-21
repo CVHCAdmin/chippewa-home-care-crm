@@ -9,7 +9,7 @@ import ShiftMissReport from './caregiver/ShiftMissReport';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
-import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, isNative, platform } from '../hooks/useNative';
+import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { setShiftBusy } from '../shiftGuard';
 import CareTaskChecklist from './CareTaskChecklist';
@@ -215,6 +215,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   // Native GPS — works on web AND iOS/Android
   const { position: location, error: locationError, getPosition } = useGeolocation({ watch: true });
+
+  // Warm GPS the moment the dashboard mounts and again whenever a client is picked,
+  // so by the time Clock In is tapped a fix is usually already in hand.
+  useEffect(() => { warmLocation(); }, []);
+  useEffect(() => { if (selectedClient) warmLocation(); }, [selectedClient]);
   const { impact, notification: hapticNotify } = useHaptics();
   const { online, queueCount } = useOfflineSync();
   const { start: startBgGeo } = useBackgroundGeolocation();
@@ -775,6 +780,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // a cold satellite lock — that cold lock is the "GPS is taking too long" failure.
   // Returns { latitude, longitude, source } or throws an error with .code matching PositionError codes.
   const acquireLocationForClock = async ({ fast = false } = {}) => {
+    // 0. Fix warmed up since the login screen / dashboard mount / client pick.
+    //    This is what makes the punch independent of how recently the app opened.
+    const warm = getWarmFix();
+    if (warm?.latitude && warm?.longitude) {
+      return { latitude: warm.latitude, longitude: warm.longitude, source: 'warm' };
+    }
+
     // 1. Recent cached watcher fix
     const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
     if (location?.latitude && age < 300000) {
@@ -831,7 +843,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   };
   const startLateFixRetries = (entryId) => {
     cancelLateFixRetries();
-    [10000, 30000, 60000].forEach(delay => {
+    [10000, 30000, 60000, 180000, 420000, 780000].forEach(delay => { // server accepts up to 15 min
       lateFixTimersRef.current.push(setTimeout(async () => {
         try {
           const p = await getCurrentPositionOnce({ highAccuracy: true, timeout: 12000, maximumAge: 60000 });

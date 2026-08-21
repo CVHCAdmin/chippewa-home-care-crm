@@ -627,7 +627,12 @@ router.post('/gps-failure', verifyToken, async (req, res) => {
     const actionName = action === 'clock-out' ? 'clock out' : 'clock in';
 
     const title = `📍 GPS blocked: ${caregiverName}`;
-    const message = `${caregiverName} tried to ${actionName}${clientName} but GPS failed (${reason}). Check their phone's Location settings.`;
+    const advice = errorCode === 1
+      ? "Check their phone's Location settings — permission is off."
+      : errorCode === 2
+        ? 'Their phone reported no location available (airplane mode / location off?).'
+        : 'The fix was slow, not blocked — the punch went through and a late fix/breadcrumbs may still fill it in.';
+    const message = `${caregiverName} tried to ${actionName}${clientName} but GPS failed (${reason}). ${advice}`;
 
     const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
     for (const admin of admins.rows) {
