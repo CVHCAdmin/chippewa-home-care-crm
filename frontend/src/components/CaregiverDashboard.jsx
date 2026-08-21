@@ -79,6 +79,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [swapRequests, setSwapRequests] = useState([]);
   const [swapModal, setSwapModal] = useState(null); // shift being offered for swap
   const [swapForm, setSwapForm] = useState({ targetCaregiverId: '', reason: '' });
+  const [moveModal, setMoveModal] = useState(null); // shift being asked to move to another day/time
+  const [moveForm, setMoveForm] = useState({ date: '', startTime: '', endTime: '', reason: '' });
+  const [myReschedules, setMyReschedules] = useState([]); // this caregiver's own pending asks
   const [otherCaregivers, setOtherCaregivers] = useState([]);
 
   const loadSwapRequests = async () => {
@@ -116,6 +119,60 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       toast('Swap request sent');
       setSwapModal(null); setSwapForm({ targetCaregiverId: '', reason: '' });
       loadSwapRequests();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  // Ask the office to move a shift to another day/time. Nothing changes until an
+  // admin approves it in the Schedule Hub — the visit is billed and EVV'd against
+  // the scheduled time, so a caregiver moving it unilaterally would put payroll,
+  // billing and the client's authorization out of step with each other.
+  const openMoveModal = (shift) => {
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const onDate = shift.resolvedDate || (shift.date && shift.date.split('T')[0]) || t.toISOString().split('T')[0];
+    setMoveModal({ ...shift, occurrenceDate: onDate });
+    setMoveForm({
+      date: onDate,
+      startTime: (shift.start_time || '').slice(0, 5),
+      endTime: (shift.end_time || '').slice(0, 5),
+      reason: '',
+    });
+  };
+
+  // One open request per occurrence — the server enforces it (409); this just
+  // stops the caregiver tapping a button that can only fail.
+  const movePendingFor = (shift) => {
+    const onDate = shift.resolvedDate || (shift.date && shift.date.split('T')[0]);
+    return myReschedules.some(cr =>
+      cr.schedule_id === shift.id && String(cr.visit_date).slice(0, 10) === onDate);
+  };
+
+  const submitMoveRequest = async () => {
+    if (!moveModal) return;
+    const { date, startTime, endTime, reason } = moveForm;
+    if (!date || !startTime || !endTime) { toast('Pick the new day and times', 'error'); return; }
+    const origStart = (moveModal.start_time || '').slice(0, 5);
+    const origEnd   = (moveModal.end_time   || '').slice(0, 5);
+    if (date === moveModal.occurrenceDate && startTime === origStart && endTime === origEnd) {
+      toast('That is the same day and time it already has', 'error'); return;
+    }
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/client-portal/caregiver/reschedule-request`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          scheduleId: moveModal.id,
+          visitDate:  moveModal.occurrenceDate,
+          startTime:  moveModal.start_time,
+          endTime:    moveModal.end_time,
+          proposedDate: date,
+          proposedStartTime: startTime,
+          proposedEndTime: endTime,
+          reason: reason || null,
+        }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Failed');
+      toast('Sent to the office — the shift moves once they approve it');
+      setMoveModal(null);
+      loadChangeRequests();
     } catch (e) { toast(e.message, 'error'); }
   };
 
@@ -221,6 +278,22 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     };
   }, []);
 
+  // Recover an empty roster on its own. loadData() only ran on mount and after a
+  // punch, so a load that failed while the phone had no signal stayed failed —
+  // the caregiver was left staring at "No clients available" until they killed and
+  // reopened the app, which an installed PWA gives them no obvious way to do.
+  useEffect(() => {
+    const retryIfEmpty = () => {
+      if (document.visibilityState === 'visible' && clientsRef.current.length === 0) loadData();
+    };
+    window.addEventListener('online', retryIfEmpty);
+    document.addEventListener('visibilitychange', retryIfEmpty);
+    return () => {
+      window.removeEventListener('online', retryIfEmpty);
+      document.removeEventListener('visibilitychange', retryIfEmpty);
+    };
+  }, []);
+
   // Poll for unread messages
   useEffect(() => {
     const checkUnread = async () => {
@@ -280,15 +353,34 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     if (currentPage === 'time-off') loadTimeOffRequests();
   }, [currentPage]);
 
+  // The clock-in dropdown is only as good as this one call. It used to be a bare
+  // Promise.all: the schedules and clients fetches had no .catch(), so ONE dropped
+  // request on a phone rejected the whole thing and left both lists empty — the
+  // dropdown then said "No clients available" with no retry, on a screen whose
+  // only job is clocking in. A failed load must not look like an empty roster.
+  const CLIENT_CACHE_KEY = 'cvhc_cg_clients_cache';
+
+  const fetchWithRetry = async (url, tries = 3) => {
+    for (let attempt = 1; attempt <= tries; attempt++) {
+      try {
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+        // 401 is handled globally (auto-logout) and 4xx will not fix itself —
+        // only retry a network failure or a server-side blip.
+        if (res.ok || (res.status < 500 && res.status !== 429)) return res;
+        if (attempt === tries) return res;
+      } catch (e) {
+        if (attempt === tries) return { ok: false, status: 0 };
+      }
+      await new Promise(r => setTimeout(r, 800 * attempt));
+    }
+    return { ok: false, status: 0 };
+  };
+
   const loadData = async () => {
     try {
       const [schedulesRes, clientsRes, activeRes, visitsRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/schedules/${user.id}?includeMovedIn=1`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }),
-        fetch(`${API_BASE_URL}/api/clients`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }),
+        fetchWithRetry(`${API_BASE_URL}/api/schedules/${user.id}?includeMovedIn=1`),
+        fetchWithRetry(`${API_BASE_URL}/api/clients`),
         fetch(`${API_BASE_URL}/api/time-entries/active`, {
           headers: { 'Authorization': `Bearer ${token}` }
         }).catch(() => ({ ok: false })),
@@ -303,9 +395,25 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         setClients(clientData);
         if (!clientData || clientData.length === 0) {
           console.warn('[CaregiverDashboard] No clients returned from API');
+        } else {
+          // Last known good roster. Names only — no PHI beyond what the dropdown
+          // already renders — so a dead network still lets them pick a client and
+          // clock in, and the offline queue syncs the punch when it comes back.
+          try {
+            localStorage.setItem(CLIENT_CACHE_KEY, JSON.stringify(
+              clientData.map(c => ({ id: c.id, first_name: c.first_name, last_name: c.last_name, is_private_pay: c.is_private_pay }))
+            ));
+          } catch { /* private mode / quota — cache is a bonus, not a requirement */ }
         }
       } else {
         console.error('[CaregiverDashboard] Failed to load clients:', clientsRes.status);
+        try {
+          const cached = JSON.parse(localStorage.getItem(CLIENT_CACHE_KEY) || '[]');
+          if (Array.isArray(cached) && cached.length) {
+            setClients(cached);
+            console.warn('[CaregiverDashboard] Using cached client list');
+          }
+        } catch { /* nothing cached yet */ }
       }
       if (activeRes.ok) {
         const data = await activeRes.json();
@@ -331,7 +439,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       });
       if (res.ok) {
         const data = await res.json();
-        setChangeRequests(Array.isArray(data) ? data : []);
+        const rows = Array.isArray(data) ? data : [];
+        // The endpoint returns every open request on this caregiver's visits, from
+        // either direction. What the CLIENT asked for is theirs to answer; what
+        // THEY asked for is waiting on the office, and showing it under "Client
+        // Requests" with Approve/Deny would invite them to approve their own move.
+        setChangeRequests(rows.filter(cr => cr.requested_by !== 'caregiver'));
+        setMyReschedules(rows.filter(cr => cr.requested_by === 'caregiver'));
       }
     } catch (e) { /* silently skip if table doesn't exist yet */ }
   };
@@ -1430,6 +1544,30 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         )}
       </div>
 
+      {/* Moves this caregiver asked for — so a request doesn't vanish after sending */}
+      {myReschedules.length > 0 && (
+        <div className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid #059669' }}>
+          <div className="card-title" style={{ color: '#047857' }}>Waiting on the Office ({myReschedules.length})</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {myReschedules.map(cr => (
+              <div key={cr.id} style={{ padding: '0.75rem', borderRadius: 8, background: '#F0FDF4', border: '1px solid #BBF7D0', fontSize: '0.88rem' }}>
+                <div style={{ fontWeight: 700, color: '#065F46' }}>
+                  {cr.client_first_name} {cr.client_last_name}
+                </div>
+                <div style={{ color: '#374151', marginTop: 2 }}>
+                  {String(cr.visit_date).slice(0, 10)} {formatTime(cr.original_start_time)} → <strong>{String(cr.proposed_date).slice(0, 10)} {formatTime(cr.proposed_start_time)}–{formatTime(cr.proposed_end_time)}</strong>
+                </div>
+                <div style={{ color: '#6B7280', marginTop: 4, fontSize: '0.8rem' }}>
+                  {cr.status === 'counter_offered'
+                    ? `Office suggested ${String(cr.counter_date).slice(0, 10)} at ${formatTime(cr.counter_start_time)} — call the office to confirm.`
+                    : 'Pending — work the original time until it is approved.'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Client Change Requests */}
       {changeRequests.length > 0 && (
         <div className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid #e67e22' }}>
@@ -1925,9 +2063,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                       <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
                       <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                     </div>
-                    <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
-                      style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
-                      title="Ask a coworker to take this shift">🔄 Swap</button>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
+                        style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                        title="Ask a coworker to take this shift">🔄 Swap</button>
+                      {movePendingFor(s) ? (
+                        <span style={{ border: '1px solid #FCD34D', background: '#FFFBEB', color: '#92400E', padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600 }}
+                          title="Waiting on the office">⏳ Move sent</span>
+                      ) : (
+                        <button onClick={() => openMoveModal(s)}
+                          style={{ background: 'none', border: '1px solid #A7F3D0', color: '#047857', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                          title="Ask the office to move this shift to another day or time">🕐 Move</button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1942,9 +2090,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                       <div style={{ fontWeight: '500' }}>{getClientName(s.client_id)}</div>
                       <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                     </div>
-                    <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
-                      style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
-                      title="Ask a coworker to take this shift">🔄 Swap</button>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
+                        style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                        title="Ask a coworker to take this shift">🔄 Swap</button>
+                      {movePendingFor(s) ? (
+                        <span style={{ border: '1px solid #FCD34D', background: '#FFFBEB', color: '#92400E', padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600 }}
+                          title="Waiting on the office">⏳ Move sent</span>
+                      ) : (
+                        <button onClick={() => openMoveModal(s)}
+                          style={{ background: 'none', border: '1px solid #A7F3D0', color: '#047857', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                          title="Ask the office to move this shift to another day or time">🕐 Move</button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2375,6 +2533,42 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <div className="form-actions">
               <button className="btn btn-secondary" onClick={() => setSwapModal(null)}>Cancel</button>
               <button className="btn btn-primary" onClick={submitSwapRequest}>Send Request</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {moveModal && (
+        <div className="modal active" onClick={() => setMoveModal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header"><h2>🕐 Ask to Move This Shift</h2><button className="close-btn" onClick={() => setMoveModal(null)}>×</button></div>
+            <p className="text-muted">
+              {getClientName(moveModal.client_id)} — currently {moveModal.occurrenceDate} ({formatTime(moveModal.start_time)}–{formatTime(moveModal.end_time)})
+            </p>
+            <div className="form-group">
+              <label>New day</label>
+              <input type="date" value={moveForm.date} onChange={(e) => setMoveForm({ ...moveForm, date: e.target.value })} />
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Start</label>
+                <input type="time" value={moveForm.startTime} onChange={(e) => setMoveForm({ ...moveForm, startTime: e.target.value })} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>End</label>
+                <input type="time" value={moveForm.endTime} onChange={(e) => setMoveForm({ ...moveForm, endTime: e.target.value })} />
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Reason (helps the office decide)</label>
+              <textarea value={moveForm.reason} onChange={(e) => setMoveForm({ ...moveForm, reason: e.target.value })} placeholder="Client asked for a later start, appointment conflict, etc." rows={3} />
+            </div>
+            <div style={{ fontSize: '0.82rem', color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '0.6rem 0.75rem' }}>
+              Work the shift at its current time until the office approves the move. Your pay and the client's billing follow the schedule, not the request.
+            </div>
+            <div className="form-actions">
+              <button className="btn btn-secondary" onClick={() => setMoveModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitMoveRequest}>Send Request</button>
             </div>
           </div>
         </div>

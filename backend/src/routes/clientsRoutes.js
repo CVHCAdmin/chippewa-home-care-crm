@@ -39,8 +39,15 @@ router.post('/', verifyToken, async (req, res) => {
 // GET /api/clients
 // Admins see every active client. Caregivers see ONLY clients they have an
 // active schedule with (owner's direction, strict: 2026-07-27) — the full
-// roster is PHI and was showing in the clock-in dropdown. A substitute
-// covering an unassigned client needs the admin to add a schedule first.
+// roster is PHI and was showing in the clock-in dropdown.
+//
+// "Has a schedule with" also means a single day covered for someone else:
+// a swapped or rescheduled shift moved onto this caregiver lives on ANOTHER
+// caregiver's row as schedule_exceptions.override_caregiver_id. Their phone
+// showed the covered shift (schedulesRoutes ?includeMovedIn=1) while this query
+// left the client out of the dropdown — the shift was visible and unclockable.
+// Only current/future coverage counts, so covering one day does not hand over
+// the client's record for good.
 router.get('/', verifyToken, async (req, res) => {
   try {
     const isAdmin = req.user?.role === 'admin';
@@ -53,9 +60,17 @@ router.get('/', verifyToken, async (req, res) => {
        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
        LEFT JOIN care_types ct ON c.care_type_id = ct.id
        WHERE c.is_active = true
-         AND ($1 OR EXISTS (
+         AND ($1
+              OR EXISTS (
                SELECT 1 FROM schedules s2
-                WHERE s2.client_id = c.id AND s2.caregiver_id = $2 AND s2.is_active = true))
+                WHERE s2.client_id = c.id AND s2.caregiver_id = $2 AND s2.is_active = true)
+              OR EXISTS (
+               SELECT 1 FROM schedule_exceptions se
+                 JOIN schedules s3 ON s3.id = se.schedule_id AND s3.is_active = true
+                WHERE se.override_caregiver_id = $2
+                  AND se.exception_type = 'modified'
+                  AND COALESCE(se.override_client_id, s3.client_id) = c.id
+                  AND se.exception_date >= (now() AT TIME ZONE 'America/Chicago')::date))
        ORDER BY c.first_name`,
       [isAdmin, req.user.id]
     );

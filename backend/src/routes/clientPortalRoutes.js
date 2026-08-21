@@ -968,6 +968,118 @@ async function notifyAdmins(type, title, message) {
   } catch (e) { /* notifications table may not exist — don't fail */ }
 }
 
+// Helper: a DATE column comes back from pg as a JS Date at local midnight, and
+// String(thatDate) is "Wed Aug 20 2026 …" — slicing it gives "Wed Aug 20", not a
+// date. Format the calendar day off the local parts (never toISOString, which
+// shifts the day for anyone east of UTC).
+const ymd = (d) => {
+  if (!d) return null;
+  if (d instanceof Date) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  return String(d).slice(0, 10);
+};
+
+// Helper: a visit that has already been worked must not be moved.
+//
+// Moving one writes a 'cancelled' exception on the original date, which deletes
+// that occurrence for the whole system — and payroll's matcher then finds a punch
+// with no shift behind it. That punch falls into the "unscheduled clock-in"
+// branch, which pays ACTUAL time with NO cap (payrollRoutes: "no schedule to cap"),
+// so a missed clock-out on that day would pay out in full instead of being capped
+// at the scheduled length. Billing expands the same occurrences, so the day could
+// also drop out of an invoice. Fix the time entry instead — never the schedule.
+async function workedVisitBlocker({ caregiverId, clientId, visitDate }) {
+  const r = await db.query(`
+    SELECT id FROM time_entries
+     WHERE caregiver_id = $1 AND client_id = $2
+       AND DATE(start_time AT TIME ZONE 'America/Chicago') = $3::date
+     LIMIT 1`, [caregiverId, clientId, ymd(visitDate)]);
+  if (r.rows.length === 0) return null;
+  return `That visit was already worked — there is a time entry on ${ymd(visitDate)}. Moving it now would pull the punch out of payroll's cap and out of billing. Correct the time entry instead.`;
+}
+
+// Helper: make an approved reschedule real on the SCHEDULE, not just on
+// scheduled_visits.
+//
+// This used to update scheduled_visits and insert a bare 'modified' exception
+// with no override times. Nothing outside this file reads scheduled_visits, and
+// the schedule engine resolves times as COALESCE(override, original) — so an
+// approved reschedule left the shift sitting at its OLD time on its OLD day on
+// the caregiver's phone, the Schedule Hub, payroll and billing, while the office
+// believed it had been moved.
+//
+// Everything downstream expands schedules through helpers/scheduleOccurrences.js,
+// so writing the move into `schedules` / `schedule_exceptions` is what makes it
+// show up everywhere at once. Returns the schedule id the move landed on.
+async function applyRescheduleToSchedule({ scheduleId, caregiverId, clientId, visitDate, newDate, newStart, newEnd, userId }) {
+  const r = await db.query('SELECT * FROM schedules WHERE id = $1 AND is_active = true', [scheduleId]);
+  if (r.rows.length === 0) return null;
+  const s = r.rows[0];
+
+  const origDay = ymd(visitDate);
+  const newDay  = ymd(newDate);
+
+  // A one-time row IS its own occurrence — no pattern to preserve, so move it in
+  // place. (Recurring-ness is day_of_week IS NOT NULL, never schedule_type: rows
+  // created as emergency coverage carry a date AND the default type 'recurring'.)
+  if (s.day_of_week === null || s.day_of_week === undefined) {
+    await db.query(
+      'UPDATE schedules SET date = $1::date, start_time = $2, end_time = $3, updated_at = NOW() WHERE id = $4',
+      [newDay, newStart, newEnd, scheduleId]
+    );
+    return scheduleId;
+  }
+
+  // Recurring, same day, new times: one 'modified' exception carrying the times.
+  if (origDay === newDay) {
+    await db.query(`
+      INSERT INTO schedule_exceptions
+        (schedule_id, exception_date, exception_type, override_start_time, override_end_time, created_by)
+      VALUES ($1, $2::date, 'modified', $3, $4, $5)
+      ON CONFLICT (schedule_id, exception_date) DO UPDATE
+        SET exception_type       = 'modified',
+            override_start_time  = EXCLUDED.override_start_time,
+            override_end_time    = EXCLUDED.override_end_time
+    `, [scheduleId, origDay, newStart, newEnd, userId]);
+    return scheduleId;
+  }
+
+  // Recurring, moved to a different date. An exception is keyed to
+  // (schedule_id, exception_date), so it can express "not that day" but never
+  // "that day instead" — the move is a cancel on the old date plus a real
+  // one-time shift on the new one.
+  await db.query(`
+    INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
+    VALUES ($1, $2::date, 'cancelled', $3)
+    ON CONFLICT (schedule_id, exception_date) DO UPDATE
+      SET exception_type      = 'cancelled',
+          override_start_time = NULL,
+          override_end_time   = NULL
+  `, [scheduleId, origDay, userId]);
+
+  // Same duplicate guard the schedule POST uses: the v53 unique index only covers
+  // recurring rows, so a retried approval could otherwise insert the moved shift
+  // twice — and each occurrence bills.
+  const dup = await db.query(`
+    SELECT id FROM schedules
+     WHERE is_active = true AND day_of_week IS NULL
+       AND caregiver_id = $1 AND client_id = $2 AND date = $3::date
+       AND start_time = $4 AND end_time = $5
+     LIMIT 1
+  `, [caregiverId, clientId, newDay, newStart, newEnd]);
+  if (dup.rows.length > 0) return dup.rows[0].id;
+
+  const ins = await db.query(`
+    INSERT INTO schedules
+      (caregiver_id, client_id, schedule_type, day_of_week, date, start_time, end_time, notes, is_training)
+    VALUES ($1, $2, 'one-time', NULL, $3::date, $4, $5, $6, $7)
+    RETURNING id
+  `, [caregiverId, clientId, newDay, newStart, newEnd,
+      `Rescheduled from ${origDay}`, s.is_training === true]);
+  return ins.rows[0].id;
+}
+
 // Helper: parse visit identity from request body
 function parseVisitIdentity(body) {
   return {
@@ -1221,6 +1333,110 @@ router.post('/portal/visits/reschedule-request', clientAuth, async (req, res) =>
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CAREGIVER: REQUEST RESCHEDULE
+// POST /api/client-portal/caregiver/reschedule-request
+// Body: { scheduleId, visitDate, startTime, endTime,
+//         proposedDate, proposedStartTime, proposedEndTime, reason? }
+//
+// The caregiver-side twin of the portal endpoint above. Caregivers could already
+// hand a shift to a coworker (shift swaps) but had no way to say "same shift,
+// different time" — so those moves happened by text message and never reached the
+// schedule. This files a request; the office approves it in the Schedule Hub and
+// applyRescheduleToSchedule() writes it into the schedule. Nothing moves on a
+// caregiver's say-so alone: the visit is billed and EVV'd against that time.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/caregiver/reschedule-request', auth, async (req, res) => {
+  const role = req.user.role;
+  if (role !== 'caregiver' && role !== 'admin') {
+    return res.status(403).json({ error: 'Access required' });
+  }
+
+  const { scheduleId, visitDate, startTime, endTime,
+          proposedDate, proposedStartTime, proposedEndTime, reason } = req.body;
+
+  if (!scheduleId || !visitDate || !startTime || !endTime ||
+      !proposedDate || !proposedStartTime || !proposedEndTime) {
+    return res.status(400).json({
+      error: 'scheduleId, visitDate, startTime, endTime, proposedDate, proposedStartTime and proposedEndTime are required'
+    });
+  }
+  if (proposedDate === visitDate && proposedStartTime === startTime && proposedEndTime === endTime) {
+    return res.status(400).json({ error: 'Pick a different day or time than the one already scheduled' });
+  }
+
+  try {
+    // Resolve the occurrence through its exception, so a caregiver covering a
+    // moved-in shift (override_caregiver_id) can ask to move it too — the
+    // pattern's caregiver_id is somebody else on that date.
+    const sr = await db.query(`
+      SELECT s.id, s.caregiver_id AS pattern_caregiver_id, s.client_id AS pattern_client_id,
+             COALESCE(se.override_caregiver_id, s.caregiver_id) AS caregiver_id,
+             COALESCE(se.override_client_id,    s.client_id)    AS client_id,
+             se.exception_type
+        FROM schedules s
+        LEFT JOIN schedule_exceptions se
+          ON se.schedule_id = s.id AND se.exception_date = $2::date
+       WHERE s.id = $1 AND s.is_active = true
+    `, [scheduleId, visitDate]);
+
+    if (sr.rows.length === 0) return res.status(404).json({ error: 'Shift not found' });
+    const occ = sr.rows[0];
+
+    if (occ.exception_type === 'cancelled') {
+      return res.status(400).json({ error: 'That visit is already cancelled' });
+    }
+    if (role === 'caregiver' && occ.caregiver_id !== req.user.id) {
+      return res.status(403).json({ error: 'You can only reschedule your own shifts' });
+    }
+
+    const worked = await workedVisitBlocker({
+      caregiverId: occ.caregiver_id, clientId: occ.client_id, visitDate });
+    if (worked) return res.status(409).json({ error: worked });
+
+    // One open request per occurrence — otherwise two approvals move the same
+    // shift twice and the second one lands on a date the first already vacated.
+    const open = await db.query(`
+      SELECT id FROM visit_change_requests
+       WHERE schedule_id = $1 AND visit_date = $2::date
+         AND request_type = 'reschedule'
+         AND status IN ('pending', 'counter_offered')
+       LIMIT 1
+    `, [scheduleId, visitDate]);
+    if (open.rows.length > 0) {
+      return res.status(409).json({ error: 'A reschedule request for this visit is already waiting on the office' });
+    }
+
+    const result = await db.query(`
+      INSERT INTO visit_change_requests
+        (client_id, caregiver_id, request_type, schedule_id,
+         visit_date, original_start_time, original_end_time,
+         proposed_date, proposed_start_time, proposed_end_time,
+         requested_by, request_reason)
+      VALUES ($1, $2, 'reschedule', $3, $4::date, $5, $6, $7::date, $8, $9, $10, $11)
+      RETURNING *
+    `, [
+      occ.client_id, occ.caregiver_id, scheduleId,
+      visitDate, startTime, endTime,
+      proposedDate, proposedStartTime, proposedEndTime,
+      role === 'admin' ? 'admin' : 'caregiver', reason || null
+    ]);
+
+    const who = await db.query(
+      `SELECT (SELECT first_name || ' ' || last_name FROM users   WHERE id = $1) AS caregiver,
+              (SELECT first_name || ' ' || last_name FROM clients WHERE id = $2) AS client`,
+      [occ.caregiver_id, occ.client_id]
+    );
+    const { caregiver, client } = who.rows[0] || {};
+    const msg = `${caregiver} is asking to move the ${client} visit on ${visitDate} (${startTime}) to ${proposedDate} at ${proposedStartTime}.${reason ? ' Reason: ' + reason : ''}`;
+    await notifyAdmins('caregiver_reschedule_request', 'Caregiver Reschedule Request', msg);
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PORTAL: GET MY CHANGE REQUESTS (pending/counter-offered)
 // GET /api/client-portal/portal/change-requests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1266,21 +1482,39 @@ router.put('/portal/change-requests/:id/respond', clientAuth, async (req, res) =
       [newStatus, req.params.id]
     );
 
-    // If accepted, apply the reschedule
-    if (accept && request.visit_id) {
-      await db.query(`
-        UPDATE scheduled_visits
-        SET scheduled_date = $1, start_time = $2, end_time = $3, status = 'scheduled', updated_at = NOW()
-        WHERE id = $4
-      `, [request.counter_date, request.counter_start_time, request.counter_end_time, request.visit_id]);
+    // If accepted, apply the reschedule — same defect as the approve path: this
+    // used to touch scheduled_visits and drop a bare 'modified' exception with no
+    // override times, so an accepted counter-offer never reached the schedule.
+    if (accept) {
+      const worked = await workedVisitBlocker({
+        caregiverId: request.caregiver_id, clientId: request.client_id, visitDate: request.visit_date });
+      if (worked) return res.status(409).json({ error: worked });
 
-      // If from a recurring schedule, create exception for original date
-      if (request.schedule_id) {
+      if (request.visit_id) {
         await db.query(`
-          INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
-          VALUES ($1, $2, 'modified', $3)
-          ON CONFLICT (schedule_id, exception_date) DO NOTHING
-        `, [request.schedule_id, request.visit_date, request.caregiver_id]);
+          UPDATE scheduled_visits
+          SET scheduled_date = $1, start_time = $2, end_time = $3, status = 'scheduled', updated_at = NOW()
+          WHERE id = $4
+        `, [request.counter_date, request.counter_start_time, request.counter_end_time, request.visit_id]);
+      }
+
+      if (request.schedule_id) {
+        const appliedTo = await applyRescheduleToSchedule({
+          scheduleId:  request.schedule_id,
+          caregiverId: request.caregiver_id,
+          clientId:    request.client_id,
+          visitDate:   request.visit_date,
+          newDate:     request.counter_date,
+          newStart:    request.counter_start_time,
+          newEnd:      request.counter_end_time,
+          userId:      request.caregiver_id,
+        });
+        if (appliedTo) {
+          await db.query(
+            'UPDATE visit_change_requests SET applied_schedule_id = $1 WHERE id = $2',
+            [appliedTo, req.params.id]
+          );
+        }
       }
     }
 
@@ -1384,6 +1618,12 @@ router.put('/admin/change-requests/:id/resolve', auth, async (req, res) => {
 
     const request = cr.rows[0];
 
+    // A caregiver may answer a request a CLIENT made about their visit, but must
+    // never rubber-stamp their own — the office decides whether a shift moves.
+    if (role === 'caregiver' && request.requested_by === 'caregiver') {
+      return res.status(403).json({ error: 'The office has to approve a reschedule you requested' });
+    }
+
     if (action === 'approve') {
       // Approve cancellation
       if (request.request_type === 'cancel') {
@@ -1404,20 +1644,50 @@ router.put('/admin/change-requests/:id/resolve', auth, async (req, res) => {
       }
 
       // Approve reschedule
-      if (request.request_type === 'reschedule' && request.visit_id) {
-        await db.query(`
-          UPDATE scheduled_visits
-          SET scheduled_date = $1, start_time = $2, end_time = $3, status = 'scheduled', updated_at = NOW()
-          WHERE id = $4
-        `, [request.proposed_date, request.proposed_start_time, request.proposed_end_time, request.visit_id]);
+      if (request.request_type === 'reschedule') {
+        // Re-checked at approval, not just at request time: the visit may have
+        // been worked in the days between asking and answering.
+        const worked = await workedVisitBlocker({
+          caregiverId: request.caregiver_id, clientId: request.client_id, visitDate: request.visit_date });
+        if (worked) return res.status(409).json({ error: worked });
 
-        if (request.schedule_id) {
+        if (request.visit_id) {
           await db.query(`
-            INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
-            VALUES ($1, $2, 'modified', $3)
-            ON CONFLICT (schedule_id, exception_date) DO NOTHING
-          `, [request.schedule_id, request.visit_date, req.user.id]);
+            UPDATE scheduled_visits
+            SET scheduled_date = $1, start_time = $2, end_time = $3, status = 'scheduled', updated_at = NOW()
+            WHERE id = $4
+          `, [request.proposed_date, request.proposed_start_time, request.proposed_end_time, request.visit_id]);
         }
+
+        // The part that actually moves the shift for the phone, the Hub, payroll
+        // and billing. scheduled_visits above only feeds the client portal.
+        if (request.schedule_id) {
+          const appliedTo = await applyRescheduleToSchedule({
+            scheduleId:  request.schedule_id,
+            caregiverId: request.caregiver_id,
+            clientId:    request.client_id,
+            visitDate:   request.visit_date,
+            newDate:     request.proposed_date,
+            newStart:    request.proposed_start_time,
+            newEnd:      request.proposed_end_time,
+            userId:      req.user.id,
+          });
+          if (appliedTo) {
+            await db.query(
+              'UPDATE visit_change_requests SET applied_schedule_id = $1 WHERE id = $2',
+              [appliedTo, req.params.id]
+            );
+          }
+        }
+
+        // Tell the caregiver too — for a caregiver-originated request this is the
+        // answer they have been waiting on, and for a client-originated one their
+        // day just changed.
+        await db.query(
+          "INSERT INTO notifications (user_id, type, title, message, status) VALUES ($1, $2, $3, $4, 'new')",
+          [request.caregiver_id, 'visit_rescheduled', 'Shift Rescheduled',
+           `Your visit on ${ymd(request.visit_date)} has been moved to ${ymd(request.proposed_date)} at ${request.proposed_start_time}.`]
+        ).catch(() => {});
       }
 
       await db.query(`
@@ -1426,15 +1696,20 @@ router.put('/admin/change-requests/:id/resolve', auth, async (req, res) => {
         WHERE id = $3
       `, [req.user.id, adminNotes || null, req.params.id]);
 
-      // Notify client
+      // Notify client. "Your request was approved" is only true when the client
+      // made the request — for a caregiver-initiated move the client is being
+      // told their visit changed, which is a different sentence.
       const typeLabel = request.request_type === 'cancel' ? 'Cancellation' : 'Reschedule';
+      const clientMsg = request.requested_by === 'client'
+        ? `Your ${typeLabel.toLowerCase()} request for ${ymd(request.visit_date)} has been approved.`
+        : `Your visit on ${ymd(request.visit_date)} has been moved to ${ymd(request.proposed_date)} at ${request.proposed_start_time}.`;
       await db.query(`
         INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
         VALUES ($1, 'change_request_approved', $2, $3, $4)
       `, [
         request.client_id,
-        `${typeLabel} Approved`,
-        `Your ${typeLabel.toLowerCase()} request for ${request.visit_date} has been approved.`,
+        request.requested_by === 'client' ? `${typeLabel} Approved` : 'Visit Rescheduled',
+        clientMsg,
         request.visit_id
       ]);
 
@@ -1446,15 +1721,25 @@ router.put('/admin/change-requests/:id/resolve', auth, async (req, res) => {
       `, [req.user.id, adminNotes || null, req.params.id]);
 
       const typeLabel = request.request_type === 'cancel' ? 'Cancellation' : 'Reschedule';
-      await db.query(`
-        INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
-        VALUES ($1, 'change_request_denied', $2, $3, $4)
-      `, [
-        request.client_id,
-        `${typeLabel} Not Approved`,
-        `Your ${typeLabel.toLowerCase()} request for ${request.visit_date} was not approved.${adminNotes ? ' Note: ' + adminNotes : ''}`,
-        request.visit_id
-      ]);
+      if (request.requested_by === 'client') {
+        await db.query(`
+          INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
+          VALUES ($1, 'change_request_denied', $2, $3, $4)
+        `, [
+          request.client_id,
+          `${typeLabel} Not Approved`,
+          `Your ${typeLabel.toLowerCase()} request for ${ymd(request.visit_date)} was not approved.${adminNotes ? ' Note: ' + adminNotes : ''}`,
+          request.visit_id
+        ]);
+      } else {
+        // Caregiver asked, office said no — the client never knew, so telling them
+        // a request of theirs was declined would be nonsense. Answer the caregiver.
+        await db.query(
+          "INSERT INTO notifications (user_id, type, title, message, status) VALUES ($1, $2, $3, $4, 'new')",
+          [request.caregiver_id, 'reschedule_denied', 'Reschedule Not Approved',
+           `Your request to move the ${ymd(request.visit_date)} visit was not approved.${adminNotes ? ' Note: ' + adminNotes : ''} The shift stays as scheduled.`]
+        ).catch(() => {});
+      }
 
     } else if (action === 'counter') {
       if (!counterDate || !counterStartTime || !counterEndTime) {
@@ -1469,14 +1754,26 @@ router.put('/admin/change-requests/:id/resolve', auth, async (req, res) => {
         WHERE id = $6
       `, [counterDate, counterStartTime, counterEndTime, counterMessage || null, adminNotes || null, req.params.id]);
 
-      await db.query(`
-        INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
-        VALUES ($1, 'change_request_counter', 'Alternative Time Suggested', $2, $3)
-      `, [
-        request.client_id,
-        `Your caregiver suggested ${counterDate} at ${counterStartTime} instead.${counterMessage ? ' "' + counterMessage + '"' : ''}`,
-        request.visit_id
-      ]);
+      // The counter goes back to whoever asked. Only the client portal can accept
+      // one (PUT /portal/change-requests/:id/respond), so a counter on a
+      // caregiver's request is the office proposing a time — send it to them and
+      // leave the client out of a conversation they were never in.
+      if (request.requested_by === 'client') {
+        await db.query(`
+          INSERT INTO client_notifications (client_id, type, title, message, related_visit_id)
+          VALUES ($1, 'change_request_counter', 'Alternative Time Suggested', $2, $3)
+        `, [
+          request.client_id,
+          `Your caregiver suggested ${counterDate} at ${counterStartTime} instead.${counterMessage ? ' "' + counterMessage + '"' : ''}`,
+          request.visit_id
+        ]);
+      } else {
+        await db.query(
+          "INSERT INTO notifications (user_id, type, title, message, status) VALUES ($1, $2, $3, $4, 'new')",
+          [request.caregiver_id, 'change_request_counter', 'Alternative Time Suggested',
+           `The office suggested ${counterDate} at ${counterStartTime} instead.${counterMessage ? ' "' + counterMessage + '"' : ''} Talk to the office to confirm.`]
+        ).catch(() => {});
+      }
     }
 
     res.json({ success: true });

@@ -129,6 +129,11 @@ const SchedulingHub = ({ token }) => {
   const [swapsLoading, setSwapsLoading] = useState(false);
   const [swapFilter, setSwapFilter]   = useState('');
 
+  // ── Reschedule requests state (caregiver- and client-originated) ──
+  const [reschedReqs, setReschedReqs]         = useState([]);
+  const [reschedLoading, setReschedLoading]   = useState(false);
+  const [reschedBusy, setReschedBusy]         = useState(null);
+
   // ── Absences state ──
   const [absences, setAbsences]               = useState([]);
   const [absencesLoading, setAbsencesLoading] = useState(false);
@@ -175,6 +180,10 @@ const SchedulingHub = ({ token }) => {
   useEffect(() => { if (mainTab === 'tools' && toolsTab === 'coverage') loadCoverage(); }, [mainTab, toolsTab, coverageWeekOf]);
   useEffect(() => { if (mainTab === 'staffing' && staffingTab === 'open-shifts') loadOpenShifts(); }, [mainTab, staffingTab, openShiftFilter]);
   useEffect(() => { if (mainTab === 'staffing' && staffingTab === 'swaps') { loadSwaps(); loadAbsences(); } }, [mainTab, staffingTab, swapFilter]);
+  // Pending reschedules also load with the Staffing tab itself, so the badge is
+  // right before anyone opens the sub-tab — a request nobody sees is a caregiver
+  // assuming silence meant yes.
+  useEffect(() => { if (mainTab === 'staffing') loadReschedules(); }, [mainTab, staffingTab]);
 
   // Scheduling warnings: auth balance, OT, travel time
   useEffect(() => {
@@ -309,6 +318,31 @@ const SchedulingHub = ({ token }) => {
     try { const data = await api(`/api/shift-swaps${swapFilter ? `?status=${swapFilter}` : ''}`); setSwaps(Array.isArray(data) ? data : []); }
     catch (e) { console.error(e); }
     finally { setSwapsLoading(false); }
+  };
+
+  // Reschedule requests — a caregiver asking to move one of their shifts, or a
+  // client asking through the portal. Approving here is what actually moves the
+  // shift on the schedule (see applyRescheduleToSchedule in clientPortalRoutes).
+  const loadReschedules = async () => {
+    setReschedLoading(true);
+    try { const data = await api('/api/client-portal/admin/change-requests?status=pending'); setReschedReqs(Array.isArray(data) ? data : []); }
+    catch (e) { console.error(e); }
+    finally { setReschedLoading(false); }
+  };
+
+  const resolveReschedule = async (id, action, adminNotes) => {
+    setReschedBusy(id);
+    try {
+      await api(`/api/client-portal/admin/change-requests/${id}/resolve`, {
+        method: 'PUT', body: JSON.stringify({ action, adminNotes: adminNotes || null }),
+      });
+      showMsg(action === 'approve' ? 'Shift moved' : 'Request denied');
+      loadReschedules();
+      // The grid/week view is now stale — an approved move rewrote the schedule.
+      if (scheduleView === 'week') loadWeekView();
+      if (scheduleView === 'month') loadCalendarData();
+    } catch (e) { showMsg(e.message, 'error'); }
+    finally { setReschedBusy(null); }
   };
 
   const loadAbsences = async () => {
@@ -1268,8 +1302,60 @@ const SchedulingHub = ({ token }) => {
         <button style={subTabStyle(staffingTab === 'swaps')} onClick={() => setStaffingTab('swaps')}>
           🔄 Swaps & Absences {pendingSwaps > 0 && <span style={{ ...bge('#DC2626', '#fff'), marginLeft: '0.4rem' }}>{pendingSwaps}</span>}
         </button>
+        <button style={subTabStyle(staffingTab === 'reschedules')} onClick={() => setStaffingTab('reschedules')}>
+          🕐 Reschedules {reschedReqs.length > 0 && <span style={{ ...bge('#DC2626', '#fff'), marginLeft: '0.4rem' }}>{reschedReqs.length}</span>}
+        </button>
         <button style={subTabStyle(staffingTab === 'availability')} onClick={() => setStaffingTab('availability')}>⏰ Availability</button>
       </div>
+
+      {staffingTab === 'reschedules' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h3 style={{ margin: 0 }}>🕐 Reschedule Requests</h3>
+            <button className='btn btn-sm btn-secondary' onClick={loadReschedules}>↻ Refresh</button>
+          </div>
+          <div style={{ fontSize: '0.85rem', color: '#6B7280', marginBottom: '0.75rem' }}>
+            Approving moves the shift on the schedule — the caregiver's phone, the grid, payroll and billing all follow. Denying leaves it exactly as it is.
+          </div>
+          {reschedLoading ? <div className='card' style={{ textAlign: 'center', padding: '1.5rem' }}>Loading...</div> :
+            reschedReqs.length === 0 ? <div className='card' style={{ textAlign: 'center', padding: '1.5rem', color: '#6B7280' }}>Nothing waiting</div> : (
+            <div className='card' style={{ overflowX: 'auto' }}>
+              <table className='table' style={{ fontSize: '0.88rem' }}>
+                <thead><tr><th>Asked by</th><th>Client</th><th>Caregiver</th><th>Now</th><th>→</th><th>Requested</th><th>Reason</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {reschedReqs.map(cr => (
+                    <tr key={cr.id}>
+                      <td><span style={bge(cr.requested_by === 'caregiver' ? '#DBEAFE' : '#FEF3C7', cr.requested_by === 'caregiver' ? '#2563EB' : '#D97706')}>{(cr.requested_by || 'client').toUpperCase()}</span></td>
+                      <td><strong>{cr.client_first_name} {cr.client_last_name}</strong></td>
+                      <td>{cr.caregiver_first_name} {cr.caregiver_last_name}</td>
+                      <td>{formatDate(cr.visit_date, { month: 'short', day: 'numeric' })} {cr.original_start_time?.slice(0,5)}–{cr.original_end_time?.slice(0,5)}</td>
+                      <td>→</td>
+                      <td>
+                        {cr.request_type === 'cancel'
+                          ? <em style={{ color: '#DC2626' }}>Cancel</em>
+                          : <strong>{formatDate(cr.proposed_date, { month: 'short', day: 'numeric' })} {cr.proposed_start_time?.slice(0,5)}–{cr.proposed_end_time?.slice(0,5)}</strong>}
+                      </td>
+                      <td style={{ maxWidth: 220 }}>{cr.request_reason || cr.cancel_reason || '—'}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '0.25rem' }}>
+                          <button className='btn btn-sm btn-success' disabled={reschedBusy === cr.id}
+                            onClick={() => resolveReschedule(cr.id, 'approve')}>✓</button>
+                          <button className='btn btn-sm btn-danger' disabled={reschedBusy === cr.id}
+                            onClick={async () => {
+                              const note = window.prompt('Reason for denying (the caregiver sees this):', '');
+                              if (note === null) return;
+                              resolveReschedule(cr.id, 'deny', note);
+                            }}>✗</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {staffingTab === 'open-shifts' && (
         <div>
@@ -1803,7 +1889,7 @@ const SchedulingHub = ({ token }) => {
         <button style={mainTabStyle(mainTab === 'schedule')} onClick={() => setMainTab('schedule')}>📅 Schedule</button>
         <button style={mainTabStyle(mainTab === 'tools')}    onClick={() => setMainTab('tools')}>🔧 Tools</button>
         <button style={mainTabStyle(mainTab === 'staffing')} onClick={() => setMainTab('staffing')}>
-          👥 Staffing {pendingSwaps > 0 && <span style={{ ...bge('#DC2626', '#fff'), marginLeft: '0.4rem' }}>{pendingSwaps}</span>}
+          👥 Staffing {(pendingSwaps + reschedReqs.length) > 0 && <span style={{ ...bge('#DC2626', '#fff'), marginLeft: '0.4rem' }}>{pendingSwaps + reschedReqs.length}</span>}
         </button>
       </div>
 
