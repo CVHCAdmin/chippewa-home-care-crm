@@ -81,7 +81,19 @@ function fmtTime12(hms) {
  * This means billing works even when caregivers haven't clocked in/out via EVV
  * yet, and surfaces variances between scheduled and actual when EVV is in use.
  */
-async function generateLineItems(clientId, referralSourceId, careTypeId, billingPeriodStart, billingPeriodEnd) {
+// Key for one billable day, stable between the review screen and generation:
+// date + caregiver + the scheduled start it belongs to. An unscheduled punch has
+// no scheduled start, so it keys off its own entry id.
+function reconcileKey({ serviceDate, caregiverId, scheduledStart, timeEntryId }) {
+  return scheduledStart
+    ? `${serviceDate}|${caregiverId}|${scheduledStart}`
+    : `${serviceDate}|${caregiverId}|entry:${timeEntryId}`;
+}
+
+// options.choices: { [reconcileKey]: 'scheduled' | 'clocked' } — the producer's
+// per-day decision from the review screen. Anything not named bills the default.
+async function generateLineItems(clientId, referralSourceId, careTypeId, billingPeriodStart, billingPeriodEnd, options = {}) {
+  const choices = options.choices || {};
   // ── Rate lookup ──────────────────────────────────────────────────────────
   let rate = 25.00;
   let rateType = 'hourly';
@@ -235,6 +247,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
 
   // ── Build line items ────────────────────────────────────────────────────
   const lineItems = [];
+  const reconcile = [];   // one row per billable day, for the review screen
   let invoiceTotal = 0;
 
   // Sort scheduled-visit lines by date for stable output
@@ -328,13 +341,23 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     let startISO = null, endISO = null, timeRangeLabel = '';
     let source = 'scheduled';
     let timeEntryId = null;
+    let billedBasis = 'scheduled';
+    let schedMinutes = null, clockedMinutes = null;
 
     if (entry) {
-      // EVV-confirmed → bill actual, capped at the scheduled window like payroll:
-      // actual within 7 min of (or over) scheduled bills the scheduled hours; short
-      // visits bill actual. A missed clock-out (auto-closed hours later) can no
-      // longer bill the whole gap — a 917-minute "shift" on a 2-hour schedule
-      // bills 2 hours. This makes billing agree with payroll on every shift.
+      // The client is billed for the shift they were scheduled for. A clock-in
+      // verifies the visit happened — it does not set the price.
+      //
+      // Billing used to take the punch whenever it fell short of the schedule,
+      // with no floor, so a 13-minute mis-punch on a 2-hour visit billed $7.15
+      // and a 0-minute one billed nothing. That was invisible until an invoice
+      // came out with ".22" shifts on it. Caregivers only started clocking in
+      // reliably in late July, which is why every earlier invoice looked right:
+      // there were no punches to override the schedule.
+      //
+      // So: scheduled is the default in BOTH directions, and any day where the
+      // punch disagrees by more than the grace is handed to the person
+      // generating the invoice to decide (see the `reconcile` rows below).
       source = 'evv_confirmed';
       timeEntryId = entry.time_entry_id;
       let actualMin = 0;
@@ -343,16 +366,60 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       } else if (entry.start_time && entry.end_time) {
         actualMin = (new Date(entry.end_time) - new Date(entry.start_time)) / 60000;
       }
-      let schedMin = (minutesOf(visit.start_time) != null && minutesOf(visit.end_time) != null)
+      const PAY_GRACE_MIN = 7; // same grace payroll reconciliation uses
+      const ownSched = (minutesOf(visit.start_time) != null && minutesOf(visit.end_time) != null)
         ? minutesOf(visit.end_time) - minutesOf(visit.start_time) : null;
       // Coverage extension (see above): this punch also absorbed another
-      // caregiver's suppressed window — bill the combined scheduled block.
+      // caregiver's suppressed window — bill the combined scheduled block, but
+      // ONLY when the punch is actually long enough to have covered it.
+      //
+      // The old cap made that check implicitly: a punch shorter than the combined
+      // block fell through to billing actual. Now that scheduled is the default,
+      // the check has to be explicit — otherwise a duplicate or back-dated
+      // schedule row sitting on top of a real visit inflates the bill (Linda
+      // Deetz 7/16: a 2h11m punch would have billed 4 hours because a phantom
+      // 10:30–12:30 row overlapped Josie's real one).
       const extraMin = extraSchedMinByEntry.get(entry.time_entry_id) || 0;
-      if (schedMin != null && extraMin > 0) schedMin += extraMin;
-      const PAY_GRACE_MIN = 7; // same grace payroll reconciliation uses
-      const billedMin = (schedMin != null && schedMin > 0 && actualMin >= schedMin - PAY_GRACE_MIN)
-        ? schedMin : actualMin;
+      const schedMin = (ownSched != null && extraMin > 0 && actualMin >= ownSched + extraMin - PAY_GRACE_MIN)
+        ? ownSched + extraMin
+        : ownSched;
+      const haveSched = schedMin != null && schedMin > 0;
+      const disagrees = haveSched && Math.abs(actualMin - schedMin) > PAY_GRACE_MIN;
+      const key = reconcileKey({
+        serviceDate: ymd(visit.date), caregiverId: visit.caregiver_id,
+        scheduledStart: visit.start_time, timeEntryId: entry.time_entry_id,
+      });
+      // With no schedule to bill against there is nothing to choose between.
+      const chosen = !haveSched ? 'clocked' : (choices[key] === 'clocked' ? 'clocked' : 'scheduled');
+      const billedMin = chosen === 'clocked' ? actualMin : schedMin;
       hours = billedMin / 60.0;
+      billedBasis = chosen;
+      schedMinutes = haveSched ? schedMin : null;
+      clockedMinutes = Math.round(actualMin);
+      reconcile.push({
+        key,
+        service_date: ymd(visit.date),
+        caregiver_id: visit.caregiver_id,
+        caregiver_name: `${visit.caregiver_first_name || ''} ${visit.caregiver_last_name || ''}`.trim(),
+        scheduled_start: visit.start_time,
+        scheduled_end: visit.end_time,
+        scheduled_minutes: haveSched ? schedMin : null,
+        scheduled_amount: haveSched ? lineAmount(schedMin / 60) : null,
+        clocked_start: entry.start_time,
+        clocked_end: entry.end_time,
+        clocked_minutes: Math.round(actualMin),
+        clocked_amount: lineAmount(actualMin / 60),
+        time_entry_id: entry.time_entry_id,
+        needs_choice: disagrees,
+        // Long punches are usually a missed clock-out rather than extra care, so
+        // the default stays 'scheduled' — billing the raw punch is one click away
+        // but never the thing that happens by not looking.
+        status: !haveSched ? 'unscheduled'
+              : !disagrees ? 'match'
+              : actualMin < schedMin ? 'short' : 'long',
+        default_basis: haveSched ? 'scheduled' : 'clocked',
+        chosen_basis: chosen,
+      });
       startISO = entry.start_time;
       endISO = entry.end_time;
       const st = new Date(entry.start_time);
@@ -361,11 +428,31 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
         ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })}`
         : '';
     } else {
-      // No EVV → bill scheduled
+      // No clock-in → bill scheduled. Nothing to reconcile: most private-pay
+      // visits here have never had a punch behind them, so asking would mean
+      // confirming thirty rows that were never in question.
       hours = hoursBetween(visit.start_time, visit.end_time);
       startISO = combineDateAndTime(visit.date, visit.start_time);
       endISO   = combineDateAndTime(visit.date, visit.end_time);
       timeRangeLabel = `${fmtTime12(visit.start_time)} - ${fmtTime12(visit.end_time)}`;
+      billedBasis = 'scheduled';
+      schedMinutes = Math.round(hours * 60);
+      reconcile.push({
+        key: reconcileKey({ serviceDate: ymd(visit.date), caregiverId: visit.caregiver_id, scheduledStart: visit.start_time }),
+        service_date: ymd(visit.date),
+        caregiver_id: visit.caregiver_id,
+        caregiver_name: `${visit.caregiver_first_name || ''} ${visit.caregiver_last_name || ''}`.trim(),
+        scheduled_start: visit.start_time,
+        scheduled_end: visit.end_time,
+        scheduled_minutes: Math.round(hours * 60),
+        scheduled_amount: lineAmount(hours),
+        clocked_start: null, clocked_end: null, clocked_minutes: null, clocked_amount: null,
+        time_entry_id: null,
+        needs_choice: false,
+        status: 'no_punch',
+        default_basis: 'scheduled',
+        chosen_basis: 'scheduled',
+      });
     }
 
     if (hours <= 0) continue;
@@ -396,6 +483,9 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       rate_type: rateType,
       amount,
       source, // 'evv_confirmed' or 'scheduled'
+      billed_basis: billedBasis,
+      scheduled_minutes: schedMinutes,
+      clocked_minutes: clockedMinutes,
     });
   }
 
@@ -467,14 +557,36 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       rate,
       rate_type: rateType,
       amount,
+      billed_basis: 'unscheduled',
+      scheduled_minutes: null,
+      clocked_minutes: Math.round(minutes),
       source: 'unscheduled_evv',
+    });
+
+    reconcile.push({
+      key: reconcileKey({ serviceDate: ymd(entry.start_time), caregiverId: entry.caregiver_id, timeEntryId: entry.time_entry_id }),
+      service_date: ymd(entry.start_time),
+      caregiver_id: entry.caregiver_id,
+      caregiver_name: `${entry.caregiver_first_name || ''} ${entry.caregiver_last_name || ''}`.trim(),
+      scheduled_start: null, scheduled_end: null, scheduled_minutes: null, scheduled_amount: null,
+      clocked_start: entry.start_time,
+      clocked_end: entry.end_time,
+      clocked_minutes: Math.round(minutes),
+      clocked_amount: amount,
+      time_entry_id: entry.time_entry_id,
+      needs_choice: false,          // no schedule to weigh it against
+      status: 'unscheduled',
+      default_basis: 'clocked',
+      chosen_basis: 'clocked',
     });
   }
 
   // Final sort by date for the invoice
   lineItems.sort((a, b) => (a.service_date || '').localeCompare(b.service_date || ''));
+  reconcile.sort((a, b) => (a.service_date || '').localeCompare(b.service_date || '')
+    || (a.scheduled_start || '').localeCompare(b.scheduled_start || ''));
 
-  return { lineItems, total: invoiceTotal };
+  return { lineItems, total: invoiceTotal, reconcile };
 }
 
 /**
@@ -558,21 +670,50 @@ function applyRate(item, resolved) {
 }
 
 async function insertLineItems(invoiceId, lineItems, dbClient = db) {
+  // billed_basis and the two minute columns arrived in v58. Prod has legacy
+  // drift, so write them only when they really exist — an invoice must not fail
+  // to save because a migration hasn't been applied yet.
+  const hasBasis = (await dbClient.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'invoice_line_items' AND column_name = 'billed_basis' LIMIT 1`
+  )).rows.length > 0;
+
   for (const item of lineItems) {
-    await dbClient.query(`
-      INSERT INTO invoice_line_items (
-        invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount, service_date
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, [
-      invoiceId,
-      item.time_entry_id,
-      item.caregiver_id,
-      clampLineItemDescription(item.description),
-      item.hours,
-      item.rate,
-      item.amount,
-      item.service_date || null
-    ]);
+    if (hasBasis) {
+      await dbClient.query(`
+        INSERT INTO invoice_line_items (
+          invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount, service_date,
+          billed_basis, scheduled_minutes, clocked_minutes
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `, [
+        invoiceId,
+        item.time_entry_id,
+        item.caregiver_id,
+        clampLineItemDescription(item.description),
+        item.hours,
+        item.rate,
+        item.amount,
+        item.service_date || null,
+        item.billed_basis || null,
+        item.scheduled_minutes ?? null,
+        item.clocked_minutes ?? null,
+      ]);
+    } else {
+      await dbClient.query(`
+        INSERT INTO invoice_line_items (
+          invoice_id, time_entry_id, caregiver_id, description, hours, rate, amount, service_date
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        invoiceId,
+        item.time_entry_id,
+        item.caregiver_id,
+        clampLineItemDescription(item.description),
+        item.hours,
+        item.rate,
+        item.amount,
+        item.service_date || null
+      ]);
+    }
   }
 }
 
@@ -701,9 +842,49 @@ router.post('/invoices/preview', auth, async (req, res) => {
   }
 });
 
+// Reconcile step — what the producer sees BEFORE an invoice exists.
+// One row per billable day: the shift as scheduled, the punch as recorded, and
+// what each would bill. Days where the two agree (or where nobody clocked in)
+// come back settled; the rest carry needs_choice and wait for a decision.
+// POST /api/billing/invoices/reconcile { clientId, billingPeriodStart, billingPeriodEnd, choices? }
+router.post('/invoices/reconcile', auth, async (req, res) => {
+  const { clientId, billingPeriodStart, billingPeriodEnd, choices } = req.body;
+  if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
+    return res.status(400).json({ error: 'clientId, billingPeriodStart, billingPeriodEnd are required' });
+  }
+  try {
+    const clientResult = await db.query(
+      `SELECT id, referral_source_id, care_type_id FROM clients WHERE id = $1`, [clientId]);
+    if (clientResult.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
+    const c = clientResult.rows[0];
+
+    const { reconcile, total } = await generateLineItems(
+      clientId, c.referral_source_id, c.care_type_id, billingPeriodStart, billingPeriodEnd,
+      { choices: choices || {} }
+    );
+
+    res.json({
+      reconcile,
+      total,
+      counts: {
+        days: reconcile.length,
+        needsChoice: reconcile.filter(r => r.needs_choice).length,
+        match:       reconcile.filter(r => r.status === 'match').length,
+        noPunch:     reconcile.filter(r => r.status === 'no_punch').length,
+        short:       reconcile.filter(r => r.status === 'short').length,
+        long:        reconcile.filter(r => r.status === 'long').length,
+        unscheduled: reconcile.filter(r => r.status === 'unscheduled').length,
+      },
+    });
+  } catch (error) {
+    console.error('Error in invoice reconcile:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Generate single invoice — atomic: invoice + line items succeed or fail together
 router.post('/invoices/generate-with-rates', auth, async (req, res) => {
-  const { clientId, billingPeriodStart, billingPeriodEnd, notes } = req.body;
+  const { clientId, billingPeriodStart, billingPeriodEnd, notes, choices } = req.body;
 
   if (!clientId || !billingPeriodStart || !billingPeriodEnd) {
     return res.status(400).json({ error: 'Client and billing period are required' });
@@ -741,7 +922,8 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
       client.referral_source_id,
       client.care_type_id,
       billingPeriodStart,
-      billingPeriodEnd
+      billingPeriodEnd,
+      { choices: choices || {} }
     );
 
     if (lineItems.length === 0) {
@@ -1024,7 +1206,7 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
         continue;
       }
 
-      const { lineItems, total } = await generateLineItems(
+      const { lineItems, total, reconcile } = await generateLineItems(
         client.id,
         client.referral_source_id,
         client.care_type_id,
@@ -1037,6 +1219,21 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
         skippedClients.push({
           name: `${client.first_name} ${client.last_name}`,
           reason: 'No billable hours found'
+        });
+        continue;
+      }
+
+      // A batch run has nowhere to ask "scheduled or clocked?", so a client with
+      // days where the punch and the shift disagree is skipped rather than billed
+      // on a guess. Generate that client singly to answer them.
+      const unresolved = (reconcile || []).filter(r => r.needs_choice);
+      if (unresolved.length > 0) {
+        skippedCount++;
+        skippedClients.push({
+          name: `${client.first_name} ${client.last_name}`,
+          reason: `${unresolved.length} day${unresolved.length === 1 ? '' : 's'} where the clock-in doesn't match the schedule — generate this client on its own to review them`,
+          needsReview: true,
+          days: unresolved.map(r => r.service_date),
         });
         continue;
       }

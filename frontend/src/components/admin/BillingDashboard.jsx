@@ -72,6 +72,11 @@ const BillingDashboard = ({ token }) => {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showGenerateForm, setShowGenerateForm] = useState(false);
+  const [showReconcile, setShowReconcile]       = useState(false);
+  const [reconcileData, setReconcileData]       = useState(null);
+  const [reconcileChoices, setReconcileChoices] = useState({});
+  const [reconcileLoading, setReconcileLoading] = useState(false);
+  const [showSettledDays, setShowSettledDays]   = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
   const [showBatchForm, setShowBatchForm] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -190,13 +195,59 @@ const BillingDashboard = ({ token }) => {
     }
   };
 
-  const handleGenerateInvoice = async (e) => {
+  // Step 1 of generating: show the producer every day that will be billed and
+  // let them settle the ones where the clock-in and the schedule disagree.
+  // Billing bills the SHIFT; a short punch used to silently become the price
+  // (a 13-minute mis-punch billed $7.15 of a $66 visit) with nobody asked.
+  const handleReviewInvoice = async (e) => {
     e.preventDefault();
+    if (!formData.clientId || !formData.billingPeriodStart || !formData.billingPeriodEnd) return;
+    setReconcileLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/billing/invoices/reconcile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          clientId: formData.clientId,
+          billingPeriodStart: formData.billingPeriodStart,
+          billingPeriodEnd: formData.billingPeriodEnd,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not read this period');
+      if (!data.reconcile || data.reconcile.length === 0) {
+        toast('No scheduled visits or clock-ins found for this client in that period', 'error');
+        return;
+      }
+      // Everything starts on its default (scheduled, except unscheduled punches).
+      const initial = {};
+      data.reconcile.forEach(r => { initial[r.key] = r.default_basis; });
+      setReconcileData(data);
+      setReconcileChoices(initial);
+      setShowReconcile(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setReconcileLoading(false);
+    }
+  };
+
+  const reconcileTotal = () => {
+    if (!reconcileData) return 0;
+    return reconcileData.reconcile.reduce((sum, r) => {
+      const basis = reconcileChoices[r.key] || r.default_basis;
+      const amt = basis === 'clocked' ? r.clocked_amount : r.scheduled_amount;
+      return sum + (Number(amt) || 0);
+    }, 0);
+  };
+
+  const handleGenerateInvoice = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
     try {
       const response = await fetch(`${API_BASE_URL}/api/billing/invoices/generate-with-rates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ ...formData, choices: reconcileChoices })
       });
       if (!response.ok) {
         const err = await response.json();
@@ -205,6 +256,9 @@ const BillingDashboard = ({ token }) => {
       const invoice = await response.json();
       setFormData({ clientId: '', billingPeriodStart: '', billingPeriodEnd: '', notes: '' });
       setShowGenerateForm(false);
+      setShowReconcile(false);
+      setReconcileData(null);
+      setReconcileChoices({});
       loadData();
       setSelectedInvoice(invoice);
       setShowInvoiceModal(true);
@@ -897,10 +951,127 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       </div>
 
       {/* Generate Invoice Form */}
-      {showGenerateForm && (
+      {showReconcile && reconcileData && (() => {
+        const rows = reconcileData.reconcile;
+        const needs = rows.filter(r => r.needs_choice);
+        const settled = rows.filter(r => !r.needs_choice);
+        const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+        const mins = (m) => m == null ? '—' : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+        const clock = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' }) : '';
+        // "10:30:00" → "10:30 AM" (schedule times are plain clock times, not instants)
+        const hhmm = (t) => {
+          if (!t) return '';
+          const [h, m] = String(t).split(':').map(Number);
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          const h12 = h % 12 === 0 ? 12 : h % 12;
+          return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+        };
+        const pick = (key, basis) => setReconcileChoices(prev => ({ ...prev, [key]: basis }));
+        const btn = (active, danger) => ({
+          padding: '0.3rem 0.7rem', borderRadius: 6, fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+          border: `1px solid ${active ? (danger ? '#DC2626' : '#059669') : '#D1D5DB'}`,
+          background: active ? (danger ? '#FEE2E2' : '#D1FAE5') : '#fff',
+          color: active ? (danger ? '#991B1B' : '#065F46') : '#6B7280',
+        });
+
+        return (
+          <div className="card" style={{ maxWidth: 'none' }}>
+            <h3>🧾 Review Before Invoicing</h3>
+            <p className="text-muted" style={{ marginTop: 0 }}>
+              Every day is billed at its <strong>scheduled</strong> hours. These {needs.length} day
+              {needs.length === 1 ? '' : 's'} clocked in differently — pick which to bill for each.
+            </p>
+
+            {needs.length === 0 ? (
+              <div style={{ padding: '1rem', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, color: '#065F46', fontWeight: 600 }}>
+                ✅ Nothing to resolve — every clock-in matches its schedule.
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="table" style={{ fontSize: '0.88rem' }}>
+                  <thead><tr><th>Date</th><th>Caregiver</th><th>Scheduled</th><th>Clocked</th><th>Bill</th></tr></thead>
+                  <tbody>
+                    {needs.map(r => {
+                      const chosen = reconcileChoices[r.key] || r.default_basis;
+                      const wild = r.clocked_minutes != null && r.scheduled_minutes
+                        && r.clocked_minutes > r.scheduled_minutes * 2;
+                      return (
+                        <tr key={r.key}>
+                          <td><strong>{formatDate(r.service_date, { month: 'short', day: 'numeric' })}</strong></td>
+                          <td>{r.caregiver_name}</td>
+                          <td>{hhmm(r.scheduled_start)}–{hhmm(r.scheduled_end)}<br />
+                            <span style={{ color: '#6B7280' }}>{mins(r.scheduled_minutes)} · {money(r.scheduled_amount)}</span></td>
+                          <td>
+                            {clock(r.clocked_start)}–{clock(r.clocked_end)}<br />
+                            <span style={{ color: r.status === 'short' ? '#B91C1C' : '#B45309' }}>
+                              {mins(r.clocked_minutes)} · {money(r.clocked_amount)}
+                              {r.status === 'short' ? ' (short)' : ' (over)'}
+                            </span>
+                            {wild && <div style={{ fontSize: '0.72rem', color: '#B91C1C' }}>likely a missed clock-out</div>}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '0.35rem' }}>
+                              <button type="button" style={btn(chosen === 'scheduled', false)} onClick={() => pick(r.key, 'scheduled')}>
+                                Scheduled {money(r.scheduled_amount)}
+                              </button>
+                              <button type="button" style={btn(chosen === 'clocked', wild)} onClick={() => pick(r.key, 'clocked')}>
+                                Clocked {money(r.clocked_amount)}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{ marginTop: '0.9rem' }}>
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => setShowSettledDays(!showSettledDays)}>
+                {showSettledDays ? 'Hide' : 'Show'} the other {settled.length} day{settled.length === 1 ? '' : 's'}
+              </button>
+              <span style={{ marginLeft: '0.75rem', color: '#6B7280', fontSize: '0.85rem' }}>
+                {reconcileData.counts.noPunch} with no clock-in · {reconcileData.counts.match} matching · {reconcileData.counts.unscheduled} unscheduled
+              </span>
+            </div>
+
+            {showSettledDays && (
+              <div style={{ overflowX: 'auto', marginTop: '0.6rem' }}>
+                <table className="table" style={{ fontSize: '0.84rem' }}>
+                  <thead><tr><th>Date</th><th>Caregiver</th><th>Billing</th><th>Basis</th><th>Amount</th></tr></thead>
+                  <tbody>
+                    {settled.map(r => (
+                      <tr key={r.key}>
+                        <td>{formatDate(r.service_date, { month: 'short', day: 'numeric' })}</td>
+                        <td>{r.caregiver_name}</td>
+                        <td>{r.chosen_basis === 'scheduled'
+                          ? `${hhmm(r.scheduled_start)}–${hhmm(r.scheduled_end)}`
+                          : `${clock(r.clocked_start)}–${clock(r.clocked_end)}`}</td>
+                        <td>{r.status === 'no_punch' ? 'no clock-in' : r.status === 'unscheduled' ? 'unscheduled visit' : 'matches'}</td>
+                        <td>{money(r.chosen_basis === 'clocked' ? r.clocked_amount : r.scheduled_amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div style={{ fontSize: '1.15rem', fontWeight: 800 }}>Invoice total: {money(reconcileTotal())}</div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => { setShowReconcile(false); setReconcileData(null); }}>Back</button>
+                <button type="button" className="btn btn-primary" onClick={handleGenerateInvoice}>Create Invoice</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {showGenerateForm && !showReconcile && (
         <div className="card card-form">
           <h3>Generate Invoice</h3>
-          <form onSubmit={handleGenerateInvoice}>
+          <form onSubmit={handleReviewInvoice}>
             <div className="form-grid">
               <div className="form-group">
                 <label>Client *</label>
@@ -919,7 +1090,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               </div>
             </div>
             <div className="form-actions">
-              <button type="submit" className="btn btn-primary">Generate</button>
+              <button type="submit" className="btn btn-primary" disabled={reconcileLoading}>
+                {reconcileLoading ? 'Reading the period…' : 'Review Days →'}
+              </button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowGenerateForm(false)}>Cancel</button>
             </div>
           </form>
