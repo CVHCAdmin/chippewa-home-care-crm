@@ -741,6 +741,25 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   }, [location]); // only restart interval when location first becomes available
 
   const [clockingIn, setClockingIn] = useState(false);
+  // What the punch is doing right now, so the button visibly moves instead of
+  // sitting grey for 6s (caregivers read a static button as "it didn't work" and
+  // tap again). { phase: 'gps'|'send', secs } — secs counts up during the GPS phase.
+  const [punchStage, setPunchStage] = useState(null);
+  const stageTimerRef = useRef(null);
+  const beginStage = (phase) => {
+    clearInterval(stageTimerRef.current);
+    setPunchStage({ phase, secs: 0 });
+    if (phase === 'gps') {
+      stageTimerRef.current = setInterval(() => setPunchStage(st => st && st.phase === 'gps' ? { ...st, secs: st.secs + 1 } : st), 1000);
+    }
+  };
+  const endStage = () => { clearInterval(stageTimerRef.current); setPunchStage(null); };
+  useEffect(() => () => clearInterval(stageTimerRef.current), []);
+  const stageLabel = (verb) => {
+    if (!punchStage) return null;
+    if (punchStage.phase === 'gps') return `📍 Finding location… ${punchStage.secs}s`;
+    return `⏳ ${verb}…`;
+  };
   // Clock-out takes seconds (GPS snapshot + request) with no visual change — people
   // think the tap didn't register and tap again. Show a working state immediately.
   const [clockingOut, setClockingOut] = useState(false);
@@ -894,6 +913,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     if (!selectedClient) return toast('Please select a client.');
     if (clockingIn) return;
     setClockingIn(true);
+    impact('medium'); // the tap registered — say so immediately
 
     try {
       // GPS is a best-effort EVV snapshot — it must NEVER block clock-in. Grab a
@@ -902,6 +922,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       let lat = null;
       let lng = null;
       if (!skipGps) {
+        if (!getWarmFix()) beginStage('gps');
         const snap = await getLocationSnapshot();
         lat = snap.latitude; lng = snap.longitude;
         if (!lat || !lng) {
@@ -923,6 +944,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
       impact('medium'); // native haptic on button press
 
+      beginStage('send');
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/clock-in`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -953,6 +975,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       hapticNotify('error');
       toast('Failed to clock in: ' + error.message, 'error');
     } finally {
+      endStage();
       setClockingIn(false);
     }
   };
@@ -1004,6 +1027,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         // and notify admins for EVV reconciliation.
         let fix = freshClockOutFix();
         if (!fix) {
+          beginStage('gps');
           const snap = await getLocationSnapshot();
           fix = (snap.latitude && snap.longitude)
             ? { latitude: snap.latitude, longitude: snap.longitude }
@@ -1013,6 +1037,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         if (fix) { lat = fix.latitude; lng = fix.longitude; }
       }
 
+      beginStage('send');
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -1073,6 +1098,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       toast('Failed to clock out: ' + error.message, 'error');
       setShowNoteModal(false); // never trap the caregiver in the notes modal on error
     } finally {
+      endStage();
       setClockingOut(false);
     }
   };
@@ -1771,8 +1797,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                 boxShadow: selectedClient && !clockingIn ? '0 4px 12px rgba(42,187,167,0.3)' : 'none'
               }}
             >
-              {clockingIn ? '⏳ Clocking In...' : '▶️ Clock In'}
+              {clockingIn ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <span style={{ width: 18, height: 18, border: '3px solid rgba(255,255,255,0.35)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                  {stageLabel('Clocking in') || '⏳ Clocking in…'}
+                </span>
+              ) : '▶️ Clock In'}
             </button>
+            {clockingIn && (
+              <div style={{ textAlign: 'center', fontSize: '0.8rem', color: '#6B7280', marginTop: '0.5rem' }}>
+                {punchStage?.phase === 'gps'
+                  ? 'Working — location can take a few seconds. No need to tap again.'
+                  : 'Working — no need to tap again.'}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2508,7 +2546,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               <button className="btn btn-secondary" disabled={clockingOut} onClick={() => { setShowNoteModal(false); setNoteError(''); }}>Cancel</button>
               <button className="btn btn-primary" disabled={clockingOut} onClick={completeClockOut}
                 style={clockingOut ? { opacity: 0.7, cursor: 'wait' } : undefined}>
-                {clockingOut ? '⏳ Clocking Out...' : 'Clock Out'}
+                {clockingOut ? (stageLabel('Clocking out') || '⏳ Clocking out…') : 'Clock Out'}
               </button>
             </div>
           </div>
