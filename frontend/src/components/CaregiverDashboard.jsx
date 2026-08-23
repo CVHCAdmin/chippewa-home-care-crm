@@ -9,7 +9,7 @@ import ShiftMissReport from './caregiver/ShiftMissReport';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
-import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, isNative, platform } from '../hooks/useNative';
+import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { setShiftBusy } from '../shiftGuard';
 import CareTaskChecklist from './CareTaskChecklist';
@@ -791,64 +791,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   }, []);
   const [gpsRetry, setGpsRetry] = useState(null); // { message, retryFn } when GPS hard-blocks a clock action
 
-  // Robust GPS acquisition for clock-in/out. Tries in order:
-  //   1. Cached watcher fix if recent (≤5 min) — instant
-  //   2. Fast COARSE fix (WiFi/cell, accepts an OS fix ≤2 min old) — succeeds indoors
-  //   3. High-accuracy GPS (20s timeout, still accepts an OS fix ≤1 min old) — outdoor
-  // A coarse fix (~20-65m) is well inside the ~300ft EVV geofence, so we never block on
-  // a cold satellite lock — that cold lock is the "GPS is taking too long" failure.
-  // Returns { latitude, longitude, source } or throws an error with .code matching PositionError codes.
-  const acquireLocationForClock = async ({ fast = false } = {}) => {
-    // 0. Fix warmed up since the login screen / dashboard mount / client pick.
-    //    This is what makes the punch independent of how recently the app opened.
+  // Whatever fix is ALREADY in hand — warm-up singleton or the live watcher.
+  // Returns instantly; never starts a lookup. The instant punch path uses this.
+  const instantFix = () => {
     const warm = getWarmFix();
-    if (warm?.latitude && warm?.longitude) {
-      return { latitude: warm.latitude, longitude: warm.longitude, source: 'warm' };
-    }
-
-    // 1. Recent cached watcher fix
+    if (warm?.latitude && warm?.longitude) return { latitude: warm.latitude, longitude: warm.longitude };
     const age = location?.timestamp ? Date.now() - location.timestamp : Infinity;
-    if (location?.latitude && age < 300000) {
-      return { latitude: location.latitude, longitude: location.longitude, source: 'cache' };
-    }
-
-    // 2. Fast coarse fix — accepts a recent OS last-known fix (works indoors)
-    try {
-      const p = await getCurrentPositionOnce({ highAccuracy: false, timeout: fast ? 5000 : 8000, maximumAge: 120000 });
-      if (p?.latitude) return { latitude: p.latitude, longitude: p.longitude, source: 'coarse' };
-    } catch (_) {
-      // fall through to high-accuracy
-    }
-
-    // 3. High-accuracy GPS — longer timeout, but still accept a recent OS fix so we
-    //    never hang waiting on a cold satellite lock. `fast` callers (clock-out)
-    //    skip this so a missing fix surfaces in ~5s instead of ~28s.
-    if (fast) { const e = new Error('GPS timeout'); e.code = 3; throw e; }
-    const p = await getCurrentPositionOnce({ highAccuracy: true, timeout: 20000, maximumAge: 60000 });
-    return { latitude: p?.latitude, longitude: p?.longitude, source: 'gps' };
-  };
-
-  // Best-effort location snapshot that can NEVER block or hang clock-in/out.
-  // GPS is a "nice to have" for EVV — it must never stop a caregiver from clocking.
-  // We race the location lookup against a hard wall-clock cap because the browser's
-  // permission prompt does NOT count against the geolocation timeout (and Capacitor
-  // on Android can ignore its own timeout) — so getCurrentPosition can hang forever
-  // while the button sits grey. After `capMs` we just give up and return nulls.
-  // Always resolves { latitude, longitude, error } (nulls if no fix); never throws,
-  // never hangs. `error` keeps the PositionError code so the admin alert can say
-  // "permission denied — fix her phone settings" instead of "unknown GPS error".
-  const getLocationSnapshot = async (capMs = 6000) => {
-    const hardCap = new Promise(resolve => setTimeout(() => resolve('cap'), capMs));
-    try {
-      const fix = await Promise.race([acquireLocationForClock({ fast: true }), hardCap]);
-      if (fix?.latitude && fix?.longitude) {
-        return { latitude: fix.latitude, longitude: fix.longitude, error: null };
-      }
-      return { latitude: null, longitude: null, error: { code: 3 } }; // hit the cap = timeout
-    } catch (err) {
-      // fall through to nulls — GPS must never block clocking — but keep the code
-      return { latitude: null, longitude: null, error: { code: err?.code ?? 0 } };
-    }
+    if (location?.latitude && age < 300000) return { latitude: location.latitude, longitude: location.longitude };
+    return null;
   };
 
   // Late-fix retries: when the clock-in snapshot missed (slow fix at the tap),
@@ -860,18 +810,20 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     lateFixTimersRef.current.forEach(clearTimeout);
     lateFixTimersRef.current = [];
   };
-  const startLateFixRetries = (entryId) => {
+  const startLateFixRetries = (entryId, which = 'clock_in') => {
     cancelLateFixRetries();
+    warmLocation(); // kick a long-budget lookup right away; retries below harvest it
     [10000, 30000, 60000, 180000, 420000, 780000].forEach(delay => { // server accepts up to 15 min
       lateFixTimersRef.current.push(setTimeout(async () => {
         try {
-          const p = await getCurrentPositionOnce({ highAccuracy: true, timeout: 12000, maximumAge: 60000 });
+          const p = getWarmFix()
+            || await getCurrentPositionOnce({ highAccuracy: true, timeout: 12000, maximumAge: 60000 });
           if (p?.latitude && p?.longitude) {
             cancelLateFixRetries(); // got one — later retries unnecessary
             await fetch(`${API_BASE_URL}/api/time-entries/${entryId}/late-location`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ latitude: p.latitude, longitude: p.longitude }),
+              body: JSON.stringify({ latitude: p.latitude, longitude: p.longitude, which }),
             });
           }
         } catch (_) { /* next scheduled retry will try again */ }
@@ -916,33 +868,35 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     impact('medium'); // the tap registered — say so immediately
 
     try {
-      // GPS is a best-effort EVV snapshot — it must NEVER block clock-in. Grab a
-      // location if we can get one quickly (hard-capped, can't hang); otherwise
-      // clock in anyway with no location and notify admins for reconciliation.
+      // INSTANT PUNCH: never wait on GPS at the tap. Use whatever fix is already
+      // in hand (warm-up / watcher); otherwise punch immediately with no location
+      // and CHASE the fix in the background (late-fix retries fill the entry via
+      // /late-location for up to 15 min, breadcrumbs cover the rest of the shift).
       let lat = null;
       let lng = null;
       if (!skipGps) {
-        if (!getWarmFix()) beginStage('gps');
-        const snap = await getLocationSnapshot();
-        lat = snap.latitude; lng = snap.longitude;
-        if (!lat || !lng) {
-          reportGpsFailure('clock-in', snap.error, selectedClient);
-          // EVV (payer-billed) clients legally require location; private pay does not.
-          // Permission DENIED is the one case we block — it can never self-recover in
-          // the background, and blocking with exact steps is the only lever that gets
-          // it enabled. A merely-slow fix still never blocks anyone (the late-fix
-          // retries and breadcrumb backfill recover those).
+        const fix = instantFix();
+        if (fix) { lat = fix.latitude; lng = fix.longitude; }
+        else {
+          // Permission DENIED is the one case we still block for EVV (payer-billed)
+          // clients — it can never self-recover in the background, and blocking with
+          // exact steps is the only lever that gets it enabled. The check is an
+          // instant permission-state read, not a GPS wait.
+          const perm = await getLocationPermissionState();
           const cl = clients.find(c => c.id === selectedClient);
           const isEvvClient = cl && cl.is_private_pay !== true;
-          if (isEvvClient && snap.error?.code === 1) {
-            hapticNotify('error');
-            toast(gpsErrorMessage({ code: 1 }, 'clock in') + ' Location is required for this client (Medicaid/VA EVV).', 'error');
-            return;
+          if (perm === 'denied') {
+            reportGpsFailure('clock-in', { code: 1 }, selectedClient);
+            if (isEvvClient) {
+              hapticNotify('error');
+              toast(gpsErrorMessage({ code: 1 }, 'clock in') + ' Location is required for this client (Medicaid/VA EVV).', 'error');
+              return;
+            }
+          } else {
+            reportGpsFailure('clock-in', { code: 3 }, selectedClient);
           }
         }
       }
-
-      impact('medium'); // native haptic on button press
 
       beginStage('send');
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/clock-in`, {
@@ -1025,16 +979,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         // GPS. Check the prefetch once more after the snapshot in case it landed
         // during those ~6 seconds. Otherwise clock out anyway with no location
         // and notify admins for EVV reconciliation.
-        let fix = freshClockOutFix();
-        if (!fix) {
-          beginStage('gps');
-          const snap = await getLocationSnapshot();
-          fix = (snap.latitude && snap.longitude)
-            ? { latitude: snap.latitude, longitude: snap.longitude }
-            : freshClockOutFix();
-          if (!fix) reportGpsFailure('clock-out', snap.error, activeSession?.client_id || selectedClient);
-        }
+        // INSTANT: the prefetch started at modal-open (45s budget while the note is
+        // typed) or anything the warm-up/watcher holds. Never wait at confirm — a
+        // missing fix is chased after the punch (late-fix retries + breadcrumbs).
+        const fix = freshClockOutFix() || instantFix();
         if (fix) { lat = fix.latitude; lng = fix.longitude; }
+        else reportGpsFailure('clock-out', { code: 3 }, activeSession?.client_id || selectedClient);
       }
 
       beginStage('send');
@@ -1064,6 +1014,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           return;
         }
         throw new Error(data.error || 'Failed');
+      }
+
+      // Clock-out succeeded — chase a missing location in the background
+      if (!lat && activeSession?.id && String(activeSession.id).indexOf('offline-') !== 0) {
+        startLateFixRetries(activeSession.id, 'clock_out');
       }
 
       // Clock-out succeeded — upload any staged visit photos before resetting

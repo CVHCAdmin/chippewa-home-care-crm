@@ -69,6 +69,26 @@ export function getWarmFix() {
   return f && Date.now() - f.at < WARM_FRESH_MS ? f : null;
 }
 
+// Instant permission check — 'granted' | 'denied' | 'prompt' | null (unknown).
+// Used by the instant punch path: it must know "denied" without waiting on a fix.
+export async function getLocationPermissionState() {
+  const Geolocation = await getGeolocation();
+  if (Geolocation && isNative) {
+    const p = await Geolocation.checkPermissions().catch(() => null);
+    if (!p) return null;
+    if (p.location === 'granted' || p.coarseLocation === 'granted') return 'granted';
+    if (p.location === 'denied') return 'denied';
+    return 'prompt';
+  }
+  try {
+    if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+      const st = await navigator.permissions.query({ name: 'geolocation' });
+      return st.state; // 'granted' | 'denied' | 'prompt'
+    }
+  } catch (_) { /* Permissions API unavailable */ }
+  return null;
+}
+
 async function locationPermissionGranted() {
   const Geolocation = await getGeolocation();
   if (Geolocation && isNative) {

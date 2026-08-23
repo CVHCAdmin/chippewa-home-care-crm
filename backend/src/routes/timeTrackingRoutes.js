@@ -569,15 +569,23 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
 // capture — it is evidence of presence shortly after start, not at the tap.
 router.post('/:id/late-location', verifyToken, async (req, res) => {
   try {
-    const { latitude, longitude } = req.body || {};
+    const { latitude, longitude, which } = req.body || {};
     if (!latitude || !longitude) return res.status(400).json({ error: 'latitude and longitude required' });
-    const r = await db.query(
-      `UPDATE time_entries SET clock_in_location=$1, updated_at=NOW()
-        WHERE id=$2 AND caregiver_id=$3 AND clock_in_location IS NULL
-          AND start_time > NOW() - INTERVAL '15 minutes'
-        RETURNING id`,
-      [JSON.stringify({ lat: latitude, lng: longitude, source: 'delayed', captured_at: new Date().toISOString() }),
-       req.params.id, req.user.id]);
+    const loc = JSON.stringify({ lat: latitude, lng: longitude, source: 'delayed', captured_at: new Date().toISOString() });
+    // `which`: 'clock_in' (default) fills a missing clock-in location within 15 min
+    // of start; 'clock_out' fills a missing clock-out location within 15 min of end.
+    // Both only ever FILL — an at-tap capture is never overwritten.
+    const r = which === 'clock_out'
+      ? await db.query(
+          `UPDATE time_entries SET clock_out_location=$1, updated_at=NOW()
+            WHERE id=$2 AND caregiver_id=$3 AND clock_out_location IS NULL
+              AND end_time IS NOT NULL AND end_time > NOW() - INTERVAL '15 minutes'
+            RETURNING id`, [loc, req.params.id, req.user.id])
+      : await db.query(
+          `UPDATE time_entries SET clock_in_location=$1, updated_at=NOW()
+            WHERE id=$2 AND caregiver_id=$3 AND clock_in_location IS NULL
+              AND start_time > NOW() - INTERVAL '15 minutes'
+            RETURNING id`, [loc, req.params.id, req.user.id]);
     res.json({ updated: r.rows.length });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
