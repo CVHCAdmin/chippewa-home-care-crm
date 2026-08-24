@@ -71,22 +71,36 @@ export function getWarmFix() {
 
 // Instant permission check — 'granted' | 'denied' | 'prompt' | null (unknown).
 // Used by the instant punch path: it must know "denied" without waiting on a fix.
+// HARD-CAPPED at 1.5s. This sits between the Clock In tap and the punch request,
+// and platform location APIs (plugin import, checkPermissions, permissions.query)
+// can wedge indefinitely on some devices — Aug 2026: the uncapped call froze
+// clock-in with the spinner stuck on "Clocking in…". The punch must NEVER wait
+// on the platform: if the answer isn't back in 1.5s, return null (unknown) and
+// let the punch proceed.
 export async function getLocationPermissionState() {
-  const Geolocation = await getGeolocation();
-  if (Geolocation && isNative) {
-    const p = await Geolocation.checkPermissions().catch(() => null);
-    if (!p) return null;
-    if (p.location === 'granted' || p.coarseLocation === 'granted') return 'granted';
-    if (p.location === 'denied') return 'denied';
-    return 'prompt';
-  }
-  try {
-    if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
-      const st = await navigator.permissions.query({ name: 'geolocation' });
-      return st.state; // 'granted' | 'denied' | 'prompt'
+  const lookup = (async () => {
+    const Geolocation = await getGeolocation();
+    if (Geolocation && isNative) {
+      const p = await Geolocation.checkPermissions().catch(() => null);
+      if (!p) return null;
+      if (p.location === 'granted' || p.coarseLocation === 'granted') return 'granted';
+      if (p.location === 'denied') return 'denied';
+      return 'prompt';
     }
-  } catch (_) { /* Permissions API unavailable */ }
-  return null;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+        const st = await navigator.permissions.query({ name: 'geolocation' });
+        return st.state; // 'granted' | 'denied' | 'prompt'
+      }
+    } catch (_) { /* Permissions API unavailable */ }
+    return null;
+  })();
+  const cap = new Promise(resolve => setTimeout(() => resolve(null), 1500));
+  try {
+    return await Promise.race([lookup, cap]);
+  } catch (_) {
+    return null;
+  }
 }
 
 async function locationPermissionGranted() {
