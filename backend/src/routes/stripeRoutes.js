@@ -110,6 +110,10 @@ router.post('/create-checkout-session', auth, requireStripe, async (req, res) =>
     const session = await stripe.checkout.sessions.create({
       ...buildMethodParams(invoice, amountDue, method),
       mode: 'payment',
+      // Stripe defaults to locale:'auto' (the visitor's browser language) — a
+      // family member's Spanish-language phone got a Spanish checkout page and
+      // abandoned the payment (Aug 2026). Force English.
+      locale: 'en',
       success_url: `${FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}&invoice_id=${invoiceId}`,
       cancel_url: `${FRONTEND_URL}/payment-cancelled?invoice_id=${invoiceId}`,
       // Only prefill the email when it's a valid address. A client with no email
@@ -293,6 +297,10 @@ router.post('/invoice/:invoiceId/pay', requireStripe, async (req, res) => {
       // pass-through processing fee. See buildMethodParams above.
       ...buildMethodParams(invoice, amountDue, method),
       mode: 'payment',
+      // Stripe defaults to locale:'auto' (the visitor's browser language) — a
+      // family member's Spanish-language phone got a Spanish checkout page and
+      // abandoned the payment (Aug 2026). Force English.
+      locale: 'en',
       success_url: `${FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}&invoice_id=${invoiceId}`,
       cancel_url: `${FRONTEND_URL}/pay/${invoiceId}?cancelled=true`,
       // Only prefill the email when it's a valid address. A client with no email
