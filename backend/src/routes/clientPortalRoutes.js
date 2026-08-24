@@ -38,6 +38,7 @@ const clientAuth = async (req, res, next) => {
     if (decoded.role !== 'client') {
       return res.status(403).json({ error: 'Client access required' });
     }
+    req.portalEmail = decoded.accountEmail || null; // which relative (multi-account)
 
     // Admin impersonation — skip portal account check, just verify client exists
     if (decoded.impersonation) {
@@ -113,11 +114,13 @@ router.post('/login', async (req, res) => {
       const failCount = portal.failed_login_count + 1;
       const lockUntil = failCount >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null;
 
+      // Target THIS account only — a client can have several relative accounts
+      // and one person's typos must not lock the others out.
       await db.query(`
         UPDATE client_portal_accounts
         SET failed_login_count = $1, locked_until = $2, updated_at = NOW()
-        WHERE client_id = $3
-      `, [failCount, lockUntil, portal.client_id]);
+        WHERE id = $3
+      `, [failCount, lockUntil, portal.id]);
 
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -126,11 +129,13 @@ router.post('/login', async (req, res) => {
     await db.query(`
       UPDATE client_portal_accounts
       SET failed_login_count = 0, locked_until = NULL, last_login = NOW(), updated_at = NOW()
-      WHERE client_id = $1
-    `, [portal.client_id]);
+      WHERE id = $1
+    `, [portal.id]);
 
+    // accountEmail identifies WHICH relative is logged in (audit + /portal/me);
+    // clientId stays the authorization scope.
     const token = jwt.sign(
-      { role: 'client', clientId: portal.client_id },
+      { role: 'client', clientId: portal.client_id, accountEmail: portal.email },
       process.env.JWT_SECRET,
       { expiresIn: '8h' }
     );
@@ -183,8 +188,8 @@ router.post('/set-password', async (req, res) => {
           invite_expires_at = NULL,
           portal_enabled = true,
           updated_at     = NOW()
-      WHERE client_id = $2
-    `, [passwordHash, result.rows[0].client_id]);
+      WHERE id = $2
+    `, [passwordHash, result.rows[0].id]);
 
     res.json({ success: true, message: 'Password set. You can now log in.' });
   } catch (error) {
@@ -213,7 +218,7 @@ router.post('/forgot-password', forgotLimiter, async (req, res) => {
 
   try {
     const result = await db.query(`
-      SELECT cpa.client_id, cpa.email, c.first_name, c.last_name
+      SELECT cpa.id, cpa.client_id, cpa.email, c.first_name, c.last_name
       FROM client_portal_accounts cpa
       JOIN clients c ON cpa.client_id = c.id
       WHERE LOWER(cpa.email) = LOWER($1) AND cpa.portal_enabled = true AND c.is_active = true
@@ -228,8 +233,8 @@ router.post('/forgot-password', forgotLimiter, async (req, res) => {
     await db.query(`
       UPDATE client_portal_accounts
       SET invite_token = $1, invite_expires_at = $2, updated_at = NOW()
-      WHERE client_id = $3
-    `, [resetToken, resetExpires, account.client_id]);
+      WHERE id = $3
+    `, [resetToken, resetExpires, account.id]);
 
     const resetUrl = `${process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com'}/portal/setup?token=${resetToken}`;
 
@@ -263,9 +268,11 @@ router.get('/portal/me', clientAuth, async (req, res) => {
         c.service_type, c.start_date,
         cpa.email as portal_email, cpa.last_login
       FROM clients c
-      LEFT JOIN client_portal_accounts cpa ON cpa.client_id = c.id
+      LEFT JOIN client_portal_accounts cpa
+        ON cpa.client_id = c.id AND ($2::text IS NULL OR LOWER(cpa.email) = LOWER($2))
       WHERE c.id = $1
-    `, [req.clientId]);
+      LIMIT 1
+    `, [req.clientId, req.portalEmail]);
 
     res.json(result.rows[0] || null);
   } catch (error) {
@@ -629,9 +636,20 @@ router.post('/admin/invite', auth, async (req, res) => {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
-  const { clientId, email } = req.body;
-  if (!clientId || !email) {
-    return res.status(400).json({ error: 'clientId and email are required' });
+  // Accepts either the legacy single { email } or { invitees: [{ email, name }] }.
+  // Each email becomes its OWN portal account (one login per relative).
+  const { clientId, email, name } = req.body;
+  const invitees = Array.isArray(req.body.invitees) && req.body.invitees.length
+    ? req.body.invitees
+    : (email ? [{ email, name }] : []);
+  if (!clientId || invitees.length === 0) {
+    return res.status(400).json({ error: 'clientId and at least one email are required' });
+  }
+  const emailRe = /^\S+@\S+\.\S+$/;
+  for (const inv of invitees) {
+    if (!inv.email || !emailRe.test(String(inv.email).trim())) {
+      return res.status(400).json({ error: `Invalid email address: ${inv.email || '(blank)'}` });
+    }
   }
 
   try {
@@ -644,52 +662,112 @@ router.post('/admin/invite', auth, async (req, res) => {
       return res.status(404).json({ error: 'Client not found or inactive' });
     }
 
-    // Generate secure invite token (48hr expiry)
-    const inviteToken   = crypto.randomBytes(32).toString('hex');
-    const inviteExpires = new Date(Date.now() + 48 * 60 * 60 * 1000);
-
-    await db.query(`
-      INSERT INTO client_portal_accounts
-        (client_id, email, invite_token, invite_expires_at, portal_enabled)
-      VALUES ($1, $2, $3, $4, false)
-      ON CONFLICT (client_id) DO UPDATE SET
-        email             = $2,
-        invite_token      = $3,
-        invite_expires_at = $4,
-        updated_at        = NOW()
-    `, [clientId, email, inviteToken, inviteExpires]);
-
-    const inviteUrl = `${process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com'}/portal/setup?token=${inviteToken}`;
     const clientName = `${client.rows[0].first_name} ${client.rows[0].last_name}`;
+    const results = [];
 
-    // Send invite email. We catch any SendGrid error so the invite record
-    // still gets created (admin can fall back to copy/paste the link), but
-    // we surface the actual reason so they know whether to fix SendGrid or
-    // just deliver the link manually.
-    let emailSent = false;
-    let emailError = null;
-    try {
-      emailSent = await sendClientPortalInvite({ to: email, clientName, inviteUrl });
-    } catch (sgErr) {
-      emailError = sgErr.message || 'SendGrid send failed';
+    for (const inv of invitees) {
+      const invEmail = String(inv.email).trim();
+      const invName  = inv.name ? String(inv.name).trim() : null;
+
+      // Same email can't belong to two different clients — email is the login key.
+      const existing = await db.query(
+        'SELECT client_id FROM client_portal_accounts WHERE LOWER(email) = LOWER($1)', [invEmail]);
+      if (existing.rows.length && existing.rows[0].client_id !== clientId) {
+        results.push({ email: invEmail, error: 'This email already has a portal account for a different client.' });
+        continue;
+      }
+
+      // Fresh secure invite token (48hr expiry) per account. Re-inviting an
+      // existing account regenerates its token (password reset / lost invite).
+      const inviteToken   = crypto.randomBytes(32).toString('hex');
+      const inviteExpires = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+      await db.query(`
+        INSERT INTO client_portal_accounts
+          (client_id, email, display_name, invite_token, invite_expires_at, portal_enabled)
+        VALUES ($1, $2, $3, $4, $5, false)
+        ON CONFLICT (email) DO UPDATE SET
+          display_name      = COALESCE($3, client_portal_accounts.display_name),
+          invite_token      = $4,
+          invite_expires_at = $5,
+          updated_at        = NOW()
+      `, [clientId, invEmail, invName, inviteToken, inviteExpires]);
+
+      const inviteUrl = `${process.env.FRONTEND_URL || 'https://app.chippewavalleyhomecare.com'}/portal/setup?token=${inviteToken}`;
+
+      // Send invite email. Any send error is caught so the invite record still
+      // exists (admin can copy/paste the link), with the reason surfaced.
+      let emailSent = false;
+      let emailError = null;
+      try {
+        emailSent = await sendClientPortalInvite({ to: invEmail, clientName, inviteUrl });
+      } catch (sgErr) {
+        emailError = sgErr.message || 'Email send failed';
+      }
+      results.push({ email: invEmail, name: invName, inviteUrl, emailSent, emailError, expiresAt: inviteExpires });
     }
 
+    const ok = results.filter(r => !r.error);
+    const failed = results.filter(r => r.error);
     res.json({
-      success:   true,
-      inviteUrl,
-      emailSent,
-      emailError,
-      message:   emailSent
-        ? `Invite email sent to ${email} for ${clientName}`
-        : emailError
-          ? `Invite created. Email delivery failed: ${emailError}. Share the link manually.`
-          : `Invite created for ${clientName} (email not configured — share link manually)`,
-      expiresAt: inviteExpires,
+      success:   ok.length > 0,
+      results,
+      // Back-compat fields for the single-invite shape
+      inviteUrl: ok[0]?.inviteUrl || null,
+      emailSent: ok.every(r => r.emailSent) && ok.length > 0,
+      emailError: ok.find(r => r.emailError)?.emailError || null,
+      message: [
+        ok.length ? `Invites created for ${ok.map(r => r.email).join(', ')} (${clientName}).` : null,
+        ok.some(r => !r.emailSent) ? 'Some emails could not be sent — share those links manually.' : null,
+        failed.length ? `Skipped: ${failed.map(r => `${r.email} (${r.error})`).join('; ')}` : null,
+      ].filter(Boolean).join(' '),
     });
   } catch (error) {
-    if (error.code === '23505') {
-      return res.status(400).json({ error: 'A portal account already exists with this email' });
-    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN: LIST PORTAL ACCOUNTS FOR A CLIENT (one row per relative)
+// GET /api/client-portal/admin/clients/:clientId/accounts
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/admin/clients/:clientId/accounts', auth, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  try {
+    const result = await db.query(`
+      SELECT id, email, display_name, portal_enabled, last_login,
+        CASE
+          WHEN invite_token IS NOT NULL AND invite_expires_at > NOW() THEN 'invite_pending'
+          WHEN invite_token IS NOT NULL AND invite_expires_at <= NOW() THEN 'invite_expired'
+          WHEN portal_enabled = true THEN 'active'
+          ELSE 'disabled'
+        END AS status
+      FROM client_portal_accounts
+      WHERE client_id = $1
+      ORDER BY created_at
+    `, [req.params.clientId]);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN: REMOVE ONE PORTAL ACCOUNT (revoke a single relative's access)
+// DELETE /api/client-portal/admin/accounts/:accountId
+// ─────────────────────────────────────────────────────────────────────────────
+router.delete('/admin/accounts/:accountId', auth, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  try {
+    const result = await db.query(
+      'DELETE FROM client_portal_accounts WHERE id = $1 RETURNING email', [req.params.accountId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Account not found' });
+    res.json({ success: true, removed: result.rows[0].email });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
@@ -707,19 +785,30 @@ router.get('/admin/clients', auth, async (req, res) => {
     const result = await db.query(`
       SELECT
         c.id, c.first_name, c.last_name, c.phone, c.email, c.is_active,
-        cpa.portal_enabled,
-        cpa.email      as portal_email,
-        cpa.last_login,
-        cpa.invite_expires_at,
-        CASE
-          WHEN cpa.invite_token IS NOT NULL AND cpa.invite_expires_at > NOW() THEN 'invite_pending'
-          WHEN cpa.invite_token IS NOT NULL AND cpa.invite_expires_at <= NOW() THEN 'invite_expired'
-          WHEN cpa.portal_enabled = true THEN 'active'
-          WHEN cpa.id IS NOT NULL THEN 'disabled'
-          ELSE 'not_invited'
-        END as portal_status
+        agg.portal_enabled,
+        agg.portal_email,
+        agg.last_login,
+        agg.invite_expires_at,
+        agg.account_count,
+        COALESCE(agg.portal_status, 'not_invited') as portal_status
       FROM clients c
-      LEFT JOIN client_portal_accounts cpa ON cpa.client_id = c.id
+      LEFT JOIN LATERAL (
+        SELECT
+          bool_or(cpa.portal_enabled)                          AS portal_enabled,
+          string_agg(cpa.email, ', ' ORDER BY cpa.created_at)  AS portal_email,
+          MAX(cpa.last_login)                                  AS last_login,
+          MAX(cpa.invite_expires_at)                           AS invite_expires_at,
+          COUNT(*)                                             AS account_count,
+          CASE
+            WHEN bool_or(cpa.portal_enabled) THEN 'active'
+            WHEN bool_or(cpa.invite_token IS NOT NULL AND cpa.invite_expires_at > NOW()) THEN 'invite_pending'
+            WHEN bool_or(cpa.invite_token IS NOT NULL AND cpa.invite_expires_at <= NOW()) THEN 'invite_expired'
+            ELSE 'disabled'
+          END AS portal_status
+        FROM client_portal_accounts cpa
+        WHERE cpa.client_id = c.id
+        HAVING COUNT(*) > 0
+      ) agg ON true
       WHERE c.is_active = true
       ORDER BY c.last_name, c.first_name
     `);

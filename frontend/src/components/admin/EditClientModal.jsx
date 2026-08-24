@@ -28,6 +28,9 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
   // ── Portal state ──────────────────────────────────────────────────────────
   const [portalStatus, setPortalStatus]   = useState(null);
   const [portalEmail, setPortalEmail]     = useState('');
+  const [portalName, setPortalName]       = useState('');            // relative's name/relationship
+  const [portalAccounts, setPortalAccounts] = useState([]);           // one row per relative
+  const [inviteResults, setInviteResults] = useState([]);             // per-email invite links from last send
   const [portalLoading, setPortalLoading] = useState(false);
   const [portalMessage, setPortalMessage] = useState({ text: '', type: '' });
   const [inviteUrl, setInviteUrl]         = useState('');
@@ -94,8 +97,11 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
       // Load portal status for this client
       setPortalStatus(null);
       setPortalEmail(client.email || '');
+      setPortalName('');
       setInviteUrl('');
+      setInviteResults([]);
       setPortalMessage({ text: '', type: '' });
+      refreshPortalAccounts();
       fetch(`${API_BASE_URL}/api/client-portal/admin/clients`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -280,6 +286,19 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
   };
 
   // ── Portal handlers ───────────────────────────────────────────────────────
+  // One portal account per RELATIVE (own email + password each): individual
+  // audit trail, per-person revocation, and one person's lockout or password
+  // reset never affects the others. Sending an invite to an email that already
+  // has an account for this client just regenerates its invite/reset link.
+  const refreshPortalAccounts = () => {
+    fetch(`${API_BASE_URL}/api/client-portal/admin/clients/${client.id}/accounts`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(r => (r.ok ? r.json() : []))
+      .then(rows => setPortalAccounts(Array.isArray(rows) ? rows : []))
+      .catch(() => {});
+  };
+
   const handleSendInvite = async () => {
     if (!portalEmail.trim()) {
       return setPortalMessage({ text: 'Enter an email address first.', type: 'error' });
@@ -287,22 +306,49 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
     setPortalLoading(true);
     setPortalMessage({ text: '', type: '' });
     setInviteUrl('');
+    setInviteResults([]);
     try {
       const res = await fetch(`${API_BASE_URL}/api/client-portal/admin/invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ clientId: client.id, email: portalEmail.trim() }),
+        body: JSON.stringify({
+          clientId: client.id,
+          invitees: [{ email: portalEmail.trim(), name: portalName.trim() || null }],
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to create invite');
-      setInviteUrl(data.inviteUrl);
+      const ok = (data.results || []).filter(r => !r.error);
+      if (ok.length === 0) throw new Error(data.message || 'Invite failed');
+      setInviteResults(ok);
+      setInviteUrl(ok[0]?.inviteUrl || '');
       setPortalStatus('invite_pending');
-      // Reflect whether SendGrid actually delivered the email so admin
-      // knows whether to copy the link manually or just confirm with client.
       const msg = data.emailSent
         ? `✉️ Invite email sent to ${portalEmail}. Link is also shown below as a backup.`
         : `⚠️ Invite created but email could NOT be sent. Copy the link below and send it to ${portalEmail} manually.`;
-      setPortalMessage({ text: msg, type: data.emailSent ? 'success' : 'warning' });
+      setPortalMessage({ text: data.message && !data.emailSent ? data.message : msg, type: data.emailSent ? 'success' : 'warning' });
+      setPortalEmail('');
+      setPortalName('');
+      refreshPortalAccounts();
+    } catch (err) {
+      setPortalMessage({ text: err.message, type: 'error' });
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  const handleRemoveAccount = async (acct) => {
+    if (!window.confirm(`Remove portal access for ${acct.display_name || acct.email}? They will no longer be able to log in.`)) return;
+    setPortalLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/client-portal/admin/accounts/${acct.id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to remove account');
+      setPortalMessage({ text: `Removed portal access for ${acct.email}.`, type: 'warning' });
+      refreshPortalAccounts();
     } catch (err) {
       setPortalMessage({ text: err.message, type: 'error' });
     } finally {
@@ -943,30 +989,76 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                 </div>
               )}
 
+              {/* Portal accounts — one login per relative */}
+              {portalAccounts.length > 0 && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h5 style={{ marginBottom: '0.75rem', color: '#333' }}>Portal Logins ({portalAccounts.length})</h5>
+                  {portalAccounts.map(acct => {
+                    const chip = {
+                      invite_pending: { bg: '#fef9e7', color: '#d68910', label: 'Invite sent' },
+                      invite_expired: { bg: '#fdf2f2', color: '#c0392b', label: 'Invite expired' },
+                      active:         { bg: '#eafaf1', color: '#1e8449', label: 'Active' },
+                      disabled:       { bg: '#f0f0f0', color: '#888',    label: 'Disabled' },
+                    }[acct.status] || { bg: '#f5f5f5', color: '#666', label: acct.status };
+                    return (
+                      <div key={acct.id} style={{
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                        background: '#f8f9fa', border: '1px solid #e9ecef', borderRadius: '8px',
+                        padding: '10px 12px', marginBottom: '6px',
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, color: '#333', fontSize: '0.9rem' }}>
+                            {acct.display_name || acct.email}
+                          </div>
+                          <div style={{ fontSize: '0.8rem', color: '#666', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {acct.display_name ? acct.email : ''}
+                            {acct.last_login ? `${acct.display_name ? ' · ' : ''}last login ${new Date(acct.last_login).toLocaleDateString()}` : ''}
+                          </div>
+                        </div>
+                        <span style={{
+                          background: chip.bg, color: chip.color, fontSize: '0.75rem',
+                          fontWeight: 700, padding: '3px 10px', borderRadius: '999px', flexShrink: 0,
+                        }}>{chip.label}</span>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => handleRemoveAccount(acct)}
+                          disabled={portalLoading}
+                          title="Remove this person's portal access"
+                          style={{ flexShrink: 0, padding: '4px 10px', fontSize: '0.8rem' }}
+                        >
+                          ✕ Remove
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Invite form — always available so admins can resend at any
                   point (lost password, new email address, etc.). For active
                   clients it acts as a re-invite that regenerates the token. */}
               {(() => {
-                const isResend = portalStatus === 'invite_pending' || portalStatus === 'invite_expired' || portalStatus === 'active' || portalStatus === 'disabled';
-                const heading =
-                  portalStatus === 'invite_pending' ? 'Resend Invite' :
-                  portalStatus === 'invite_expired' ? 'Resend Expired Invite' :
-                  portalStatus === 'active'         ? 'Send New Invite (resets account setup)' :
-                  portalStatus === 'disabled'       ? 'Re-invite Client' :
-                                                      'Invite Client to Portal';
-                const buttonLabel = portalLoading
-                  ? (isResend ? 'Resending...' : 'Creating...')
-                  : (isResend ? '✉️ Resend Invite' : '✉️ Create Invite');
+                const heading = portalAccounts.length > 0 ? 'Add Another Login' : 'Invite to Portal';
+                const buttonLabel = portalLoading ? 'Sending...' : '✉️ Send Invite';
                 return (
                   <div style={{ marginBottom: '1.5rem' }}>
                     <h5 style={{ marginBottom: '0.75rem', color: '#333' }}>{heading}</h5>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <div className="form-group" style={{ flex: '1 1 160px', margin: 0 }}>
+                        <input
+                          type="text"
+                          value={portalName}
+                          onChange={e => setPortalName(e.target.value)}
+                          placeholder="Name / relation (e.g. Tyler — son)"
+                        />
+                      </div>
+                      <div className="form-group" style={{ flex: '2 1 220px', margin: 0 }}>
                         <input
                           type="email"
                           value={portalEmail}
                           onChange={e => setPortalEmail(e.target.value)}
-                          placeholder="client@email.com"
+                          placeholder="their@email.com"
                         />
                       </div>
                       <button
@@ -980,9 +1072,9 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                       </button>
                     </div>
                     <small style={{ color: '#666', marginTop: '6px', display: 'block' }}>
-                      {isResend
-                        ? 'Generates a fresh 48-hour invite link and emails it to the client. The old link (if any) will stop working.'
-                        : 'An invite link will be generated and emailed to the client. If email delivery fails, the link will be shown below for you to copy manually.'}
+                      Each person gets their <b>own</b> login (their email + their password) to this client's portal —
+                      add the client and as many relatives as needed, one at a time. Re-sending to an existing email
+                      just generates a fresh 48-hour link (use for lost passwords; the old link stops working).
                     </small>
                   </div>
                 );
