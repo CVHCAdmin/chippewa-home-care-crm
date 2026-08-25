@@ -67,8 +67,9 @@ router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
     const { firstName, lastName, email, phone, payRate, address, city, state, zip,
             latitude, longitude, hireDate, emergencyContactName, emergencyContactPhone,
             isActive, notes } = req.body;
-    if (email) {
-      const existing = await db.query('SELECT id FROM users WHERE email = $1 AND id != $2', [email, req.params.id]);
+    const cleanEmail = email ? email.toLowerCase().trim() : email;
+    if (cleanEmail) {
+      const existing = await db.query('SELECT id FROM users WHERE LOWER(email) = $1 AND id != $2', [cleanEmail, req.params.id]);
       if (existing.rows.length > 0) return res.status(409).json({ error: 'Email already in use by another account' });
     }
     const result = await db.query(
@@ -85,7 +86,7 @@ router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
        WHERE id = $16 AND role = 'caregiver'
        RETURNING id, email, first_name, last_name, phone, default_pay_rate, address, city, state, zip,
                  latitude, longitude, hire_date, emergency_contact_name, emergency_contact_phone, is_active, created_at`,
-      [firstName, lastName, email, phone, payRate, address, city, state, zip,
+      [firstName, lastName, cleanEmail, phone, payRate, address, city, state, zip,
        latitude, longitude, hireDate || null, emergencyContactName, emergencyContactPhone, isActive, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Caregiver not found' });

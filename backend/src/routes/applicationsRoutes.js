@@ -262,13 +262,13 @@ router.post('/:id/hire', auth, async (req, res) => {
     }
 
     // Use applicant's email or provided email
-    const caregiverEmail = email || a.email;
+    const caregiverEmail = (email || a.email)?.toLowerCase().trim();
     if (!caregiverEmail) {
       return res.status(400).json({ error: 'Email is required to create caregiver account' });
     }
 
     // Check email not already in use
-    const existing = await db.query('SELECT id FROM users WHERE email = $1', [caregiverEmail]);
+    const existing = await db.query('SELECT id FROM users WHERE LOWER(email) = $1', [caregiverEmail]);
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: 'A user with this email already exists' });
     }

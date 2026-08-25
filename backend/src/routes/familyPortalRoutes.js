@@ -64,17 +64,18 @@ router.post('/admin/members', auth, requireAdmin, async (req, res) => {
   
   try {
     let userId = null;
+    const cleanEmail = email?.toLowerCase().trim();
 
     // Create user account for portal access
-    if (email && password) {
+    if (cleanEmail && password) {
       const hashedPassword = await bcrypt.hash(password, 10);
-      
+
       const userResult = await db.query(`
         INSERT INTO users (email, password_hash, first_name, last_name, role, is_active)
         VALUES ($1, $2, $3, $4, 'family', true)
         RETURNING id
-      `, [email, hashedPassword, firstName, lastName]);
-      
+      `, [cleanEmail, hashedPassword, firstName, lastName]);
+
       userId = userResult.rows[0].id;
     }
 
@@ -85,7 +86,7 @@ router.post('/admin/members', auth, requireAdmin, async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)
       RETURNING *
     `, [
-      clientId, userId, firstName, lastName, email, phone, relationship,
+      clientId, userId, firstName, lastName, cleanEmail, phone, relationship,
       canViewSchedule !== false, canViewCarePlan !== false,
       canViewMedications === true, canMessage !== false
     ]);
@@ -261,7 +262,7 @@ router.post('/login', async (req, res) => {
         fm.relationship, fm.is_primary_contact
       FROM users u
       JOIN family_members fm ON fm.user_id = u.id
-      WHERE u.email = $1 AND u.role = 'family' AND u.is_active = true AND fm.is_active = true
+      WHERE LOWER(u.email) = LOWER($1) AND u.role = 'family' AND u.is_active = true AND fm.is_active = true
     `, [email]);
 
     if (user.rows.length === 0) {

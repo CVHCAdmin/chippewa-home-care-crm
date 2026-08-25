@@ -27,7 +27,9 @@ async function logLoginAttempt({ email, userId, success, failReason, req }) {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+    // Case-insensitive: emails are stored lowercase (v60), but LOWER() on both
+    // sides also covers any legacy mixed-case row that slips back in.
+    const result = await db.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [email]);
     const user = result.rows[0];
 
     if (!user) {
@@ -102,6 +104,8 @@ router.post('/logout', verifyToken, async (req, res) => {
 router.post('/register-caregiver', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { email, password, firstName, lastName, phone, payRate } = req.body;
+    // Store lowercase — login/forgot-password lookups assume it (Winechic incident)
+    const cleanEmail = email?.toLowerCase().trim();
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = uuidv4();
     await db.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
@@ -109,7 +113,7 @@ router.post('/register-caregiver', verifyToken, requireAdmin, async (req, res) =
       `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role, default_pay_rate)
        VALUES ($1, $2, $3, $4, $5, $6, 'caregiver', $7)
        RETURNING id, email, first_name, last_name, role, default_pay_rate`,
-      [userId, email, hashedPassword, firstName, lastName, phone, payRate || 15.00]
+      [userId, cleanEmail, hashedPassword, firstName, lastName, phone, payRate || 15.00]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -123,6 +127,7 @@ router.post('/register-caregiver', verifyToken, requireAdmin, async (req, res) =
 router.post('/register-admin', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { email, password, firstName, lastName, phone } = req.body;
+    const cleanEmail = email?.toLowerCase().trim();
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = uuidv4();
     await db.query("SELECT set_config('app.current_user_id', $1, false)", [req.user.id]);
@@ -130,7 +135,7 @@ router.post('/register-admin', verifyToken, requireAdmin, async (req, res) => {
       `INSERT INTO users (id, email, password_hash, first_name, last_name, phone, role)
        VALUES ($1, $2, $3, $4, $5, $6, 'admin')
        RETURNING id, email, first_name, last_name, role`,
-      [userId, email, hashedPassword, firstName, lastName, phone]
+      [userId, cleanEmail, hashedPassword, firstName, lastName, phone]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
