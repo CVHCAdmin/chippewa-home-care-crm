@@ -66,6 +66,7 @@ const TABS = [
 const IntegrationsHub = ({ token }) => {
   const [tab, setTab] = useState('overview');
   const [sandataConfig, setSandataConfig] = useState(null);
+  const [readiness, setReadiness] = useState(null);
   const [gustoConfig, setGustoConfig] = useState(null);
   const [evvData, setEvvData] = useState(null);
   const [authSummary, setAuthSummary] = useState(null);
@@ -138,6 +139,7 @@ const IntegrationsHub = ({ token }) => {
     const loadTab = async () => {
       await delay(300);
       if (tab === 'authorizations') get('/api/authorizations').then(d => d && setAuthorizations(d)).catch(() => {});
+      if (tab === 'evv') get('/api/sandata/readiness').then(d => d && setReadiness(d)).catch(() => {});
       if (tab === 'claims') get('/api/edi/batches').then(d => d && setEdiBatches(d)).catch(() => {});
       if (tab === 'remittance') get('/api/remittance/batches').then(d => d && setRemittanceBatches(d)).catch(() => {});
     };
@@ -259,12 +261,54 @@ const IntegrationsHub = ({ token }) => {
     <div style={{display:'grid',gap:'1rem'}}>
       {!sandataConfig?.isConfigured && (
         <Card style={{background:'#FFFBEB',border:'1px solid #FCD34D'}}>
-          <h4 style={{margin:'0 0 0.5rem',color:'#92400E'}}>⚠️ Sandata Credentials Not Configured</h4>
-          <p style={{margin:'0 0 0.5rem',fontSize:'0.875rem',color:'#92400E'}}>EVV records are being created automatically when caregivers clock out, but visits can't be submitted to Sandata yet.</p>
+          <h4 style={{margin:'0 0 0.5rem',color:'#92400E'}}>⚠️ Alternate EVV Certification In Progress</h4>
+          <p style={{margin:'0 0 0.5rem',fontSize:'0.875rem',color:'#92400E'}}>EVV records are created automatically at clock-out. Submission to the Sandata aggregator activates once certification issues our credentials — until then, keep entering visits in the Sandata portal.</p>
           <div style={{fontSize:'0.82rem',color:'#78350F',display:'grid',gap:'0.2rem'}}>
-            <div><strong>Step 1:</strong> Call Wisconsin EVV Customer Care: <strong>(833) 931-2035</strong></div>
-            <div><strong>Step 2:</strong> Request Alt-EVV API credentials for your agency</div>
-            <div><strong>Step 3:</strong> In Render → Environment → add: SANDATA_USERNAME, SANDATA_PASSWORD, SANDATA_ACCOUNT_ID</div>
+            <div><strong>Step 1:</strong> Certification ticket + attestation F-02659 (Sandata.Zendesk.com)</div>
+            <div><strong>Step 2:</strong> Clear the readiness issues below (Medicaid IDs, worker IDs, service codes)</div>
+            <div><strong>Step 3:</strong> When credentials arrive: Render → Environment → SANDATA_USERNAME, SANDATA_PASSWORD, SANDATA_ACCOUNT_ID, SANDATA_PROVIDER_ID</div>
+          </div>
+        </Card>
+      )}
+
+      {/* Certification readiness — the live workstream-B checklist */}
+      {readiness && (
+        <Card style={{border:'1px solid #E5E7EB'}}>
+          <SectionHeader icon="🧭" title="Certification Readiness"
+            sub={`${readiness.clientsInScope} EVV-scope clients · ${readiness.activeCaregivers} active caregivers`} />
+          <div style={{display:'grid',gap:'0.75rem'}}>
+            {readiness.careTypesMissingServiceCode?.length > 0 && (
+              <div style={{fontSize:'0.82rem',color:'#B45309'}}>
+                <strong>Care types missing a service code:</strong> {readiness.careTypesMissingServiceCode.map(ct=>`${ct.name} (${ct.active_clients} clients)`).join(', ')}
+              </div>
+            )}
+            <div style={{fontSize:'0.82rem'}}>
+              <strong style={{color: readiness.caregiversWithIssues?.length ? '#DC2626' : '#16A34A'}}>
+                Caregivers missing ForwardHealth worker ID: {readiness.caregiversWithIssues?.length || 0}
+              </strong>
+              {readiness.caregiversWithIssues?.length > 0 && (
+                <span style={{color:'#6B7280'}}> — {readiness.caregiversWithIssues.slice(0,8).map(u=>`${u.first_name} ${u.last_name}`).join(', ')}{readiness.caregiversWithIssues.length>8?` +${readiness.caregiversWithIssues.length-8} more`:''}</span>
+              )}
+            </div>
+            <div style={{fontSize:'0.82rem'}}>
+              <strong style={{color: readiness.clientsWithIssues?.length ? '#DC2626' : '#16A34A'}}>
+                Clients with EVV data issues: {readiness.clientsWithIssues?.length || 0}
+              </strong>
+            </div>
+            {readiness.clientsWithIssues?.length > 0 && (
+              <div style={{maxHeight:180,overflow:'auto',fontSize:'0.78rem',border:'1px solid #F3F4F6',borderRadius:8}}>
+                <table style={{width:'100%',borderCollapse:'collapse'}}>
+                  <tbody>
+                    {readiness.clientsWithIssues.map(c=>(
+                      <tr key={c.id} style={{borderBottom:'1px solid #F9FAFB'}}>
+                        <td style={{padding:'0.3rem 0.6rem',fontWeight:600,whiteSpace:'nowrap'}}>{c.first_name} {c.last_name}</td>
+                        <td style={{padding:'0.3rem 0.6rem',color:'#B45309'}}>{c.issues.join(' · ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </Card>
       )}
@@ -297,7 +341,7 @@ const IntegrationsHub = ({ token }) => {
                 setLoad('submit',true);
                 const r = await fetch(`${API_BASE_URL}/api/sandata/submit`,{method:'POST',headers,body:JSON.stringify({visitIds:selected})});
                 const d = await r.json();
-                if(r.ok){toast(`Submitted ${d.submitted} visits to Sandata`,'success');setSelected([]);}
+                if(r.ok){toast(`Queued ${d.queued ?? d.submitted ?? 0} visits for Sandata submission`,'success');setSelected([]);}
                 else toast(d.error||'Submission failed','error');
                 setLoad('submit',false);
               }}>

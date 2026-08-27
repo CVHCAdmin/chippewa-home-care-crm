@@ -12,37 +12,13 @@ const requireAdmin = require('../middleware/authorizeAdmin');
 const { v4: uuidv4 } = require('uuid');
 
 // ─── API CLIENT ───────────────────────────────────────────────────────────────
+// Transport + payload building live in services/sandataClient.js and
+// services/sandataPayload.js (WI spec v7.6 / Addendum v2.6 conformant).
+const sandataClient = require('../services/sandataClient');
+const sandataPayloads = require('../services/sandataPayload');
+
 function getSandataConfig() {
-  return {
-    baseUrl: process.env.SANDATA_API_URL || 'https://openevv.sandata.com/api/v1',
-    username: process.env.SANDATA_USERNAME,
-    password: process.env.SANDATA_PASSWORD,
-    accountId: process.env.SANDATA_ACCOUNT_ID,
-    isConfigured: !!(process.env.SANDATA_USERNAME && process.env.SANDATA_PASSWORD && process.env.SANDATA_ACCOUNT_ID)
-  };
-}
-
-async function sandataRequest(method, endpoint, body = null) {
-  const cfg = getSandataConfig();
-  if (!cfg.isConfigured) {
-    throw new Error('Sandata credentials not configured. Set SANDATA_USERNAME, SANDATA_PASSWORD, SANDATA_ACCOUNT_ID in environment variables.');
-  }
-
-  const credentials = Buffer.from(`${cfg.username}:${cfg.password}`).toString('base64');
-  const options = {
-    method,
-    headers: {
-      'Authorization': `Basic ${credentials}`,
-      'Account': cfg.accountId,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    }
-  };
-  if (body) options.body = JSON.stringify(body);
-
-  const response = await fetch(`${cfg.baseUrl}${endpoint}`, options);
-  const data = await response.json();
-  return { ok: response.ok, status: response.status, data };
+  return sandataClient.getConfig();
 }
 
 // ─── CALCULATE UNITS ─────────────────────────────────────────────────────────
@@ -202,6 +178,14 @@ module.exports.createEVVFromTimeEntry = createEVVFromTimeEntry;
 router.get('/status', auth, requireAdmin, async (req, res) => {
   try {
     const cfg = getSandataConfig();
+    // Opportunistic: resolve accept/reject for anything POSTed but not yet
+    // confirmed, every time an admin opens the dashboard. No-op unconfigured.
+    if (cfg.isConfigured) {
+      try {
+        const { pollPendingStatuses } = require('../services/sandataAutoSubmit');
+        pollPendingStatuses().catch(e => console.error('[EVV poll]', e.message));
+      } catch (e) { console.error('[EVV poll require]', e.message); }
+    }
     const { startDate, endDate } = req.query;
     const start = startDate || new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
     const end = endDate || new Date().toISOString().split('T')[0];
@@ -237,6 +221,8 @@ router.get('/status', auth, requireAdmin, async (req, res) => {
 });
 
 // ─── SUBMIT VISITS TO SANDATA ────────────────────────────────────────────────
+// Routes selected visits through the spec-conformant queue (services/
+// sandataAutoSubmit.js) — one payload builder, one transport, one retry policy.
 router.post('/submit', auth, requireAdmin, async (req, res) => {
   try {
     const { visitIds } = req.body;
@@ -245,74 +231,26 @@ router.post('/submit', auth, requireAdmin, async (req, res) => {
     if (!cfg.isConfigured) {
       return res.status(400).json({
         error: 'Sandata credentials not configured',
-        setup: 'Add SANDATA_USERNAME, SANDATA_PASSWORD, SANDATA_ACCOUNT_ID to your Render environment variables. Call (833) 931-2035 to get credentials.'
+        setup: 'Certification (see ALT-EVV-BUILD-PLAN.md) issues the credentials. Then add SANDATA_USERNAME, SANDATA_PASSWORD, SANDATA_ACCOUNT_ID, SANDATA_PROVIDER_ID to Render environment variables.'
       });
     }
 
-    const visits = await db.query(`
-      SELECT ev.*,
-        c.medicaid_id, c.evv_client_id, c.first_name as client_first, c.last_name as client_last,
-        c.date_of_birth, c.gender,
-        u.first_name as cg_first, u.last_name as cg_last,
-        cp.evv_worker_id, cp.npi_number, cp.taxonomy_code
-      FROM evv_visits ev
-      JOIN clients c ON ev.client_id = c.id
-      JOIN users u ON ev.caregiver_id = u.id
-      LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
-      WHERE ev.id = ANY($1)
-        AND ev.sandata_status IN ('ready', 'pending')
-    `, [visitIds]);
+    if (!Array.isArray(visitIds) || visitIds.length === 0) {
+      return res.status(400).json({ error: 'visitIds array required' });
+    }
 
+    const { enqueueVisit } = require('../services/sandataAutoSubmit');
     const results = [];
-    for (const v of visits.rows) {
-      // Build Sandata Alt-EVV visit payload
-      const payload = {
-        ClientID: v.evv_client_id || v.medicaid_id,
-        EmployeeID: v.evv_worker_id || v.npi_number,
-        ServiceCode: v.service_code,
-        Modifier: v.modifier || null,
-        ServiceDate: v.service_date,
-        ActualStartTime: new Date(v.actual_start).toISOString(),
-        ActualEndTime: v.actual_end ? new Date(v.actual_end).toISOString() : null,
-        UnitsOfService: v.units_of_service,
-        GPSInLatitude: v.gps_in_lat,
-        GPSInLongitude: v.gps_in_lng,
-        GPSOutLatitude: v.gps_out_lat,
-        GPSOutLongitude: v.gps_out_lng,
-        VerificationMethod: 'GPS',
-      };
-
+    for (const id of visitIds) {
       try {
-        const response = await sandataRequest('POST', '/visits', payload);
-        const newStatus = response.ok ? 'submitted' : 'exception';
-        const sandataVisitId = response.data?.VisitID || response.data?.visitId || null;
-
-        await db.query(`
-          UPDATE evv_visits SET
-            sandata_status = $1,
-            sandata_visit_id = $2,
-            sandata_submitted_at = NOW(),
-            sandata_response = $3,
-            sandata_exception_code = $4,
-            sandata_exception_desc = $5,
-            updated_at = NOW()
-          WHERE id = $6
-        `, [
-          newStatus, sandataVisitId,
-          JSON.stringify(response.data),
-          response.ok ? null : (response.data?.ExceptionCode || 'ERR'),
-          response.ok ? null : (response.data?.Message || response.data?.message || 'Submission failed'),
-          v.id
-        ]);
-
-        results.push({ visitId: v.id, status: newStatus, sandataVisitId });
+        const r = await enqueueVisit(id);
+        results.push({ visitId: id, queued: r.queued, reason: r.reason || null });
       } catch (e) {
-        await db.query(`UPDATE evv_visits SET sandata_status='exception', sandata_exception_desc=$1 WHERE id=$2`, [e.message, v.id]);
-        results.push({ visitId: v.id, status: 'error', error: e.message });
+        results.push({ visitId: id, queued: false, reason: e.message });
       }
     }
 
-    res.json({ submitted: results.filter(r => r.status === 'submitted').length, results });
+    res.json({ queued: results.filter(r => r.queued).length, results });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -344,7 +282,31 @@ router.get('/visit/:id', auth, requireAdmin, async (req, res) => {
 // ─── MANUAL CORRECT EVV VISIT ────────────────────────────────────────────────
 router.put('/visit/:id', auth, requireAdmin, async (req, res) => {
   try {
-    const { serviceCode, modifier, authorizationId, actualStart, actualEnd, notes } = req.body;
+    const { serviceCode, modifier, authorizationId, actualStart, actualEnd, reasonCode, reasonMemo } = req.body;
+    const before = await db.query(`SELECT * FROM evv_visits WHERE id = $1`, [req.params.id]);
+    if (!before.rows.length) return res.status(404).json({ error: 'EVV visit not found' });
+    const prev = before.rows[0];
+
+    // Manually setting times is a spec 3.9 change: it must carry a WI reason
+    // code and go out as Adjusted times with a VisitChanges record.
+    const changingTimes = (actualStart != null || actualEnd != null);
+    if (changingTimes) {
+      const code = String(reasonCode || '');
+      if (!['1', '2', '3', '4', '5', '7', '8'].includes(code)) {
+        return res.status(400).json({ error: 'reasonCode required when changing visit times (WI codes 1,2,3,4,5,7,8)' });
+      }
+      if (['5', '8'].includes(code) && !String(reasonMemo || '').trim()) {
+        return res.status(400).json({ error: `Reason code ${code} requires a memo explaining the change` });
+      }
+      await db.query(`
+        INSERT INTO visit_time_changes (time_entry_id, changed_by, old_start, new_start, old_end, new_end, reason_code, memo)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [prev.time_entry_id, req.user.id,
+          actualStart != null ? prev.actual_start : null, actualStart || null,
+          actualEnd != null ? prev.actual_end : null, actualEnd || null,
+          code, String(reasonMemo || '').trim().slice(0, 256) || null]);
+    }
+
     await db.query(`
       UPDATE evv_visits SET
         service_code = COALESCE($1, service_code),
@@ -356,83 +318,186 @@ router.put('/visit/:id', auth, requireAdmin, async (req, res) => {
         updated_at = NOW()
       WHERE id = $6
     `, [serviceCode, modifier, authorizationId, actualStart, actualEnd, req.params.id]);
+
+    // Already at Sandata? The correction must be retransmitted (incremental
+    // interface — spec 2.6/2.8) with the next sequence.
+    if (['submitted', 'accepted'].includes(prev.sandata_status)) {
+      try {
+        const { requeueChangedVisit } = require('../services/sandataAutoSubmit');
+        requeueChangedVisit(req.params.id).catch(e => console.error('[EVV requeue]', e.message));
+      } catch (e) { console.error('[EVV requeue require]', e.message); }
+    }
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// ─── ACKNOWLEDGE A SANDATA EXCEPTION ─────────────────────────────────────────
+// For exceptions that can't be "fixed" in the data (spec 3.8): admin attests it
+// was reviewed, with a WI reason code; visit is resubmitted carrying the
+// VisitExceptionAcknowledgement segment.
+router.post('/visit/:id/acknowledge', auth, requireAdmin, async (req, res) => {
+  try {
+    const { reasonCode, memo } = req.body || {};
+    const code = String(reasonCode || '');
+    if (!['1', '2', '3', '4', '5', '7', '8'].includes(code)) {
+      return res.status(400).json({ error: 'reasonCode required (WI codes 1,2,3,4,5,7,8)' });
+    }
+    if (['5', '8'].includes(code) && !String(memo || '').trim()) {
+      return res.status(400).json({ error: `Reason code ${code} requires a memo` });
+    }
+    const visit = await db.query(`SELECT * FROM evv_visits WHERE id = $1`, [req.params.id]);
+    if (!visit.rows.length) return res.status(404).json({ error: 'EVV visit not found' });
+
+    await db.query(`
+      UPDATE evv_visits SET
+        exception_ack = true, exception_ack_by = $2, exception_ack_at = NOW(),
+        exception_ack_reason = $3, exception_ack_memo = $4,
+        sandata_status = CASE WHEN sandata_status IN ('exception','needs_manual') THEN 'ready' ELSE sandata_status END,
+        updated_at = NOW()
+      WHERE id = $1
+    `, [req.params.id, req.user.id, code, String(memo || '').trim().slice(0, 256) || null]);
+
+    try {
+      const { enqueueVisit } = require('../services/sandataAutoSubmit');
+      enqueueVisit(req.params.id).catch(e => console.error('[EVV ack enqueue]', e.message));
+    } catch (e) { console.error('[EVV ack require]', e.message); }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── POLL SUBMITTED VISITS FOR ACCEPT/REJECT ────────────────────────────────
+router.post('/poll-status', auth, requireAdmin, async (req, res) => {
+  try {
+    const { pollPendingStatuses } = require('../services/sandataAutoSubmit');
+    res.json(await pollPendingStatuses());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── CERTIFICATION READINESS REPORT ──────────────────────────────────────────
+// The live checklist for workstream B (ALT-EVV-BUILD-PLAN.md): everything that
+// would make Sandata reject a visit, queryable before credentials even exist.
+router.get('/readiness', auth, requireAdmin, async (req, res) => {
+  try {
+    const cfg = getSandataConfig();
+
+    const clients = await db.query(`
+      SELECT c.id, c.first_name, c.last_name, c.medicaid_id,
+             rs.name AS payer_name, rs.sandata_payer_id, rs.sandata_payer_program,
+             ct.name AS care_type, ct.default_service_code
+        FROM clients c
+        LEFT JOIN referral_sources rs ON rs.id = c.referral_source_id
+        LEFT JOIN care_types ct ON ct.id = c.care_type_id
+       WHERE COALESCE(c.status, 'active') = 'active'
+         AND COALESCE(c.is_private_pay, false) = false
+       ORDER BY c.last_name, c.first_name
+    `);
+    const maIdRe = /^[0-9]{10,12}$/;
+    const clientIssues = clients.rows.map(c => {
+      const issues = [];
+      if (!maIdRe.test(String(c.medicaid_id || '').replace(/\D/g, ''))) issues.push('missing/invalid Medicaid ID');
+      if (!c.payer_name) issues.push('no payer assigned');
+      else if (!c.sandata_payer_id) issues.push(`payer "${c.payer_name}" has no Sandata code`);
+      if (!c.default_service_code) issues.push(`care type "${c.care_type || 'none'}" has no service code`);
+      return { ...c, issues };
+    }).filter(c => c.issues.length);
+
+    const caregivers = await db.query(`
+      SELECT u.id, u.first_name, u.last_name, cp.evv_worker_id
+        FROM users u
+        LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
+       WHERE u.role = 'caregiver' AND u.is_active = true
+       ORDER BY u.last_name, u.first_name
+    `);
+    const workerRe = /^[0-9]{9,15}$/;
+    const caregiverIssues = caregivers.rows
+      .filter(u => !workerRe.test(String(u.evv_worker_id || '').replace(/\D/g, '')))
+      .map(u => ({ ...u, issue: 'missing/invalid ForwardHealth worker ID' }));
+
+    const careTypes = await db.query(`
+      SELECT ct.name, ct.default_service_code, COUNT(c.id)::int AS active_clients
+        FROM care_types ct
+        LEFT JOIN clients c ON c.care_type_id = ct.id AND COALESCE(c.status,'active') = 'active'
+       GROUP BY ct.id ORDER BY active_clients DESC
+    `);
+
+    const visitStats = await db.query(`
+      SELECT sandata_status, COUNT(*)::int AS n
+        FROM evv_visits WHERE service_date >= CURRENT_DATE - 30
+       GROUP BY sandata_status
+    `);
+
+    res.json({
+      configured: cfg.isConfigured,
+      providerIdSet: !!cfg.providerId,
+      clientsInScope: clients.rows.length,
+      clientsWithIssues: clientIssues,
+      activeCaregivers: caregivers.rows.length,
+      caregiversWithIssues: caregiverIssues,
+      careTypesMissingServiceCode: careTypes.rows.filter(ct => !ct.default_service_code && ct.active_clients > 0),
+      visitStatsLast30Days: visitStats.rows,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── SYNC CLIENT TO SANDATA ──────────────────────────────────────────────────
+// Force a fresh client-record send (normally happens automatically before that
+// client's first visit submission).
 router.post('/sync-client/:clientId', auth, requireAdmin, async (req, res) => {
   const cfg = getSandataConfig();
   if (!cfg.isConfigured) return res.status(400).json({ error: 'Sandata not configured' });
   try {
-    const client = await db.query(`SELECT * FROM clients WHERE id = $1`, [req.params.clientId]);
+    const client = await db.query(`
+      SELECT c.*, rs.sandata_payer_id, rs.sandata_payer_program, ct.default_service_code
+        FROM clients c
+        LEFT JOIN referral_sources rs ON rs.id = c.referral_source_id
+        LEFT JOIN care_types ct ON ct.id = c.care_type_id
+       WHERE c.id = $1
+    `, [req.params.clientId]);
     if (!client.rows.length) return res.status(404).json({ error: 'Client not found' });
     const c = client.rows[0];
 
-    const payload = {
-      ClientID: c.evv_client_id || c.medicaid_id || c.id,
-      FirstName: c.first_name,
-      LastName: c.last_name,
-      DateOfBirth: c.date_of_birth,
-      Gender: c.gender,
-      MedicaidID: c.medicaid_id,
-      Address: c.address,
-      City: c.city,
-      State: c.state || 'WI',
-      Zip: c.zip,
-    };
-
-    const response = await sandataRequest('POST', '/clients', payload);
-    if (response.ok) {
-      const sandataClientId = response.data?.ClientID || response.data?.clientId;
-      if (sandataClientId) {
-        await db.query(`UPDATE clients SET evv_client_id = $1 WHERE id = $2`, [sandataClientId, req.params.clientId]);
-      }
+    if (!sandataPayloads.MA_ID_RE.test(sandataPayloads.digitsOnly(c.medicaid_id))) {
+      return res.status(400).json({ error: 'Client needs a valid 10-12 digit Medicaid ID first' });
     }
-    res.json({ ok: response.ok, data: response.data });
+
+    const seq = sandataPayloads.nextSequence(c.sandata_sequence);
+    const payload = sandataPayloads.buildClientPayload(c, {
+      providerId: cfg.providerId,
+      sequence: seq,
+      includePayerSegment: !!(c.sandata_payer_id && c.address && c.phone),
+    });
+
+    const post = await sandataClient.postRecords('clients', payload);
+    if (post.ok && post.uuid) {
+      await db.query(
+        `UPDATE clients SET sandata_sequence = $2, sandata_synced_at = NOW(), updated_at = NOW() WHERE id = $1`,
+        [req.params.clientId, seq]);
+    }
+    res.json({ ok: post.ok, uuid: post.uuid, data: post.data });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // ─── SYNC CAREGIVER TO SANDATA ───────────────────────────────────────────────
+// Wisconsin does not take an employee feed from us: workers are registered in
+// the ForwardHealth Portal, which issues the EmployeeIdentifier we send on
+// visits. Load those IDs with backend/audits/import_evv_ids.js --type workers.
 router.post('/sync-caregiver/:caregiverId', auth, requireAdmin, async (req, res) => {
-  const cfg = getSandataConfig();
-  if (!cfg.isConfigured) return res.status(400).json({ error: 'Sandata not configured' });
-  try {
-    const user = await db.query(`
-      SELECT u.*, cp.npi_number, cp.evv_worker_id, cp.taxonomy_code
-      FROM users u LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id
-      WHERE u.id = $1
-    `, [req.params.caregiverId]);
-    if (!user.rows.length) return res.status(404).json({ error: 'Caregiver not found' });
-    const u = user.rows[0];
-
-    const payload = {
-      EmployeeID: u.evv_worker_id || u.npi_number || u.id,
-      FirstName: u.first_name,
-      LastName: u.last_name,
-      NPI: u.npi_number,
-      TaxonomyCode: u.taxonomy_code || '374700000X',
-      Phone: u.phone,
-    };
-
-    const response = await sandataRequest('POST', '/employees', payload);
-    if (response.ok) {
-      const workerId = response.data?.EmployeeID || response.data?.employeeId;
-      if (workerId) {
-        await db.query(`
-          INSERT INTO caregiver_profiles (caregiver_id, evv_worker_id) VALUES ($1, $2)
-          ON CONFLICT (caregiver_id) DO UPDATE SET evv_worker_id = $2
-        `, [req.params.caregiverId, workerId]);
-      }
-    }
-    res.json({ ok: response.ok, data: response.data });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  res.status(501).json({
+    error: 'Not applicable for Wisconsin Alt-EVV',
+    detail: 'Register the worker in the ForwardHealth Portal, then import the worker list (backend/audits/import_evv_ids.js --type workers). The ForwardHealth EmployeeIdentifier is sent with each visit.',
+  });
 });
 
 // ─── AUTO-SUBMIT QUEUE STATUS ────────────────────────────────────────────────
@@ -522,11 +587,13 @@ router.get('/config', auth, requireAdmin, async (req, res) => {
     hasUsername: !!cfg.username,
     hasPassword: !!cfg.password,
     hasAccountId: !!cfg.accountId,
+    hasProviderId: !!cfg.providerId,
+    baseUrl: cfg.baseUrl,
     setupInstructions: cfg.isConfigured ? null : {
-      step1: 'Call Wisconsin EVV Customer Care: (833) 931-2035',
-      step2: 'Request Alt-EVV API credentials for your agency',
-      step3: 'Add to Render environment variables: SANDATA_USERNAME, SANDATA_PASSWORD, SANDATA_ACCOUNT_ID',
-      step4: 'Use Sandata sandbox to test before going live'
+      step1: 'Start certification: Sandata.Zendesk.com/hc/en-us (ticket draft in ALT-EVV-SANDATA-TICKET.md)',
+      step2: 'Return signed attestation F-02659; complete aggregator portal training',
+      step3: 'Add to Render environment variables: SANDATA_USERNAME, SANDATA_PASSWORD, SANDATA_ACCOUNT_ID, SANDATA_PROVIDER_ID (WI Medicaid provider ID)',
+      step4: 'UAT endpoint is the default; set SANDATA_API_URL to https://api.sandata.com/interfaces/intake at production go-live'
     }
   });
 });

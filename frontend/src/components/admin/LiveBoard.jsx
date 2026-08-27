@@ -17,11 +17,28 @@ const LiveBoard = ({ token }) => {
   const [closeMode, setCloseMode] = useState('scheduled'); // 'scheduled' | 'now' | 'time'
   const [closeEndTime, setCloseEndTime] = useState('');
   const [closeReason, setCloseReason] = useState('');
+  const [closeEvvReason, setCloseEvvReason] = useState('1');
   const [closing, setClosing] = useState(false);
+
+  // Wisconsin EVV change reason codes (Alt-EVV Addendum v2.6 Appendix 3).
+  // 5 and 8 require an explanation memo — the free-text reason field doubles as it.
+  const EVV_REASONS = [
+    { code: '1', label: '1 — Caregiver Error (forgot to clock out)' },
+    { code: '2', label: '2 — Member Unavailable' },
+    { code: '3', label: '3 — Mobile Device Issue' },
+    { code: '4', label: '4 — Telephony Issue' },
+    { code: '5', label: '5 — Member Refused Verification (memo required)' },
+    { code: '7', label: '7 — Missing in System' },
+    { code: '8', label: '8 — Other (memo required)' },
+  ];
 
   const submitForceClose = async () => {
     if (!closeTarget) return;
-    const body = { reason: closeReason || null };
+    if (['5', '8'].includes(closeEvvReason) && !closeReason.trim()) {
+      window.alert('EVV reason codes 5 and 8 require a reason note — please fill in the reason field.');
+      return;
+    }
+    const body = { reason: closeReason || null, evvReasonCode: closeEvvReason, evvReasonMemo: closeReason || null };
     if (closeMode === 'scheduled') body.scheduled = true;
     else if (closeMode === 'time') {
       if (!closeEndTime) { window.alert('Pick an end time.'); return; }
@@ -166,7 +183,7 @@ const LiveBoard = ({ token }) => {
                 {/* Force clock-out button for active shifts */}
                 {shift.shift_status === 'clocked_in' && shift.time_entry_id && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); setCloseTarget(shift); setCloseMode('scheduled'); setCloseEndTime(''); setCloseReason(''); }}
+                    onClick={(e) => { e.stopPropagation(); setCloseTarget(shift); setCloseMode('scheduled'); setCloseEndTime(''); setCloseReason(''); setCloseEvvReason('1'); }}
                     style={{
                       marginTop: '0.5rem', width: '100%', padding: '0.45rem 0.6rem',
                       background: '#fff', color: '#B45309', border: '1px solid #FCD34D',
@@ -261,7 +278,11 @@ const LiveBoard = ({ token }) => {
                 <input type="datetime-local" value={closeEndTime} onChange={(e) => setCloseEndTime(e.target.value)} style={{ padding: '0.4rem', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.88rem' }} />
               )}
             </div>
-            <input type="text" placeholder="Reason (optional)" value={closeReason} onChange={(e) => setCloseReason(e.target.value)} style={{ width: '100%', padding: '0.4rem', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.88rem', marginBottom: '0.6rem', boxSizing: 'border-box' }} />
+            <label style={{ fontSize: '0.78rem', color: '#6B7280', display: 'block', marginBottom: '0.2rem' }}>EVV change reason (reported to Sandata)</label>
+            <select value={closeEvvReason} onChange={(e) => setCloseEvvReason(e.target.value)} style={{ width: '100%', padding: '0.4rem', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.88rem', marginBottom: '0.6rem', boxSizing: 'border-box' }}>
+              {EVV_REASONS.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+            </select>
+            <input type="text" placeholder={['5', '8'].includes(closeEvvReason) ? 'Reason (required for this EVV code)' : 'Reason (optional)'} value={closeReason} onChange={(e) => setCloseReason(e.target.value)} style={{ width: '100%', padding: '0.4rem', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: '0.88rem', marginBottom: '0.6rem', boxSizing: 'border-box' }} />
             <div style={{ fontSize: '0.75rem', color: '#92400E', marginBottom: '0.9rem' }}>The shift will be flagged for approval before billing/payroll.</div>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button onClick={() => setCloseTarget(null)} disabled={closing} className="btn btn-sm btn-secondary">Cancel</button>

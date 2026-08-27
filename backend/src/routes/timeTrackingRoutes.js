@@ -676,7 +676,7 @@ router.post('/gps-failure', verifyToken, async (req, res) => {
 // actor in audit_log and flags the entry for approval.
 router.post('/:id/admin-force-clockout', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { reason, endTime, scheduled } = req.body || {};
+    const { reason, endTime, scheduled, evvReasonCode, evvReasonMemo } = req.body || {};
     const entry = await db.query(
       `SELECT te.*, c.is_private_pay, c.referral_source_id, rs.payer_type as referral_payer_type
        FROM time_entries te
@@ -743,6 +743,27 @@ router.post('/:id/admin-force-clockout', verifyToken, requireAdmin, async (req, 
       caregiver_id: e.caregiver_id,
       duration_minutes: durationMinutes
     });
+
+    // EVV: an admin-set end time is a spec 3.9 change — record it structured
+    // (who/when/WI reason code) so the visit goes to Sandata as AdjOutDateTime
+    // + VisitChanges. Default reason 1 (Caregiver Error — didn't clock out).
+    // Never blocks the close: the shift is already ended above.
+    try {
+      const code = ['1', '2', '3', '4', '5', '7', '8'].includes(String(evvReasonCode)) ? String(evvReasonCode) : '1';
+      const memo = String(evvReasonMemo || reason || '').trim().slice(0, 256) || null;
+      await db.query(
+        `INSERT INTO visit_time_changes (time_entry_id, changed_by, old_end, new_end, reason_code, memo)
+         VALUES ($1, $2, NULL, $3, $4, $5)`,
+        [req.params.id, req.user.id, end.toISOString(), code, memo]
+      );
+    } catch (vtcErr) { console.error('[force-clockout] visit_time_changes:', vtcErr.message); }
+
+    // Force-closed shifts previously never got an EVV record at all — every
+    // other close path creates one. Fire-and-forget, same as clock-out.
+    try {
+      const { createEVVFromTimeEntry } = require('./sandataRoutes');
+      createEVVFromTimeEntry(req.params.id).catch(evvErr => console.error('[EVV force-clockout]', evvErr.message));
+    } catch (evvErr) { console.error('[EVV require]', evvErr.message); }
 
     // Auto-resolve any open GPS-failure banners for this caregiver
     try {

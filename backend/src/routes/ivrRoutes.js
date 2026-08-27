@@ -164,6 +164,14 @@ router.post('/clock-in', async (req, res) => {
       [entryId, caregiverId, cl.id, allottedMinutes, linkedScheduleId]
     );
 
+    // EVV: Telephony visits must report the originating phone number, which
+    // Sandata matches against the client's phone on file (spec 2.8/3.7).
+    // Separate best-effort UPDATE so the punch above never depends on it.
+    try {
+      const from = String(req.body.From || '').replace(/\D/g, '').slice(-10);
+      if (from) await db.query(`UPDATE time_entries SET origin_phone = $1 WHERE id = $2`, [from, entryId]);
+    } catch (opErr) { console.error('[IVR clock-in] origin_phone:', opErr.message); }
+
     res.type('text/xml');
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -207,6 +215,13 @@ router.post('/clock-out', async (req, res) => {
        updated_at = NOW() WHERE id = $4`,
       [durationMinutes, billableMinutes, discrepancyMinutes, timeEntryId]
     );
+
+    // EVV Telephony caller-id (see clock-in) — best-effort, fills only if the
+    // clock-in didn't already capture it.
+    try {
+      const from = String(req.body.From || '').replace(/\D/g, '').slice(-10);
+      if (from) await db.query(`UPDATE time_entries SET origin_phone = COALESCE(origin_phone, $1) WHERE id = $2`, [from, timeEntryId]);
+    } catch (opErr) { console.error('[IVR clock-out] origin_phone:', opErr.message); }
 
     // Generate the Sandata EVV record. Web/mobile clock-outs already do this
     // (timeTrackingRoutes.js:376). IVR didn't — every IVR-closed visit was
