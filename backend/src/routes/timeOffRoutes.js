@@ -4,6 +4,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { requireAdmin, auditLog } = require('../middleware/shared');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 // Helper: notify all admin users (local copy to avoid import issues)
 async function notifyAdmins(type, title, message) {
   try {
@@ -110,6 +111,7 @@ router.patch('/:id', requireAdmin, async (req, res) => {
     );
 
     // When approved, also create blackout dates so the scheduler excludes this caregiver
+    let coverage = null;
     if (status === 'approved') {
       const r = result.rows[0];
       const existingBlackout = await db.query(
@@ -123,12 +125,100 @@ router.patch('/:id', requireAdmin, async (req, res) => {
           [uuidv4(), r.caregiver_id, r.start_date, r.end_date, r.reason || 'Approved time off']
         );
       }
+
+      // Approval must also DO something about the shifts in the window: expand
+      // the caregiver's real occurrences through the shared engine (recurring,
+      // bi-weekly, exceptions — the same answer the phone/payroll/billing get)
+      // and post each one as an auto-created open shift, so the office has a
+      // concrete needs-coverage list instead of a blackout row nobody reads.
+      try {
+        coverage = await postCoverageOpenShifts(r, req.user.id);
+      } catch (e) { console.error('[time-off coverage]', e.message); }
     }
 
     await auditLog(req.user.id, 'UPDATE', 'caregiver_time_off', req.params.id, prev.rows[0], result.rows[0]);
-    res.json(result.rows[0]);
+
+    // Tell the caregiver their request was answered (this never notified them).
+    try {
+      const r = result.rows[0];
+      const range = `${String(r.start_date).slice(0, 10)} – ${String(r.end_date).slice(0, 10)}`;
+      await db.query(
+        `INSERT INTO notifications (id, user_id, type, title, message, is_read) VALUES ($1,$2,$3,$4,$5,false)`,
+        [uuidv4(), r.caregiver_id,
+         status === 'approved' ? 'time_off_approved' : 'time_off_denied',
+         status === 'approved' ? 'Time Off Approved' : 'Time Off Not Approved',
+         status === 'approved'
+           ? `Your time off ${range} is approved. Your shifts in that window are being covered — you don't need to do anything.`
+           : `Your time off request for ${range} was not approved. Please talk to the office.`]
+      );
+    } catch (e) { console.error('[time-off caregiver notify]', e.message); }
+
+    res.json({ ...result.rows[0], coverage });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+
+// ─── Coverage: post the absent caregiver's occurrences as open shifts ────────
+// Expands [max(start, today), end] through the shared schedule engine — only
+// occurrences that would actually happen (bi-weekly honored, cancelled skipped,
+// moved-away visits excluded because occ.caregiver_id is override-resolved).
+// De-dupes against open shifts already posted for the same schedule+date.
+// Returns { shiftsNeedingCoverage, posted } and sends the admin summary.
+async function postCoverageOpenShifts(timeOff, actingUserId) {
+  const win = await db.query(
+    `SELECT GREATEST($1::date, (NOW() AT TIME ZONE 'America/Chicago')::date)::text AS from_d,
+            $2::date::text AS to_d`,
+    [timeOff.start_date, timeOff.end_date]);
+  const { from_d, to_d } = win.rows[0];
+  if (from_d > to_d) return { shiftsNeedingCoverage: 0, posted: 0 };
+
+  const occ = await db.query(`
+    WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+    SELECT occ.schedule_id, occ.occ_date::text AS shift_date,
+           occ.start_time::text AS start_time, occ.end_time::text AS end_time,
+           occ.client_id, s.care_type_id,
+           c.first_name AS client_first, c.last_name AS client_last
+      FROM occ
+      JOIN schedules s ON s.id = occ.schedule_id
+      JOIN clients c ON c.id = occ.client_id
+     WHERE occ.caregiver_id = $3
+       AND s.is_training IS NOT TRUE
+     ORDER BY occ.occ_date, occ.start_time
+  `, [from_d, to_d, timeOff.caregiver_id]);
+
+  let posted = 0;
+  for (const o of occ.rows) {
+    const dup = await db.query(
+      `SELECT id FROM open_shifts
+        WHERE schedule_id = $1 AND shift_date = $2 AND status IN ('open','claimed','filled') LIMIT 1`,
+      [o.schedule_id, o.shift_date]);
+    if (dup.rows.length) continue;
+    await db.query(`
+      INSERT INTO open_shifts (client_id, schedule_id, shift_date, start_time, end_time,
+                               care_type_id, urgency, notes, auto_created, source_absence_id, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, 'high', $7, true, $8, $9)
+    `, [o.client_id, o.schedule_id, o.shift_date, o.start_time, o.end_time,
+        o.care_type_id, `Coverage needed: approved time off`, timeOff.id, actingUserId]);
+    posted++;
+  }
+
+  // Admin summary — the "we need to find coverage" part.
+  const cg = await db.query(`SELECT first_name, last_name FROM users WHERE id = $1`, [timeOff.caregiver_id]);
+  const name = cg.rows[0] ? `${cg.rows[0].first_name} ${cg.rows[0].last_name}` : 'Caregiver';
+  const range = `${String(timeOff.start_date).slice(0, 10)} – ${String(timeOff.end_date).slice(0, 10)}`;
+  if (occ.rows.length === 0) {
+    await notifyAdmins('time_off_coverage', `Time Off Approved: ${name}`,
+      `${name} is off ${range}. No scheduled visits fall in that window — nothing to cover.`);
+  } else {
+    const preview = occ.rows.slice(0, 8)
+      .map(o => `• ${o.shift_date} ${String(o.start_time).slice(0, 5)}–${String(o.end_time).slice(0, 5)} ${o.client_first} ${o.client_last}`)
+      .join('\n');
+    const more = occ.rows.length > 8 ? `\n…and ${occ.rows.length - 8} more` : '';
+    await notifyAdmins('time_off_coverage', `⚠️ Coverage Needed: ${name} off ${range}`,
+      `${name}'s approved time off leaves ${occ.rows.length} visit(s) needing coverage:\n${preview}${more}\n\n${posted} posted to Open Shifts — assign or broadcast them from the Scheduling Hub.`);
+  }
+
+  return { shiftsNeedingCoverage: occ.rows.length, posted };
+}
 
 // ─── GET /:id/affected-shifts — Shifts during the time-off period ───────────
 router.get('/:id/affected-shifts', requireAdmin, async (req, res) => {

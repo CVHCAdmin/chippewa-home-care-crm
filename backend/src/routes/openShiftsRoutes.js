@@ -305,11 +305,30 @@ router.post('/:id/approve', auth, async (req, res) => {
       console.error('[openShifts approve] auth recheck failed:', e.message);
     }
 
-    // Create or update schedule
+    // Create or update schedule.
+    //
+    // RECURRING pattern: reassigning schedules.caregiver_id would move EVERY
+    // occurrence of the pattern — past and future — onto the claimer (the
+    // recurring-edit history-rewrite trap). A claim covers ONE date, so it goes
+    // in as a per-occurrence 'modified' exception with override_caregiver_id,
+    // exactly how the Schedule Hub moves a single day. One-time rows ARE the
+    // single occurrence, so updating them directly stays correct.
     if (s.schedule_id) {
-      await db.query(`
-        UPDATE schedules SET caregiver_id = $1, status = 'scheduled' WHERE id = $2
-      `, [s.claimed_by, s.schedule_id]);
+      const sched = await db.query(`SELECT day_of_week FROM schedules WHERE id = $1`, [s.schedule_id]);
+      const isRecurring = sched.rows.length > 0 && sched.rows[0].day_of_week !== null;
+      if (isRecurring) {
+        await db.query(`
+          INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_caregiver_id, created_by)
+          VALUES ($1, $2, 'modified', $3, $4)
+          ON CONFLICT (schedule_id, exception_date)
+          DO UPDATE SET override_caregiver_id = EXCLUDED.override_caregiver_id
+          WHERE schedule_exceptions.exception_type <> 'cancelled'
+        `, [s.schedule_id, s.shift_date, s.claimed_by, req.user.id]);
+      } else {
+        await db.query(`
+          UPDATE schedules SET caregiver_id = $1, status = 'scheduled' WHERE id = $2
+        `, [s.claimed_by, s.schedule_id]);
+      }
     } else {
       await db.query(`
         INSERT INTO schedules (client_id, caregiver_id, date, start_time, end_time, care_type_id, status)
