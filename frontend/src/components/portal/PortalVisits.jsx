@@ -240,12 +240,16 @@ const PortalVisits = ({ token }) => {
   const submitCancel = async () => {
     setSubmitting(true);
     try {
-      await apiCall('/api/client-portal/portal/visits/cancel-request', {
+      const resp = await apiCall('/api/client-portal/portal/visits/cancel-request', {
         method: 'POST',
         body: JSON.stringify({ ...visitPayload(selectedVisit), reason: cancelReason.trim() || null }),
       }, token);
+      // Auto-applied cancels take effect immediately — reload the visit list so
+      // the cancelled visit disappears right away, not just the requests list.
+      if (resp?.auto_applied) await loadVisits();
       await loadChangeRequests();
       closeModal();
+      if (resp?.auto_applied) window.alert('Your visit has been cancelled and removed from the schedule.');
     } catch (err) {
       setError(err.message);
       setSubmitting(false);

@@ -1240,28 +1240,72 @@ router.post('/portal/visits/cancel-request', clientAuth, async (req, res) => {
       });
     }
 
+    // A client cancelling their own visit takes effect IMMEDIATELY — it used to
+    // create a request that waited on office approval, and those sat unreviewed
+    // (one from June was still 'pending' in September) while the caregiver's
+    // schedule kept showing the visit. Auto-apply unless:
+    //   - the visit was already worked (a punch exists — cancelling can't unwork
+    //     it; that's a billing correction, not a schedule change), or
+    //   - the date is in the past, or
+    //   - we have nothing to write the cancellation onto.
+    // Those rare cases fall back to the old pending-request flow for the office.
+    const todayCt = (await db.query(
+      `SELECT (now() AT TIME ZONE 'America/Chicago')::date::text AS d`)).rows[0].d;
+    const worked = await workedVisitBlocker({
+      caregiverId: vi.caregiverId, clientId: req.clientId, visitDate: vi.visitDate });
+    const autoApply = !worked
+      && String(vi.visitDate) >= todayCt
+      && !!(vi.scheduleId || visitId);
+
     const result = await db.query(`
       INSERT INTO visit_change_requests
         (client_id, caregiver_id, request_type, visit_id, schedule_id,
-         visit_date, original_start_time, original_end_time, cancel_reason)
-      VALUES ($1, $2, 'cancel', $3, $4, $5, $6, $7, $8)
+         visit_date, original_start_time, original_end_time, cancel_reason,
+         status, resolved_at, admin_notes)
+      VALUES ($1, $2, 'cancel', $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `, [
       req.clientId, vi.caregiverId, visitId || null, vi.scheduleId || null,
-      vi.visitDate, vi.startTime, vi.endTime, reason || null
+      vi.visitDate, vi.startTime, vi.endTime, reason || null,
+      autoApply ? 'approved' : 'pending',
+      autoApply ? new Date() : null,
+      autoApply ? 'Auto-applied: cancelled by client via portal' : null,
     ]);
+
+    if (autoApply) {
+      // Same writes the admin approve path does — the schedule engine (caregiver
+      // phone, Schedule Hub, payroll, billing) reads schedule_exceptions.
+      if (visitId) {
+        await db.query(`
+          UPDATE scheduled_visits
+          SET status = 'cancelled', cancelled_reason = $1, cancelled_at = NOW(), updated_at = NOW()
+          WHERE id = $2 AND client_id = $3
+        `, [reason || 'Cancelled by client via portal', visitId, req.clientId]);
+      }
+      if (vi.scheduleId) {
+        await db.query(`
+          INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type)
+          VALUES ($1, $2, 'cancelled')
+          ON CONFLICT (schedule_id, exception_date) DO NOTHING
+        `, [vi.scheduleId, vi.visitDate]);
+      }
+    }
 
     // Notify caregiver + all admins
     const client = await db.query('SELECT first_name, last_name FROM clients WHERE id = $1', [req.clientId]);
     const cn = client.rows[0];
-    const cancelMsg = `${cn?.first_name} ${cn?.last_name} is requesting to cancel their visit on ${vi.visitDate} at ${vi.startTime}.${reason ? ' Reason: ' + reason : ''}`;
+    const cancelMsg = autoApply
+      ? `${cn?.first_name} ${cn?.last_name} cancelled their visit on ${vi.visitDate} at ${vi.startTime}.${reason ? ' Reason: ' + reason : ''} The shift has been removed from the schedule.`
+      : `${cn?.first_name} ${cn?.last_name} is requesting to cancel their visit on ${vi.visitDate} at ${vi.startTime}.${reason ? ' Reason: ' + reason : ''}${worked ? ' (Not auto-applied: a time entry already exists for that day.)' : ''}`;
     await db.query(
       'INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)',
-      [vi.caregiverId, 'visit_cancel_request', 'Cancellation Request', cancelMsg]
+      [vi.caregiverId, autoApply ? 'visit_cancelled' : 'visit_cancel_request',
+       autoApply ? 'Visit Cancelled' : 'Cancellation Request', cancelMsg]
     ).catch(() => {});
-    await notifyAdmins('visit_cancel_request', 'Client Cancellation Request', cancelMsg);
+    await notifyAdmins(autoApply ? 'visit_cancelled' : 'visit_cancel_request',
+      autoApply ? 'Client Cancelled Visit' : 'Client Cancellation Request', cancelMsg);
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({ ...result.rows[0], auto_applied: autoApply });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
