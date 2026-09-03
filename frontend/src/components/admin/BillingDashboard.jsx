@@ -72,6 +72,10 @@ const BillingDashboard = ({ token }) => {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showGenerateForm, setShowGenerateForm] = useState(false);
+  const [dueRunning, setDueRunning] = useState(false);
+  const [dueResult, setDueResult] = useState(null);
+  const [showSchedulePanel, setShowSchedulePanel] = useState(false);
+  const [billingSchedule, setBillingSchedule] = useState([]);
   const [showReconcile, setShowReconcile]       = useState(false);
   const [reconcileData, setReconcileData]       = useState(null);
   const [reconcileChoices, setReconcileChoices] = useState({});
@@ -474,6 +478,49 @@ const BillingDashboard = ({ token }) => {
   const calculateManualTotal = () => {
     const rate = manualRate?.rate || 0;
     return manualLineItems.reduce((sum, item) => sum + (parseFloat(item.hours || 0) * rate), 0);
+  };
+
+  const handleGenerateDue = async () => {
+    if (!window.confirm('Create draft invoices for every client with a billing schedule, covering all complete periods since their last invoice?')) return;
+    setDueRunning(true);
+    setDueResult(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/generate-due`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed');
+      setDueResult(result);
+      setMessage(`✓ ${result.summary}`);
+      loadData();
+    } catch (err) {
+      setMessage(`✗ ${err.message}`);
+    } finally {
+      setDueRunning(false);
+    }
+  };
+
+  const loadBillingSchedule = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/billing-schedule`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (response.ok) setBillingSchedule(await response.json());
+    } catch (err) { console.error('billing schedule load:', err); }
+  };
+
+  const setClientFrequency = async (clientId, weeks) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/billing/invoices/billing-schedule/${clientId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ weeks: weeks || null }),
+      });
+      if (!response.ok) throw new Error((await response.json()).error || 'Failed');
+      loadBillingSchedule();
+    } catch (err) { setMessage(`✗ ${err.message}`); }
   };
 
   const handleBatchGenerate = async (e) => {
@@ -911,6 +958,11 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       <div className="page-header">
         <h2>💰 Billing & Invoicing</h2>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={handleGenerateDue} disabled={dueRunning}
+            title="Creates draft invoices for every client with a billing schedule, from their last invoice through the most recent complete period">
+            {dueRunning ? '⏳ Creating…' : '⚡ Create Due Invoices'}
+          </button>
+          <button className="btn btn-secondary" onClick={() => { setShowSchedulePanel(!showSchedulePanel); if (!showSchedulePanel) loadBillingSchedule(); }}>🗓️ Billing Schedule</button>
           <button className="btn btn-primary" onClick={() => setShowGenerateForm(!showGenerateForm)}>📄 New Invoice</button>
           <button className="btn btn-primary" onClick={() => setShowManualForm(!showManualForm)}>✏️ Manual Invoice</button>
           <button className="btn btn-secondary" onClick={() => setShowBatchForm(!showBatchForm)}>📋 Batch Generate</button>
@@ -920,6 +972,77 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       </div>
 
       {message && <div className="alert alert-success">{message}</div>}
+
+      {/* Create Due Invoices results */}
+      {dueResult && (
+        <div className="card" style={{ borderLeft: '4px solid #6366F1' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>⚡ Due Invoices — {dueResult.summary}</h3>
+            <button className="btn btn-sm btn-secondary" onClick={() => setDueResult(null)}>×</button>
+          </div>
+          {dueResult.created.length > 0 && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <strong style={{ color: '#065F46' }}>Created (drafts — review below, then send):</strong>
+              {dueResult.created.map((c, i) => (
+                <div key={i} style={{ fontSize: '0.88rem', padding: '0.15rem 0' }}>
+                  {c.invoiceNumber} · {c.name} · {c.period} · {c.hours.toFixed(1)}h · {formatCurrency(c.total)}
+                </div>
+              ))}
+            </div>
+          )}
+          {dueResult.skipped.length > 0 && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <strong style={{ color: '#B45309' }}>Skipped — needs your attention:</strong>
+              {dueResult.skipped.map((s, i) => (
+                <div key={i} style={{ fontSize: '0.88rem', padding: '0.15rem 0', color: s.needsReview ? '#B91C1C' : '#6B7280' }}>
+                  {s.name}{s.period ? ` · ${s.period}` : ''} — {s.reason}
+                </div>
+              ))}
+            </div>
+          )}
+          {dueResult.emptyPeriods.length > 0 && (
+            <div style={{ marginTop: '0.75rem', fontSize: '0.82rem', color: '#6B7280' }}>
+              Nothing billable (skipped forward): {dueResult.emptyPeriods.map(e => `${e.name} ${e.period}`).join(' · ')}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Billing Schedule panel */}
+      {showSchedulePanel && (
+        <div className="card">
+          <h3>🗓️ Billing Schedule</h3>
+          <p className="text-muted" style={{ marginTop: 0, fontSize: '0.85rem' }}>
+            How often each client gets invoiced. "Create Due Invoices" resumes each client from their
+            last invoice and creates one draft per complete period. Blank = manual invoicing only.
+          </p>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="table" style={{ fontSize: '0.88rem' }}>
+              <thead><tr><th>Client</th><th>Payer</th><th>Frequency</th><th>Billed Through</th><th>Due Now</th></tr></thead>
+              <tbody>
+                {billingSchedule.map(c => (
+                  <tr key={c.id}>
+                    <td><strong>{c.first_name} {c.last_name}</strong></td>
+                    <td>{c.is_private_pay ? 'Private Pay' : (c.payer_name || '—')}</td>
+                    <td>
+                      <select value={c.billing_frequency_weeks || ''} onChange={(e) => setClientFrequency(c.id, e.target.value)}>
+                        <option value="">Manual only</option>
+                        <option value="1">Every week</option>
+                        <option value="2">Every 2 weeks</option>
+                        <option value="4">Every 4 weeks</option>
+                      </select>
+                    </td>
+                    <td>{c.billed_through || <span style={{ color: '#B45309' }}>no invoice yet — generate the first manually</span>}</td>
+                    <td>{c.periods_due > 0
+                      ? <span style={{ color: '#B91C1C', fontWeight: 700 }}>{c.periods_due} period{c.periods_due > 1 ? 's' : ''}</span>
+                      : (c.billing_frequency_weeks ? '✓ current' : '—')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid">

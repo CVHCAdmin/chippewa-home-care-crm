@@ -991,6 +991,12 @@ router.post('/invoices/generate-with-rates', auth, async (req, res) => {
     const invoice = invoiceResult.rows[0];
     await insertLineItems(invoice.id, lineItems, dbClient);
 
+    // Keep the auto-billing anchor in step with manual invoices, so
+    // "Create Due Invoices" resumes after this period instead of re-billing it.
+    await dbClient.query(`
+      UPDATE clients SET billed_through = GREATEST(COALESCE(billed_through, $2::date), $2::date)
+       WHERE id = $1`, [clientId, billingPeriodEnd]);
+
     await dbClient.query('COMMIT');
 
     let referralSourceName = null;
@@ -1334,6 +1340,180 @@ router.post('/invoices/batch-generate', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error in batch generation:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── AUTOMATIC CADENCE BILLING ───────────────────────────────────────────────
+// GET /invoices/billing-schedule — every active client's cadence + where their
+// billing stands, for the Billing Schedule panel.
+router.get('/invoices/billing-schedule', auth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT c.id, c.first_name, c.last_name, c.is_private_pay,
+             c.billing_frequency_weeks, c.billed_through::text,
+             (NOW() AT TIME ZONE 'America/Chicago')::date::text AS today,
+             rs.name AS payer_name
+        FROM clients c
+        LEFT JOIN referral_sources rs ON rs.id = c.referral_source_id
+       WHERE COALESCE(c.status, 'active') = 'active'
+       ORDER BY (c.billing_frequency_weeks IS NULL), c.last_name, c.first_name
+    `);
+    res.json(result.rows.map(r => {
+      let periodsDue = 0;
+      if (r.billing_frequency_weeks && r.billed_through) {
+        const span = (new Date(r.today) - new Date(r.billed_through)) / 86400000 - 1;
+        periodsDue = Math.max(0, Math.floor(span / (r.billing_frequency_weeks * 7)));
+      }
+      return { ...r, periods_due: periodsDue };
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /invoices/billing-schedule/:clientId — set a client's cadence (weeks,
+// or null to stop auto-billing). Scoped update — never the full-row client PUT.
+router.patch('/invoices/billing-schedule/:clientId', auth, requireAdmin, async (req, res) => {
+  try {
+    const { weeks } = req.body;
+    const w = weeks == null || weeks === '' ? null : parseInt(weeks, 10);
+    if (w != null && (Number.isNaN(w) || w < 1 || w > 8)) {
+      return res.status(400).json({ error: 'weeks must be 1-8 or null' });
+    }
+    const r = await db.query(
+      `UPDATE clients SET billing_frequency_weeks = $2, updated_at = NOW() WHERE id = $1
+       RETURNING id, billing_frequency_weeks`, [req.params.clientId, w]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Client not found' });
+    res.json(r.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /invoices/generate-due — one button: for every client with a cadence,
+// create draft invoices for each COMPLETE period since billed_through, then
+// advance billed_through. Never bills a period still in progress, never
+// regenerates covered ground, and never bills on a guess — clients with
+// unresolved punch-vs-schedule days or overlapping schedules are skipped with
+// the reason so they can be generated singly through the review screen.
+router.post('/invoices/generate-due', auth, requireAdmin, async (req, res) => {
+  const MAX_PERIODS_PER_CLIENT = 6; // catch-up backstop
+  const dryRun = req.body && req.body.dryRun === true; // preview: no writes at all
+  try {
+    const todayStr = (await db.query(
+      `SELECT (NOW() AT TIME ZONE 'America/Chicago')::date::text AS d`)).rows[0].d;
+
+    const clients = await db.query(`
+      SELECT c.id, c.first_name, c.last_name, c.referral_source_id, c.care_type_id,
+             c.is_private_pay, c.billing_frequency_weeks, c.billed_through::text
+        FROM clients c
+       WHERE COALESCE(c.status, 'active') = 'active'
+         AND c.billing_frequency_weeks IS NOT NULL
+       ORDER BY c.last_name, c.first_name
+    `);
+
+    const created = [], skipped = [], emptyPeriods = [];
+    const addDays = (dateStr, n) => {
+      const d = new Date(dateStr + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+
+    for (const client of clients.rows) {
+      const name = `${client.first_name} ${client.last_name}`;
+      if (!client.billed_through) {
+        skipped.push({ name, reason: 'No previous invoice — generate the first one manually to set the starting point' });
+        continue;
+      }
+
+      let anchor = client.billed_through;
+      for (let p = 0; p < MAX_PERIODS_PER_CLIENT; p++) {
+        const periodStart = addDays(anchor, 1);
+        const periodEnd = addDays(anchor, client.billing_frequency_weeks * 7);
+        if (periodEnd >= todayStr) break; // period not complete yet
+
+        // Already covered (e.g. a manual invoice)? Just advance the anchor.
+        const existing = await db.query(`
+          SELECT invoice_number FROM invoices
+           WHERE client_id = $1 AND billing_period_start = $2 AND billing_period_end = $3
+        `, [client.id, periodStart, periodEnd]);
+        if (existing.rows.length) {
+          if (!dryRun) await db.query(`UPDATE clients SET billed_through = $2 WHERE id = $1`, [client.id, periodEnd]);
+          anchor = periodEnd;
+          continue;
+        }
+
+        const { lineItems, total, reconcile } = await generateLineItems(
+          client.id, client.referral_source_id, client.care_type_id, periodStart, periodEnd);
+
+        const unresolved = (reconcile || []).filter(r => r.needs_choice);
+        const overlaps = (reconcile || []).filter(r => r.overlap_minutes > 0);
+        if (unresolved.length || overlaps.length) {
+          const why = [];
+          if (unresolved.length) why.push(`${unresolved.length} day(s) where the clock-in doesn't match the schedule`);
+          if (overlaps.length) why.push(`overlapping schedules on ${[...new Set(overlaps.map(o => o.service_date))].join(', ')}`);
+          skipped.push({ name, period: `${periodStart} – ${periodEnd}`, reason: why.join('; ') + ' — generate this client on its own to review', needsReview: true });
+          break; // don't advance, don't try later periods out of order
+        }
+
+        if (lineItems.length === 0 || total <= 0) {
+          // Nothing billable this period (suspended, no visits) — advance past it.
+          if (!dryRun) await db.query(`UPDATE clients SET billed_through = $2 WHERE id = $1`, [client.id, periodEnd]);
+          emptyPeriods.push({ name, period: `${periodStart} – ${periodEnd}` });
+          anchor = periodEnd;
+          continue;
+        }
+
+        if (dryRun) {
+          created.push({
+            name, invoiceNumber: '(preview)', period: `${periodStart} – ${periodEnd}`,
+            total, hours: lineItems.reduce((s, li) => s + parseFloat(li.hours), 0),
+          });
+          anchor = periodEnd;
+          continue;
+        }
+
+        const dueDate = new Date(periodEnd);
+        dueDate.setDate(dueDate.getDate() + 30);
+        const invoiceNumber = generateInvoiceNumber(client.id);
+
+        const dbClient = await db.pool.connect();
+        try {
+          await dbClient.query('BEGIN');
+          const invoiceResult = await dbClient.query(`
+            INSERT INTO invoices (
+              client_id, invoice_number, billing_period_start, billing_period_end,
+              subtotal, total, payment_status, payment_due_date,
+              referral_source_id, invoice_type
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
+            RETURNING id
+          `, [client.id, invoiceNumber, periodStart, periodEnd, total, total, dueDate,
+              client.referral_source_id, client.is_private_pay ? 'private_pay' : 'insurance']);
+          await insertLineItems(invoiceResult.rows[0].id, lineItems, dbClient);
+          await dbClient.query(`UPDATE clients SET billed_through = $2 WHERE id = $1`, [client.id, periodEnd]);
+          await dbClient.query('COMMIT');
+          created.push({
+            name, invoiceNumber, period: `${periodStart} – ${periodEnd}`,
+            total, hours: lineItems.reduce((s, li) => s + parseFloat(li.hours), 0),
+          });
+          anchor = periodEnd;
+        } catch (perErr) {
+          try { await dbClient.query('ROLLBACK'); } catch {}
+          skipped.push({ name, period: `${periodStart} – ${periodEnd}`, reason: `Failed: ${perErr.message}` });
+          break;
+        } finally {
+          dbClient.release();
+        }
+      }
+    }
+
+    res.json({
+      created, skipped, emptyPeriods,
+      summary: `${created.length} invoice(s) created · ${skipped.length} skipped · ${emptyPeriods.length} empty period(s) advanced`,
+    });
+  } catch (error) {
+    console.error('Error in generate-due:', error);
     res.status(500).json({ error: error.message });
   }
 });
