@@ -509,11 +509,16 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     return covered > (ee - es) * 0.5;
   };
 
-  // Orphan time entries (worked but not on schedule) → bill as unscheduled.
+  // Orphan time entries (worked but not on schedule): THE SCHEDULE IS THE
+  // INVOICE. A punch with no schedule behind it does NOT bill by default —
+  // office policy (2026-09-04) is that the schedule is corrected before the
+  // invoice is created, so a schedule-less punch is either a mis-punch (the
+  // 6-minute Nona re-punch that invoiced $3.30, the 13-minute Deetz tap) or a
+  // real visit whose schedule entry hasn't been added yet. Each one is surfaced
+  // as a needs_choice row in the review step: default SKIP ($0), with a
+  // one-click "bill the clocked time" override for a genuine extra visit.
   // Prefer billable_minutes: the clock-out path already zeroes accidental
-  // double-taps (<60s) and caps implausibly long shifts there — billing raw
-  // duration ignored all of that (a 0-minute tap still billed a flat-rate
-  // visit). Fall back to duration for old/manual entries without it.
+  // double-taps (<60s) and caps implausibly long shifts there.
   for (const entry of unmatchedEntries) {
     let minutes = 0;
     if (entry.billable_minutes != null) {
@@ -528,43 +533,47 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     if (mostlyBilledAlready(entry)) continue; // twin punch of a billed shift
 
     const amount = lineAmount(hours);
-    invoiceTotal += amount;
-
-    // Later orphans check against this one too — twin pairs where NEITHER
-    // matched a schedule must still only bill once.
-    if (entry.end_time) billedWindows.push({ caregiver_id: entry.caregiver_id, day: ymd(entry.start_time), start: chiMin(entry.start_time), end: chiMin(entry.end_time) });
+    const key = reconcileKey({ serviceDate: ymd(entry.start_time), caregiverId: entry.caregiver_id, timeEntryId: entry.time_entry_id });
+    const billIt = choices[key] === 'clocked'; // explicit reviewer opt-in only
 
     const st = new Date(entry.start_time);
     const et = entry.end_time ? new Date(entry.end_time) : null;
     const timeRangeLabel = et
       ? `${st.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })} - ${et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Chicago' })}`
       : '';
-    // Notes are internal — never bill them. Generic label only.
-    const baseDesc = 'Home Care Services (unscheduled)';
 
-    lineItems.push({
-      time_entry_id: entry.time_entry_id,
-      schedule_id: null,
-      caregiver_id: entry.caregiver_id,
-      caregiver_first_name: entry.caregiver_first_name,
-      caregiver_last_name: entry.caregiver_last_name,
-      service_date: ymd(entry.start_time),
-      start_time: entry.start_time,
-      end_time: entry.end_time,
-      time_range: timeRangeLabel,
-      description: timeRangeLabel ? `${baseDesc} (${timeRangeLabel})` : baseDesc,
-      hours,
-      rate,
-      rate_type: rateType,
-      amount,
-      billed_basis: 'unscheduled',
-      scheduled_minutes: null,
-      clocked_minutes: Math.round(minutes),
-      source: 'unscheduled_evv',
-    });
+    if (billIt) {
+      invoiceTotal += amount;
+      // Later orphans check against this one too — twin pairs where NEITHER
+      // matched a schedule must still only bill once.
+      if (entry.end_time) billedWindows.push({ caregiver_id: entry.caregiver_id, day: ymd(entry.start_time), start: chiMin(entry.start_time), end: chiMin(entry.end_time) });
+
+      // Notes are internal — never bill them. Generic label only.
+      const baseDesc = 'Home Care Services (unscheduled)';
+      lineItems.push({
+        time_entry_id: entry.time_entry_id,
+        schedule_id: null,
+        caregiver_id: entry.caregiver_id,
+        caregiver_first_name: entry.caregiver_first_name,
+        caregiver_last_name: entry.caregiver_last_name,
+        service_date: ymd(entry.start_time),
+        start_time: entry.start_time,
+        end_time: entry.end_time,
+        time_range: timeRangeLabel,
+        description: timeRangeLabel ? `${baseDesc} (${timeRangeLabel})` : baseDesc,
+        hours,
+        rate,
+        rate_type: rateType,
+        amount,
+        billed_basis: 'unscheduled',
+        scheduled_minutes: null,
+        clocked_minutes: Math.round(minutes),
+        source: 'unscheduled_evv',
+      });
+    }
 
     reconcile.push({
-      key: reconcileKey({ serviceDate: ymd(entry.start_time), caregiverId: entry.caregiver_id, timeEntryId: entry.time_entry_id }),
+      key,
       service_date: ymd(entry.start_time),
       caregiver_id: entry.caregiver_id,
       caregiver_name: `${entry.caregiver_first_name || ''} ${entry.caregiver_last_name || ''}`.trim(),
@@ -574,10 +583,10 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
       clocked_minutes: Math.round(minutes),
       clocked_amount: amount,
       time_entry_id: entry.time_entry_id,
-      needs_choice: false,          // no schedule to weigh it against
+      needs_choice: true,           // reviewer decides: skip (default) or bill it
       status: 'unscheduled',
-      default_basis: 'clocked',
-      chosen_basis: 'clocked',
+      default_basis: 'skip',
+      chosen_basis: billIt ? 'clocked' : 'skip',
     });
   }
 

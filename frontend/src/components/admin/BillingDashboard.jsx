@@ -995,28 +995,49 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                       const chosen = reconcileChoices[r.key] || r.default_basis;
                       const wild = r.clocked_minutes != null && r.scheduled_minutes
                         && r.clocked_minutes > r.scheduled_minutes * 2;
+                      // A punch with no schedule behind it: the schedule is the
+                      // invoice, so the default is DON'T BILL — fix the schedule
+                      // and re-open this screen, or explicitly bill the clocked
+                      // time for a genuine extra visit.
+                      const noSched = r.status === 'unscheduled';
                       return (
                         <tr key={r.key}>
                           <td><strong>{formatDate(r.service_date, { month: 'short', day: 'numeric' })}</strong></td>
                           <td>{r.caregiver_name}</td>
-                          <td>{hhmm(r.scheduled_start)}–{hhmm(r.scheduled_end)}<br />
-                            <span style={{ color: '#6B7280' }}>{mins(r.scheduled_minutes)} · {money(r.scheduled_amount)}</span></td>
+                          <td>{noSched
+                            ? <span style={{ color: '#B91C1C', fontWeight: 700 }}>not on schedule</span>
+                            : <>{hhmm(r.scheduled_start)}–{hhmm(r.scheduled_end)}<br />
+                                <span style={{ color: '#6B7280' }}>{mins(r.scheduled_minutes)} · {money(r.scheduled_amount)}</span></>}</td>
                           <td>
                             {clock(r.clocked_start)}–{clock(r.clocked_end)}<br />
                             <span style={{ color: r.status === 'short' ? '#B91C1C' : '#B45309' }}>
                               {mins(r.clocked_minutes)} · {money(r.clocked_amount)}
-                              {r.status === 'short' ? ' (short)' : ' (over)'}
+                              {noSched ? '' : r.status === 'short' ? ' (short)' : ' (over)'}
                             </span>
                             {wild && <div style={{ fontSize: '0.72rem', color: '#B91C1C' }}>likely a missed clock-out</div>}
+                            {noSched && <div style={{ fontSize: '0.72rem', color: '#6B7280' }}>add it to the schedule if this visit should bill normally</div>}
                           </td>
                           <td>
                             <div style={{ display: 'flex', gap: '0.35rem' }}>
-                              <button type="button" style={btn(chosen === 'scheduled', false)} onClick={() => pick(r.key, 'scheduled')}>
-                                Scheduled {money(r.scheduled_amount)}
-                              </button>
-                              <button type="button" style={btn(chosen === 'clocked', wild)} onClick={() => pick(r.key, 'clocked')}>
-                                Clocked {money(r.clocked_amount)}
-                              </button>
+                              {noSched ? (
+                                <>
+                                  <button type="button" style={btn(chosen !== 'clocked', false)} onClick={() => pick(r.key, 'skip')}>
+                                    Don't bill $0.00
+                                  </button>
+                                  <button type="button" style={btn(chosen === 'clocked', true)} onClick={() => pick(r.key, 'clocked')}>
+                                    Bill clocked {money(r.clocked_amount)}
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button type="button" style={btn(chosen === 'scheduled', false)} onClick={() => pick(r.key, 'scheduled')}>
+                                    Scheduled {money(r.scheduled_amount)}
+                                  </button>
+                                  <button type="button" style={btn(chosen === 'clocked', wild)} onClick={() => pick(r.key, 'clocked')}>
+                                    Clocked {money(r.clocked_amount)}
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
