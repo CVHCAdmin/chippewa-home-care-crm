@@ -590,6 +590,32 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     });
   }
 
+  // Overlapping-schedule detection: two scheduled visits for the same client on
+  // the same day whose windows overlap will BOTH bill their scheduled hours —
+  // almost always a handoff day where a second caregiver was layered on without
+  // trimming the first one's schedule (Linda Wright 2026-08-21: Patricia's
+  // untrimmed 8-3 next to Amanda's one-time 12-3 billed 10h for 7h of care).
+  // The billing rows are left alone — the fix is a schedule correction — but
+  // each affected review row is flagged so the reviewer sees it by name.
+  for (const day of new Set(reconcile.map(r => r.service_date))) {
+    const dayRows = reconcile.filter(r =>
+      r.service_date === day && r.scheduled_start != null && r.scheduled_end != null);
+    for (let i = 0; i < dayRows.length; i++) {
+      for (let j = i + 1; j < dayRows.length; j++) {
+        const a = dayRows[i], b = dayRows[j];
+        const as = minutesOf(a.scheduled_start), ae = minutesOf(a.scheduled_end);
+        const bs = minutesOf(b.scheduled_start), be = minutesOf(b.scheduled_end);
+        if (as == null || ae == null || bs == null || be == null) continue;
+        const ov = Math.min(ae, be) - Math.max(as, bs);
+        if (ov <= 0) continue;
+        a.overlap_minutes = Math.max(a.overlap_minutes || 0, ov);
+        b.overlap_minutes = Math.max(b.overlap_minutes || 0, ov);
+        a.overlap_with = b.caregiver_name;
+        b.overlap_with = a.caregiver_name;
+      }
+    }
+  }
+
   // Final sort by date for the invoice
   lineItems.sort((a, b) => (a.service_date || '').localeCompare(b.service_date || ''));
   reconcile.sort((a, b) => (a.service_date || '').localeCompare(b.service_date || '')

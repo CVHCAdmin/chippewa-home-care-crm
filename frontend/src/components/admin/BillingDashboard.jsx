@@ -974,6 +974,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
           color: active ? (danger ? '#991B1B' : '#065F46') : '#6B7280',
         });
 
+        const overlaps = rows.filter(r => r.overlap_minutes > 0);
+
         return (
           <div className="card" style={{ maxWidth: 'none' }}>
             <h3>🧾 Review Before Invoicing</h3>
@@ -981,6 +983,24 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               Every day is billed at its <strong>scheduled</strong> hours. These {needs.length} day
               {needs.length === 1 ? '' : 's'} clocked in differently — pick which to bill for each.
             </p>
+
+            {overlaps.length > 0 && (
+              <div style={{ padding: '0.9rem 1rem', background: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: 8, marginBottom: '1rem' }}>
+                <div style={{ fontWeight: 800, color: '#991B1B', marginBottom: '0.35rem' }}>
+                  ⚠️ Possible double-billed handoff — two schedules overlap on the same day
+                </div>
+                <div style={{ fontSize: '0.85rem', color: '#7F1D1D' }}>
+                  {overlaps.map(r => (
+                    <div key={'ov-' + r.key}>
+                      {formatDate(r.service_date, { month: 'short', day: 'numeric' })}: {r.caregiver_name} {hhmm(r.scheduled_start)}–{hhmm(r.scheduled_end)} overlaps {r.overlap_with} by {mins(r.overlap_minutes)} — both bill in full
+                    </div>
+                  ))}
+                  <div style={{ marginTop: '0.35rem', fontWeight: 600 }}>
+                    Fix the schedule for those days (trim the handed-off hours), then re-open this review.
+                  </div>
+                </div>
+              </div>
+            )}
 
             {needs.length === 0 ? (
               <div style={{ padding: '1rem', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, color: '#065F46', fontWeight: 600 }}>
