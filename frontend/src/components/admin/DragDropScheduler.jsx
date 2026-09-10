@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { getTodayCT } from '../../utils/timezone';
+import { isBiweeklyOn } from '../../utils/biweekly';
 
 const PALETTE = [
   '#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6',
@@ -176,12 +177,10 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         // Suspended service: hide occurrences on/after the suspend date (matches the server).
         if (s.suspended_from && dateStr >= s.suspended_from.slice(0, 10)) return;
 
-        // Biweekly check
-        if (s.frequency === 'biweekly' && s.anchor_date) {
-          const anchor = new Date(s.anchor_date);
-          const diffWeeks = Math.round((cellDate - anchor) / (7 * 24 * 60 * 60 * 1000));
-          if (diffWeeks % 2 !== 0) return;
-        }
+        // Biweekly: shared whole-day parity rule. The Math.round that lived here rounded a
+        // Saturday 6 days past a Sunday anchor onto the wrong fortnight, so this grid showed
+        // 9/19 and 10/3 while payroll had 9/12 and 9/26.
+        if (s.frequency === 'biweekly' && s.anchor_date && !isBiweeklyOn(dateStr, s.anchor_date)) return;
 
         // Check exceptions for this date
         const exceptions = s.exceptions || [];
@@ -284,9 +283,9 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         const days = newShiftForm.selectedDays;
         if (days.length === 0) return showToast('Select at least one day', 'error');
 
-        const anchorStart = new Date(newShiftForm.startDate + 'T12:00:00');
-        anchorStart.setDate(anchorStart.getDate() - anchorStart.getDay());
-        const anchorStr = anchorStart.toISOString().split('T')[0];
+        // Bi-weekly anchor = the start date as typed; the server aligns it to each selected
+        // weekday (utils/biweekly.js). Normalizing to Sunday here put Sat+Sun on two fortnights.
+        const anchorStr = newShiftForm.startDate || todayStr;
 
         let created = 0, dup = 0, failed = 0, clampedTo = null;
         let firstFailure = null, authWarning = null;

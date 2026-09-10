@@ -84,7 +84,7 @@ Recurring (Single Day): Same day every week forever (or until deactivated). Exam
 
 Multi-Day Recurring: Multiple days per week. Creates one schedule entry per day selected.
 
-Bi-Weekly: Every other week. You'll be asked to pick the "ON week" anchor date — choose any date in the first week the caregiver should work. The system handles the alternating pattern automatically.`
+Bi-Weekly: Every other week. Pick the first date the caregiver works (it defaults to the Start Date). Each selected day begins on or after that date and then repeats every 2 weeks — so Saturday + Sunday starting on a Saturday stay on the same weekend.`
       },
       {
         title: 'Conflict Detection',
@@ -103,12 +103,14 @@ Instead, click on the schedule and click "Deactivate." This stops future occurre
 If you need to change a schedule (different time, different client), deactivate the old one and create a new one.`
       },
       {
-        title: 'Bi-Weekly Anchor Date',
-        content: `The anchor date tells the system which week is the "ON" week for a bi-weekly schedule.
+        title: 'Bi-Weekly First "On" Date',
+        content: `A bi-weekly schedule alternates weeks. The "first on date" is the first day the caregiver actually works that shift; from there it repeats every 2 weeks.
 
-When creating a bi-weekly schedule, pick any date in the first week the caregiver should work. You don't need to pick a Sunday — just any day in that week. The system normalizes it.
+It defaults to the Start Date. Each weekday you select starts on or after that date, so a Saturday + Sunday pair starting on Saturday 9/12 runs 9/12–9/13, 9/26–9/27, and so on — the same weekend, not split across two.
 
-If you change the anchor date later (in the edit modal), you're changing which weeks are "on" and "off" — this takes effect immediately, so double-check the next few weeks in the calendar after making changes.`
+Splitting a weekend between two caregivers: give each caregiver a bi-weekly Sat + Sun schedule, one starting this Saturday and the other starting next Saturday.
+
+If you change the first on date later (in the edit modal), you're changing which weeks are "on" and "off" — double-check the next few weeks in the calendar after making changes.`
       },
     ]
   },

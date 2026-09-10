@@ -11,6 +11,7 @@ import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
+import { isBiweeklyOn, toYMD } from '../utils/biweekly';
 import { setShiftBusy } from '../shiftGuard';
 import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
@@ -1206,12 +1207,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       const targetStr = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
       if (targetStr > String(schedule.end_date).slice(0, 10)) return false;
     }
-    if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
-      const anchor = new Date(schedule.anchor_date);
-      const target = new Date(targetDate);
-      const diffWeeks = Math.round((target - anchor) / (7 * 24 * 60 * 60 * 1000));
-      if (diffWeeks % 2 !== 0) return false;
-    }
+    // Bi-weekly: shared whole-day parity rule (utils/biweekly.js) — same answer as
+    // payroll. Math.round here used to put a Saturday row on the wrong fortnight.
+    if (schedule.frequency === 'biweekly' && schedule.anchor_date && !isBiweeklyOn(toYMD(new Date(targetDate)), schedule.anchor_date)) return false;
     return true;
   };
 

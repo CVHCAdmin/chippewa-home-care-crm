@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 const { shiftHours } = require('../helpers/shiftHours');
+const { alignBiweeklyAnchor } = require('../helpers/biweekly');
 // ─── COMPLIANCE ───────────────────────────────────────────────────────────────
 
 router.get('/compliance/summary', verifyToken, requireAdmin, async (req, res) => {
@@ -466,7 +467,7 @@ router.delete('/performance-reviews/:id', verifyToken, requireAdmin, async (req,
 
 router.post('/schedules-enhanced', verifyToken, async (req, res) => {
   try {
-    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate: rawEffectiveDate, anchorDate, splitShift, isTraining } = req.body;
+    const { caregiverId, clientId, scheduleType, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate: rawEffectiveDate, anchorDate: rawAnchorDate, splitShift, isTraining } = req.body;
     if (!caregiverId || !clientId || !startTime || !endTime) return res.status(400).json({ error: 'Missing required fields' });
 
     // Recurring patterns MUST have an effective_date >= today. Anything else
@@ -481,6 +482,15 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
       // client can warn the user instead of the change happening silently.
       if (effectiveDate && effectiveDate < today) effectiveDateClamped = true;
       effectiveDate = (effectiveDate && effectiveDate >= today) ? effectiveDate : today;
+    }
+    // Bi-weekly: store the anchor ON the row's own weekday — the first such date on/after
+    // max(anchor asked for, effective date). A Sat+Sun pair created "starting 9/12"
+    // therefore anchors Sat→9/12 and Sun→9/13 (same weekend), instead of both sharing a
+    // Sunday-of-week anchor that put them on different fortnights and let the calendar
+    // and payroll round the same row to different weeks. See helpers/biweekly.js.
+    let anchorDate = rawAnchorDate || null;
+    if (isRecurring && (frequency || 'weekly') === 'biweekly') {
+      anchorDate = alignBiweeklyAnchor({ anchorDate: rawAnchorDate, effectiveDate, dayOfWeek });
     }
 
     // Authorization is advisory — see helpers/authorizationCheck.js. Never blocks
@@ -532,7 +542,7 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
       const seg2 = await db.query(insertSQL, [id2, ...baseParams.slice(0,5), splitShift.startTime, splitShift.endTime, ...baseParams.slice(5), splitGroupId, 2, !!isTraining]);
 
       // TODO: EVV integration — split shifts may need separate EVV visit records
-      return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]], effectiveDateClamped, effectiveDate, authWarnings: authCheck.warnings || [] });
+      return res.status(201).json({ splitShift: true, segments: [seg1.rows[0], seg2.rows[0]], effectiveDateClamped, effectiveDate, anchorDate, authWarnings: authCheck.warnings || [] });
     }
 
     // ── Standard single shift ──
@@ -557,7 +567,7 @@ router.post('/schedules-enhanced', verifyToken, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [id, caregiverId, clientId, scheduleType||'recurring', dayOfWeek!=null?dayOfWeek:null, date||null, startTime, endTime, notes||null, frequency||'weekly', effectiveDate||null, anchorDate||null, !!isTraining]
     );
-    res.status(201).json({ ...result.rows[0], effectiveDateClamped, effectiveDate, authWarnings: authCheck.warnings || [] });
+    res.status(201).json({ ...result.rows[0], effectiveDateClamped, effectiveDate, anchorDate, authWarnings: authCheck.warnings || [] });
   } catch (error) {
     if (error.code === '23505') {
       return res.status(409).json({ error: 'This caregiver already has this exact shift (same client, day, and time).', duplicate: true });

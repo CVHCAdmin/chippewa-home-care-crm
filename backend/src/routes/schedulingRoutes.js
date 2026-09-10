@@ -6,6 +6,8 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin } = require('../middleware/shared');
 const { shiftHours: hoursOf } = require('../helpers/shiftHours');
+const { isBiweeklyOn, toYMD } = require('../helpers/biweekly');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -58,10 +60,9 @@ function isScheduleActiveForDate(schedule, targetDate) {
     if (target > ed) return false;
   }
   if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
-    const anchor = new Date(schedule.anchor_date);
-    const target = new Date(targetDate);
-    const diffWeeks = Math.round((target - anchor) / (7 * 24 * 60 * 60 * 1000));
-    if (diffWeeks % 2 !== 0) return false;
+    // Shared parity rule (helpers/biweekly.js) — the Math.round that used to live
+    // here put a Saturday row 6 days past a Sunday anchor on the WRONG fortnight.
+    if (!isBiweeklyOn(toYMD(targetDate instanceof Date ? targetDate : new Date(targetDate)), schedule.anchor_date)) return false;
   }
   return true;
 }
@@ -84,10 +85,13 @@ router.get('/conflict-heatmap', verifyToken, requireAdmin, async (req, res) => {
     const endStr = end.toISOString().slice(0, 10);
 
     // For each caregiver, sum scheduled hours per day of the requested week.
-    // Recurring schedules are matched via day_of_week with effective/end_date
-    // bounds; one-time schedules via exact date match.
+    // Expansion goes through THE engine (helpers/scheduleOccurrences.js). The
+    // hand-rolled join that lived here tested schedule_type='bi-weekly' — which no
+    // writer ever sets — so bi-weekly rows fell into the weekly branch and the
+    // heatmap counted them every week; it also ignored suspensions and covered days.
     const result = await db.query(`
-      WITH days AS (
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')},
+      days AS (
         SELECT generate_series($1::date, $2::date, '1 day'::interval)::date AS d
       ),
       cgs AS (
@@ -98,25 +102,11 @@ router.get('/conflict-heatmap', verifyToken, requireAdmin, async (req, res) => {
         WHERE u.role = 'caregiver' AND u.is_active = true
       ),
       sched_hours AS (
-        SELECT
-          s.caregiver_id, d.d,
-          ROUND(SUM(EXTRACT(EPOCH FROM (s.end_time::time - s.start_time::time)) / 3600.0 + CASE WHEN s.end_time::time < s.start_time::time THEN 24 ELSE 0 END)::numeric, 2) AS hours,
-          COUNT(*) AS shift_count
-        FROM days d
-        JOIN schedules s
-          ON s.is_active = true
-         AND (
-           (s.schedule_type = 'one-time' AND s.date = d.d)
-           OR (s.schedule_type = 'recurring' AND s.day_of_week = EXTRACT(DOW FROM d.d)::int
-               AND (s.effective_date IS NULL OR d.d >= s.effective_date)
-               AND (s.end_date IS NULL OR d.d <= s.end_date))
-           OR (s.schedule_type = 'bi-weekly' AND s.day_of_week = EXTRACT(DOW FROM d.d)::int
-               AND MOD(((d.d - COALESCE(s.anchor_date, s.effective_date, s.created_at::date))::int / 7), 2) = 0)
-         )
-        LEFT JOIN schedule_exceptions se
-          ON se.schedule_id = s.id AND se.exception_date = d.d AND se.exception_type = 'cancelled'
-        WHERE se.id IS NULL
-        GROUP BY s.caregiver_id, d.d
+        SELECT occ.caregiver_id, occ.occ_date AS d,
+               ROUND(SUM(occ.hours)::numeric, 2) AS hours,
+               COUNT(*) AS shift_count
+        FROM occ
+        GROUP BY occ.caregiver_id, occ.occ_date
       )
       SELECT cgs.id, cgs.first_name, cgs.last_name, cgs.max_hours_per_week,
         d.d AS day,
@@ -584,7 +574,9 @@ router.post('/check-travel-time', verifyToken, async (req, res) => {
 router.get('/week-view', verifyToken, async (req, res) => {
   try {
     const { weekOf } = req.query;
-    const weekStart = weekOf ? getWeekStart(new Date(weekOf)) : getWeekStart(new Date());
+    // A bare 'YYYY-MM-DD' parses as UTC midnight; off-UTC that is the evening BEFORE, so a
+    // Sunday weekOf rolled back a whole week. Pin to noon so the calendar date is what counts.
+    const weekStart = weekOf ? getWeekStart(new Date(/^\d{4}-\d{2}-\d{2}$/.test(weekOf) ? weekOf + 'T12:00:00' : weekOf)) : getWeekStart(new Date());
     const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+6);
     const wsStr = weekStart.toISOString().split('T')[0];
     const weStr = weekEnd.toISOString().split('T')[0];

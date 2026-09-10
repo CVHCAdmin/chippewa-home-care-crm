@@ -47,10 +47,13 @@
 //     UNCAPPED, which is how a missed clock-out inflates a paycheck.
 
 // Bi-weekly parity: which side of the anchor's fortnight this date falls on.
-// The extra ((x % 2) + 2) % 2 normalizes Postgres's truncate-toward-zero division,
-// which would otherwise return -1 for dates before the anchor and silently drop them.
+// FLOOR (not integer division, which truncates toward zero) so a date 1–6 days
+// BEFORE the anchor counts as the previous week, exactly like helpers/biweekly.js
+// and every JS calendar. The ((x % 2) + 2) % 2 normalizes negative weeks.
+// Writers align anchor_date to the row's own weekday (see alignBiweeklyAnchor),
+// so on-dates are exact multiples of 7 days and no rounding rule can disagree.
 const BIWEEKLY_ON_WEEK = `
-  ((((d.dt::date - COALESCE(s.anchor_date, s.effective_date, s.created_at::date))::int / 7) % 2) + 2) % 2 = 0
+  (((FLOOR((d.dt::date - COALESCE(s.anchor_date, s.effective_date, s.created_at::date))::numeric / 7)::int % 2) + 2) % 2) = 0
 `;
 
 const RESOLVED_START = `COALESCE(se.override_start_time, s.start_time)`;

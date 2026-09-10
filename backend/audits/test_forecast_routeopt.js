@@ -38,8 +38,12 @@ async function purge() {
   const token = jwt.sign({ id: admin, email: 'zz-fro-admin@cvhc.test', role: 'admin', name: 'ZZ FroAdmin' }, process.env.JWT_SECRET, { expiresIn: '1h' });
   const get = (p) => request(app).get(p).set('Authorization', `Bearer ${token}`);
 
-  // A fixed future date + its weekday. 2026-08-05 is a Wednesday.
-  const DATE = '2026-08-05';
+  // The next Wednesday at least 7 days out. (This used to be a fixed '2026-08-05'; once that
+  // date passed, the v36 trigger clamped the pattern's effective_date to today and the visit
+  // silently vanished from the plan — the test rotted, not the optimizer.)
+  const _d = new Date(); _d.setUTCHours(12, 0, 0, 0); _d.setUTCDate(_d.getUTCDate() + 7);
+  while (_d.getUTCDay() !== 3) _d.setUTCDate(_d.getUTCDate() + 1);
+  const DATE = _d.toISOString().slice(0, 10);
   const DOW = new Date(DATE + 'T12:00:00Z').getUTCDay();
 
   try {

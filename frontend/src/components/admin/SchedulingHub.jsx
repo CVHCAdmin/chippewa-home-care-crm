@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import { getTodayCT } from '../../utils/timezone';
 import { formatDate } from '../../utils/datetime';
+import { isBiweeklyOn } from '../../utils/biweekly';
 import AutoFillButton from './AutoFillButton';
 import DragDropScheduler from './DragDropScheduler';
 import ScheduleOptimizer from './ScheduleOptimizer';
@@ -58,9 +59,11 @@ const SchedulingHub = ({ token }) => {
   const [otWarning, setOtWarning]                   = useState(null);
   const [travelWarning, setTravelWarning]           = useState(null);
   const [cgPatterns, setCgPatterns]                  = useState(null);
-  const [biWeeklyAnchorDate, setBiWeeklyAnchorDate] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - d.getDay()); return d.toISOString().split('T')[0];
-  });
+  // Bi-weekly "first on date". '' = same as the Start Date. The server aligns whatever is
+  // sent to each selected weekday (utils/biweekly.js), so this no longer needs to be a
+  // Sunday — the old this-week's-Sunday default is what put a Sat+Sun pair on two
+  // different fortnights.
+  const [biWeeklyAnchorDate, setBiWeeklyAnchorDate] = useState('');
 
   // ── Edit Schedule Modal ──
   const [editModal, setEditModal]   = useState(null);
@@ -415,10 +418,8 @@ const SchedulingHub = ({ token }) => {
     recurring.forEach((a, i) => {
       recurring.slice(i + 1).forEach(b => {
         if (a.day_of_week !== b.day_of_week) return;
-        if (a.frequency === 'biweekly' && b.frequency === 'biweekly' && a.anchor_date && b.anchor_date) {
-          const diffWeeks = Math.floor(Math.abs(new Date(a.anchor_date) - new Date(b.anchor_date)) / (7*24*60*60*1000));
-          if (diffWeeks % 2 !== 0) return;
-        }
+        // Two bi-weekly rows on the same weekday only collide when they share a fortnight.
+        if (a.frequency === 'biweekly' && b.frequency === 'biweekly' && a.anchor_date && b.anchor_date && !isBiweeklyOn(a.anchor_date, b.anchor_date)) return;
         if (a.start_time < b.end_time && a.end_time > b.start_time) found.push({ a, b, day: a.day_of_week });
       });
     });
@@ -500,9 +501,9 @@ const SchedulingHub = ({ token }) => {
     if ((formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') && selectedDays.length === 0) { showMsg('Select at least one day', 'error'); return; }
     if (formData.startTime === formData.endTime) { showMsg('Start and end time cannot be the same', 'error'); return; }
     const today = new Date().toISOString().split('T')[0];
-    const anchorBase = new Date(biWeeklyAnchorDate + 'T12:00:00');
-    anchorBase.setDate(anchorBase.getDate() - anchorBase.getDay());
-    const anchorStr = anchorBase.toISOString().split('T')[0];
+    // Sent as typed; the server aligns it per weekday so Sat+Sun starting 9/12 anchor to
+    // 9/12 and 9/13 — the same weekend. (Normalizing to Sunday here used to split them.)
+    const anchorStr = biWeeklyAnchorDate || formData.date || today;
     setSaving(true);
     try {
       if (formData.scheduleType === 'multi-day' || formData.scheduleType === 'bi-weekly') {
@@ -712,10 +713,7 @@ const SchedulingHub = ({ token }) => {
         // server engine (so the calendar agrees with payroll/billing). The pattern still
         // shows in the schedule list with a Suspended badge so it can be resumed.
         if (s.suspended_from && dateStr >= s.suspended_from.slice(0, 10)) return;
-        if (s.frequency === 'biweekly' && s.anchor_date) {
-          const diffWeeks = Math.floor((target - new Date(s.anchor_date)) / (7*24*60*60*1000));
-          if (diffWeeks % 2 !== 0) return;
-        }
+        if (s.frequency === 'biweekly' && s.anchor_date && !isBiweeklyOn(dateStr, s.anchor_date)) return;
         // Check exceptions
         const exceptions = s.exceptions || [];
         const exc = exceptions.find(e => (e.exception_date || '').slice(0,10) === dateStr);
@@ -1704,8 +1702,9 @@ const SchedulingHub = ({ token }) => {
                     </div>
                     {formData.scheduleType === 'bi-weekly' && (
                       <div style={{ padding: '0.6rem', background: '#fff', borderRadius: '6px', border: '1px solid #FED7AA', marginBottom: '0.75rem' }}>
-                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.3rem' }}>📅 "ON" Week Start *</label>
-                        <input type='date' value={biWeeklyAnchorDate} onChange={e => setBiWeeklyAnchorDate(e.target.value)} style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '6px', fontSize: '0.88rem' }} />
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.3rem' }}>📅 First "on" date</label>
+                        <input type='date' value={biWeeklyAnchorDate || formData.date} onChange={e => setBiWeeklyAnchorDate(e.target.value)} style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '6px', fontSize: '0.88rem' }} />
+                        <div style={{ fontSize: '0.72rem', color: '#9A3412', marginTop: '0.3rem' }}>Defaults to the Start Date. Each selected day begins on or after this date, then repeats every 2 weeks — Sat + Sun starting on a Saturday stay on the same weekend.</div>
                       </div>
                     )}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
@@ -1986,11 +1985,11 @@ const SchedulingHub = ({ token }) => {
                 <div>
                   <div style={{ display: 'flex', gap: '0.3rem', marginBottom: editModal.frequency === 'biweekly' ? '0.4rem' : 0 }}>
                     <button type='button' onClick={() => setEditModal(prev => ({ ...prev, frequency: 'weekly', anchorDate: null }))} style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer', background: editModal.frequency === 'weekly' ? '#3B82F6' : '#E5E7EB', color: editModal.frequency === 'weekly' ? '#fff' : '#374151' }}>Weekly</button>
-                    <button type='button' onClick={() => { const now = new Date(); const s = new Date(now); s.setDate(now.getDate() - now.getDay()); setEditModal(prev => ({ ...prev, frequency: 'biweekly', anchorDate: prev.anchorDate || s.toISOString().split('T')[0] })); }} style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer', background: editModal.frequency === 'biweekly' ? '#F97316' : '#E5E7EB', color: editModal.frequency === 'biweekly' ? '#fff' : '#374151' }}>Bi-Weekly</button>
+                    <button type='button' onClick={() => setEditModal(prev => ({ ...prev, frequency: 'biweekly', anchorDate: prev.anchorDate || prev.editDate || getTodayCT() }))} style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: 'none', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer', background: editModal.frequency === 'biweekly' ? '#F97316' : '#E5E7EB', color: editModal.frequency === 'biweekly' ? '#fff' : '#374151' }}>Bi-Weekly</button>
                   </div>
                   {editModal.frequency === 'biweekly' && (
                     <div style={{ padding: '0.5rem', background: '#FFF7ED', borderRadius: '6px', border: '1px solid #FED7AA' }}>
-                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.25rem' }}>📅 "ON" Week Anchor</label>
+                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: '700', color: '#9A3412', marginBottom: '0.25rem' }}>📅 First "on" date (this weekday, then every 2 weeks)</label>
                       <input type='date' value={editModal.anchorDate || ''} onChange={e => setEditModal(prev => ({ ...prev, anchorDate: e.target.value }))} style={{ width: '100%', padding: '0.3rem', border: '1px solid #D1D5DB', borderRadius: '4px', fontSize: '0.82rem' }} />
                     </div>
                   )}

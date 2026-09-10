@@ -9,6 +9,7 @@ const auditLogger = require('./middleware/auditLogger');
 const dotenv = require('dotenv');
 const db = require('./db');
 const { clientIp } = require('./helpers/clientIp');
+const { alignBiweeklyAnchor } = require('./helpers/biweekly');
 
 dotenv.config();
 
@@ -360,7 +361,7 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
 // One-time shifts are a single occurrence, so they are always edited in place.
 app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
   const { scheduleId } = req.params;
-  const { clientId, caregiverId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate, endDate, isTraining } = req.body;
+  const { clientId, caregiverId, dayOfWeek, date, startTime, endTime, notes, frequency, effectiveDate, anchorDate: rawAnchorDate, endDate, isTraining } = req.body;
   const scope = String(req.body.scope || req.query.scope || '').toLowerCase();
   const editDate = req.body.editDate || req.query.editDate || null;
 
@@ -378,6 +379,24 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
     const before = cur.rows[0];
     const isRecurring = before.day_of_week !== null && before.day_of_week !== undefined;
     const today = (await client.query(`SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date,'YYYY-MM-DD') AS d`)).rows[0].d;
+
+    // Bi-weekly anchors are stored on the row's own weekday (helpers/biweekly.js).
+    // Resolve what this edit means for the anchor ONCE, for whichever branch runs:
+    // in-place edits align against the row's effective date; 'following' aligns
+    // against the split date — and neither flips the fortnight unless the caller
+    // moved the weekday or explicitly changed the anchor.
+    const resultingFrequency = frequency || before.frequency || 'weekly';
+    const resultingDow = (dayOfWeek !== undefined && dayOfWeek !== null) ? Number(dayOfWeek) : before.day_of_week;
+    const alignAnchor = (fromDate) => {
+      if (resultingFrequency !== 'biweekly' || resultingDow === null || resultingDow === undefined) return rawAnchorDate || null;
+      return alignBiweeklyAnchor({
+        anchorDate: rawAnchorDate || before.anchor_date,
+        effectiveDate: fromDate,
+        dayOfWeek: resultingDow,
+        previous: { anchor_date: before.anchor_date, day_of_week: before.day_of_week },
+      });
+    };
+    const anchorDate = alignAnchor(effectiveDate || before.eff_str);
 
     // In-place edit of this exact row (one-time shifts, and explicit scope=all).
     const editInPlace = async () => {
@@ -478,6 +497,7 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
     // every week BEFORE fromDate still generates from the old row, untouched. Only
     // scope='all' rewrites history, and only when asked for by name.
     const fromDate = editDate || today;
+    const followingAnchor = alignAnchor(fromDate);
     // Pattern hasn't produced any occurrence before fromDate → no history to protect.
     if (before.eff_str && before.eff_str >= fromDate) {
       const row = await editInPlace();
@@ -500,7 +520,7 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
     const overrides = {
       client_id: clientId, caregiver_id: caregiverId,
       day_of_week: dayOfWeek, start_time: startTime, end_time: endTime,
-      notes: notes, frequency: frequency, anchor_date: anchorDate, is_training: isTraining,
+      notes: notes, frequency: frequency, anchor_date: followingAnchor, is_training: isTraining,
       effective_date: fromDate,     // the new pattern starts here
       end_date: before.end_date,    // preserve any original termination date
     };

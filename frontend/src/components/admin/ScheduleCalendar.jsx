@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import { getTodayCT } from '../../utils/timezone';
+import { isBiweeklyOn } from '../../utils/biweekly';
 
 const ScheduleCalendar = ({ token }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -123,11 +124,8 @@ const ScheduleCalendar = ({ token }) => {
         // Only end_date matters — hide a deleted (ended) pattern from its end date
         // forward. end_date is a full ISO timestamp, so compare by date string.
         if (schedule.end_date && dateStr > schedule.end_date.slice(0, 10)) return;
-        // Biweekly check
-        if (schedule.frequency === 'biweekly' && schedule.anchor_date) {
-          const diffWeeks = Math.floor((targetDate - new Date(schedule.anchor_date)) / (7*24*60*60*1000));
-          if (diffWeeks % 2 !== 0) return;
-        }
+        // Biweekly: shared whole-day parity rule (utils/biweekly.js)
+        if (schedule.frequency === 'biweekly' && schedule.anchor_date && !isBiweeklyOn(dateStr, schedule.anchor_date)) return;
         // Check exceptions
         const exceptions = schedule.exceptions || [];
         const exc = exceptions.find(e => (e.exception_date || '').slice(0,10) === dateStr);
