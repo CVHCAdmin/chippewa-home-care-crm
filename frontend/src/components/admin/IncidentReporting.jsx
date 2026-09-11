@@ -169,6 +169,7 @@ const IncidentReporting = ({ token }) => {
       'accident': 'Accident',
       'fall': 'Fall',
       'medication_error': 'Medication Error',
+      'missing_medication': 'Missing / Misappropriated Medication',
       'behavioral': 'Behavioral Issue',
       'injury': 'Injury',
       'property_damage': 'Property Damage',
@@ -265,6 +266,7 @@ const IncidentReporting = ({ token }) => {
                   <option value="accident">Accident</option>
                   <option value="fall">Fall</option>
                   <option value="medication_error">Medication Error</option>
+                  <option value="missing_medication">Missing / Misappropriated Medication</option>
                   <option value="behavioral">Behavioral Issue</option>
                   <option value="injury">Injury</option>
                   <option value="property_damage">Property Damage</option>

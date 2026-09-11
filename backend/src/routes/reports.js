@@ -1566,7 +1566,7 @@ function renderClientReportPdf(doc, data) {
     data.incidents.forEach(ir => {
       ensureSpace(80);
       doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
-         .text(`${safe(ir.incident_type).toUpperCase()} — ${fmtDate(ir.incident_date)} ${safe(ir.incident_time)}`);
+         .text(`${safe(ir.incident_type).replace(/_/g, ' ').toUpperCase()} — ${fmtDate(ir.incident_date)} ${safe(ir.incident_time)}`);
       doc.fontSize(9).fillColor(MUTED).font('Helvetica')
          .text(`Severity: ${safe(ir.severity)}    Caregiver: ${safe(ir.caregiver_name)}    Reported by: ${safe(ir.reported_by)}`);
       doc.fillColor(INK).fontSize(10);
