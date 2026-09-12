@@ -4,6 +4,7 @@ import { toast } from '../Toast';
 // Complete billing system: Invoicing, A/R Aging, Authorizations, Claims, Payments
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
+import { cancelReasonLabel } from '../../utils/cancelReasons';
 
 // Helper to parse date without timezone shift
 const parseDate = (dateStr) => {
@@ -219,8 +220,14 @@ const BillingDashboard = ({ token }) => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not read this period');
-      if (!data.reconcile || data.reconcile.length === 0) {
+      if ((!data.reconcile || data.reconcile.length === 0) && (!data.skipped || data.skipped.length === 0)) {
         toast('No scheduled visits or clock-ins found for this client in that period', 'error');
+        return;
+      }
+      if (!data.reconcile || data.reconcile.length === 0) {
+        // Every visit in the period was cancelled as client-unavailable. Nothing to
+        // invoice — say why instead of the generic "nothing found".
+        toast(`Nothing to bill: all ${data.skipped.length} visit${data.skipped.length === 1 ? '' : 's'} in this period were cancelled (client unavailable / refused)`, 'error');
         return;
       }
       // Everything starts on its default (scheduled, except unscheduled punches).
@@ -1218,6 +1225,34 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {(reconcileData.skipped || []).length > 0 && (
+              <div style={{ marginTop: '1rem', padding: '0.75rem 0.9rem', border: '1px solid #FECACA', background: '#FEF2F2', borderRadius: 8 }}>
+                <div style={{ fontWeight: 800, color: '#991B1B', marginBottom: '0.25rem' }}>
+                  🚫 Not billed — {reconcileData.skipped.length} visit{reconcileData.skipped.length === 1 ? '' : 's'} cancelled in this period
+                </div>
+                <div style={{ fontSize: '0.82rem', color: '#7F1D1D', marginBottom: '0.5rem' }}>
+                  These days are excluded from the invoice on purpose. They are listed so you can see why they are missing.
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="table" style={{ fontSize: '0.84rem', marginBottom: 0 }}>
+                    <thead><tr><th>Date</th><th>Scheduled</th><th>Caregiver</th><th>Reason</th><th>Reported by</th><th>Note</th></tr></thead>
+                    <tbody>
+                      {reconcileData.skipped.map((s, i) => (
+                        <tr key={`${s.service_date}-${i}`}>
+                          <td>{formatDate(s.service_date, { month: 'short', day: 'numeric' })}</td>
+                          <td>{hhmm(s.scheduled_start)}–{hhmm(s.scheduled_end)}</td>
+                          <td>{s.caregiver_name || '—'}</td>
+                          <td style={{ fontWeight: 700 }}>{cancelReasonLabel(s.reason)}</td>
+                          <td>{s.reported_by || '—'}{s.reported_by_role === 'caregiver' ? ' (caregiver)' : ''}</td>
+                          <td style={{ color: '#6B7280' }}>{(s.notes || '').replace(/^Client unavailable — [^:]+:?\s*/, '') || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 

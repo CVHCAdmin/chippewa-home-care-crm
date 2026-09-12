@@ -3,7 +3,13 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { auditLog } = require('../middleware/shared');
+const { auditLog, requireAdmin } = require('../middleware/shared');
+
+// Office-only. server.js mounts this router behind verifyToken alone, which let
+// any caregiver login cancel or rewrite ANY occurrence on ANY schedule. The
+// caregiver-facing way to take a visit off the books is
+// POST /api/emergency/client-unavailable (ownership-checked) or the miss report.
+router.use(requireAdmin);
 
 // GET /api/schedule-exceptions — all exceptions (optionally filtered by schedule_id or date range)
 router.get('/', async (req, res) => {

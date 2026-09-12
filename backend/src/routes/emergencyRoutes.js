@@ -5,6 +5,9 @@ const db = require('../db');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('../middleware/auth');
 const requireAdmin = require('../middleware/authorizeAdmin');
+const { auditLog } = require('../middleware/shared');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
+const { CLIENT_UNAVAILABLE_REASONS } = require('../helpers/cancelReasons');
 
 // ═══════════════════════════════════════════
 // SHIFT MISS REPORTING (caregiver-initiated)
@@ -86,11 +89,12 @@ router.post('/miss-report', auth, async (req, res) => {
     if (scheduleId && date) {
       try {
         await db.query(
-          `INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_notes, created_by)
-           VALUES ($1, $2, 'cancelled', $3, $4)
+          `INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_notes, created_by, cancel_reason)
+           VALUES ($1, $2, 'cancelled', $3, $4, 'caregiver_callout')
            ON CONFLICT (schedule_id, exception_date) DO UPDATE SET
              exception_type = 'cancelled',
-             override_notes = EXCLUDED.override_notes`,
+             override_notes = EXCLUDED.override_notes,
+             cancel_reason  = 'caregiver_callout'`,
           [scheduleId, date, `Called out: ${reason || 'no reason given'}`, caregiverId]
         );
       } catch (e) {
@@ -402,6 +406,123 @@ router.get('/my-shifts', auth, async (req, res) => {
     );
     res.json(result.rows);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════
+// CLIENT UNAVAILABLE (caregiver- or office-initiated)
+// ═══════════════════════════════════════════
+// POST /api/emergency/client-unavailable
+//   { scheduleId, date: 'YYYY-MM-DD', reason: <CLIENT_UNAVAILABLE_REASONS key>, note? }
+//
+// The client refused care, wasn't home, was in the hospital, or cancelled ahead.
+// This is the mirror image of the miss report: the visit is cancelled so that
+// nothing bills, pays, reminds or no-show-alerts for it — but there is NO
+// caregiver absence and NO open shift, because nobody needs covering.
+//
+// Why it matters for billing: the invoice engine bills every scheduled
+// occurrence at its scheduled hours even with no clock-in (status 'no_punch').
+// Without this record a refused visit is invoiced. With it, the day vanishes
+// from the invoice and shows up in the "Not billed" list of the review step.
+//
+// A caregiver may only cancel their OWN occurrence, and only for a date from
+// seven days ago through tomorrow. Admins may cancel any occurrence, any date.
+router.post('/client-unavailable', auth, async (req, res) => {
+  try {
+    const { scheduleId, date, reason, note } = req.body;
+    const isAdmin = req.user.role === 'admin';
+
+    if (!scheduleId || !date || !reason) {
+      return res.status(400).json({ error: 'scheduleId, date and reason are required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+    const label = CLIENT_UNAVAILABLE_REASONS[reason];
+    if (!label) {
+      return res.status(400).json({ error: `reason must be one of: ${Object.keys(CLIENT_UNAVAILABLE_REASONS).join(', ')}` });
+    }
+    if (reason === 'other' && !(note && String(note).trim())) {
+      return res.status(400).json({ error: 'Please add a note when the reason is Other' });
+    }
+
+    if (!isAdmin) {
+      const win = await db.query(`
+        SELECT ($1::date BETWEEN (NOW() AT TIME ZONE 'America/Chicago')::date - 7
+                           AND (NOW() AT TIME ZONE 'America/Chicago')::date + 1) AS ok`, [date]);
+      if (!win.rows[0].ok) {
+        return res.status(400).json({ error: 'You can report a client as unavailable for the last 7 days through tomorrow. For older dates, contact the office.' });
+      }
+    }
+
+    // Does this schedule actually produce a visit on that date, and whose is it?
+    // The shared engine resolves per-day overrides (a covered shift belongs to
+    // the covering caregiver that day) and hides already-cancelled occurrences.
+    const occ = await db.query(`
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT occ.caregiver_id, occ.client_id, occ.start_time::text AS start_time, occ.end_time::text AS end_time
+        FROM occ WHERE occ.schedule_id = $3 AND occ.occ_date = $1::date`,
+      [date, date, scheduleId]);
+
+    let visit = occ.rows[0] || null;
+    if (!visit) {
+      // Already cancelled (e.g. a second tap, or the office got there first)?
+      // Then just record the better reason instead of failing.
+      const existing = await db.query(`
+        SELECT se.id, se.exception_type, s.caregiver_id, s.client_id, s.start_time::text AS start_time, s.end_time::text AS end_time
+          FROM schedule_exceptions se JOIN schedules s ON s.id = se.schedule_id
+         WHERE se.schedule_id = $1 AND se.exception_date = $2::date AND se.exception_type = 'cancelled'`,
+        [scheduleId, date]);
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: 'No visit is scheduled on that date for this shift' });
+      }
+      visit = existing.rows[0];
+    }
+
+    if (!isAdmin && visit.caregiver_id !== req.user.id) {
+      return res.status(403).json({ error: 'That visit is not on your schedule' });
+    }
+
+    const noteText = note && String(note).trim() ? String(note).trim().slice(0, 500) : '';
+    const overrideNotes = `Client unavailable — ${label}${noteText ? `: ${noteText}` : ''}`;
+
+    const saved = await db.query(`
+      INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_notes, created_by, cancel_reason)
+      VALUES ($1, $2::date, 'cancelled', $3, $4, $5)
+      ON CONFLICT (schedule_id, exception_date) DO UPDATE SET
+        exception_type      = 'cancelled',
+        override_start_time = NULL,
+        override_end_time   = NULL,
+        override_notes      = EXCLUDED.override_notes,
+        cancel_reason       = EXCLUDED.cancel_reason
+      RETURNING *`,
+      [scheduleId, date, overrideNotes, req.user.id, reason]);
+
+    await auditLog(req.user.id, 'CLIENT_UNAVAILABLE', 'schedules', scheduleId, null,
+      { date, reason, note: noteText || null, exception_id: saved.rows[0].id }, reason);
+
+    // Tell the office. An admin recording it themselves doesn't need a notification.
+    if (!isAdmin) {
+      const [who, client, admins] = await Promise.all([
+        db.query(`SELECT first_name, last_name FROM users WHERE id = $1`, [req.user.id]),
+        db.query(`SELECT first_name, last_name FROM clients WHERE id = $1`, [visit.client_id]),
+        db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`),
+      ]);
+      const cg = who.rows[0] ? `${who.rows[0].first_name} ${who.rows[0].last_name}` : 'A caregiver';
+      const cl = client.rows[0] ? `${client.rows[0].first_name} ${client.rows[0].last_name}` : 'a client';
+      const msg = `${cg} reported ${cl} unavailable on ${date} (${visit.start_time?.slice(0, 5)}–${visit.end_time?.slice(0, 5)}): ${label}${noteText ? ` — ${noteText}` : ''}. The visit will not be billed or paid.`;
+      for (const a of admins.rows) {
+        await db.query(`
+          INSERT INTO notifications (id, user_id, type, title, message, is_read, created_at)
+          VALUES ($1, $2, 'client_unavailable', 'Client unavailable — visit not billed', $3, false, NOW())`,
+          [uuidv4(), a.id, msg]);
+      }
+    }
+
+    res.status(201).json({ success: true, exception: saved.rows[0], label });
+  } catch (error) {
+    console.error('[client-unavailable]', error);
     res.status(500).json({ error: error.message });
   }
 });

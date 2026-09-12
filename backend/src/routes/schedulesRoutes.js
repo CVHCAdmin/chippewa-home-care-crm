@@ -319,12 +319,19 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
 
     // ── Scope: cancel this single occurrence ──
     if (scope === 'this' && date && isRecurring) {
+      // ?cancelReason= records WHY (client_refused, client_hospital, ...) so the
+      // billing review can list the day as "not billed — client unavailable".
+      // Unknown values are dropped rather than stored.
+      const { CANCEL_REASONS } = require('../helpers/cancelReasons');
+      const cancelReason = CANCEL_REASONS[req.query.cancelReason] ? req.query.cancelReason : null;
       try {
         await db.query(
-          `INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by)
-           VALUES ($1, $2, 'cancelled', $3)
-           ON CONFLICT (schedule_id, exception_date) DO UPDATE SET exception_type = 'cancelled'`,
-          [scheduleId, date, req.user.id]
+          `INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, created_by, cancel_reason)
+           VALUES ($1, $2, 'cancelled', $3, $4)
+           ON CONFLICT (schedule_id, exception_date) DO UPDATE SET
+             exception_type = 'cancelled',
+             cancel_reason  = COALESCE(EXCLUDED.cancel_reason, schedule_exceptions.cancel_reason)`,
+          [scheduleId, date, req.user.id, cancelReason]
         );
       } catch (e) {
         // Table might not exist yet

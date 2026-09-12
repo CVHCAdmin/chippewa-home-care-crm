@@ -213,6 +213,46 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
     ORDER BY occ.occ_date, occ.start_time
   `, [billingPeriodStart, billingPeriodEnd, clientId]);
 
+  // ── Days deliberately NOT billed ─────────────────────────────────────────
+  // A cancelled occurrence does not exist to the engine above, which is exactly
+  // right for the invoice — but the reviewer still needs to see that Tuesday is
+  // missing because the client refused care, not because someone forgot to
+  // schedule it. Reason-coded cancellations (client refused / not home /
+  // hospital / cancelled ahead, caregiver call-out, office) are surfaced as an
+  // informational list; they never become line items.
+  let skipped = [];
+  try {
+    const skippedResult = await db.query(`
+      SELECT se.exception_date, se.cancel_reason, se.override_notes, se.created_at,
+             s.start_time::text AS start_time, s.end_time::text AS end_time,
+             u.first_name  AS caregiver_first_name, u.last_name  AS caregiver_last_name,
+             cu.first_name AS reported_by_first,   cu.last_name  AS reported_by_last, cu.role AS reported_by_role
+        FROM schedule_exceptions se
+        JOIN schedules s ON s.id = se.schedule_id
+        LEFT JOIN users u  ON u.id  = s.caregiver_id
+        LEFT JOIN users cu ON cu.id = se.created_by
+       WHERE se.exception_type = 'cancelled'
+         AND se.cancel_reason IS NOT NULL
+         AND COALESCE(se.override_client_id, s.client_id) = $1
+         AND se.exception_date BETWEEN $2::date AND $3::date
+       ORDER BY se.exception_date, s.start_time
+    `, [clientId, billingPeriodStart, billingPeriodEnd]);
+    skipped = skippedResult.rows.map(r => ({
+      service_date: toDateOnly(r.exception_date),
+      reason: r.cancel_reason,
+      notes: r.override_notes,
+      scheduled_start: r.start_time,
+      scheduled_end: r.end_time,
+      caregiver_name: `${r.caregiver_first_name || ''} ${r.caregiver_last_name || ''}`.trim(),
+      reported_by: `${r.reported_by_first || ''} ${r.reported_by_last || ''}`.trim(),
+      reported_by_role: r.reported_by_role,
+      reported_at: r.created_at,
+    }));
+  } catch (e) {
+    // Pre-v63 schema (no cancel_reason column): the invoice must still build.
+    console.error('[billing] skipped-days lookup failed:', e.message);
+  }
+
   const expectedVisits = occResult.rows.map(r => ({
     date: toDateOnly(r.occ_date),
     caregiver_id: r.caregiver_id,
@@ -621,7 +661,7 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
   reconcile.sort((a, b) => (a.service_date || '').localeCompare(b.service_date || '')
     || (a.scheduled_start || '').localeCompare(b.scheduled_start || ''));
 
-  return { lineItems, total: invoiceTotal, reconcile };
+  return { lineItems, total: invoiceTotal, reconcile, skipped };
 }
 
 /**
@@ -893,16 +933,18 @@ router.post('/invoices/reconcile', auth, async (req, res) => {
     if (clientResult.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
     const c = clientResult.rows[0];
 
-    const { reconcile, total } = await generateLineItems(
+    const { reconcile, total, skipped } = await generateLineItems(
       clientId, c.referral_source_id, c.care_type_id, billingPeriodStart, billingPeriodEnd,
       { choices: choices || {} }
     );
 
     res.json({
       reconcile,
+      skipped: skipped || [],
       total,
       counts: {
         days: reconcile.length,
+        skipped: (skipped || []).length,
         needsChoice: reconcile.filter(r => r.needs_choice).length,
         match:       reconcile.filter(r => r.status === 'match').length,
         noPunch:     reconcile.filter(r => r.status === 'no_punch').length,

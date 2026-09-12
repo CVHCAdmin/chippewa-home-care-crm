@@ -13,6 +13,7 @@ import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, g
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { isBiweeklyOn, toYMD } from '../utils/biweekly';
 import { setShiftBusy } from '../shiftGuard';
+import { CLIENT_UNAVAILABLE_REASONS } from '../utils/cancelReasons';
 import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
 import SignaturePad from './SignaturePad';
@@ -80,6 +81,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [swapRequests, setSwapRequests] = useState([]);
   const [swapModal, setSwapModal] = useState(null); // shift being offered for swap
   const [swapForm, setSwapForm] = useState({ targetCaregiverId: '', reason: '' });
+  // "Client refused / not available": takes the visit off the books so it is
+  // neither billed nor paid. No coverage is requested (nobody needs covering).
+  const [unavailModal, setUnavailModal] = useState(null); // resolved shift { id, resolvedDate, ... }
+  const [unavailForm, setUnavailForm] = useState({ reason: '', note: '' });
+  const [unavailSubmitting, setUnavailSubmitting] = useState(false);
   const [moveModal, setMoveModal] = useState(null); // shift being asked to move to another day/time
   const [moveForm, setMoveForm] = useState({ date: '', startTime: '', endTime: '', reason: '' });
   const [myReschedules, setMyReschedules] = useState([]); // this caregiver's own pending asks
@@ -103,6 +109,26 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     } catch {}
   };
   useEffect(() => { loadSwapRequests(); loadOtherCaregivers(); }, [user?.id]);
+
+  const submitClientUnavailable = async () => {
+    if (!unavailModal) return;
+    if (!unavailForm.reason) { toast('Pick a reason', 'error'); return; }
+    if (unavailForm.reason === 'other' && !unavailForm.note.trim()) { toast('Add a short note for "Other"', 'error'); return; }
+    const date = unavailModal.resolvedDate || (unavailModal.date && unavailModal.date.split('T')[0]);
+    setUnavailSubmitting(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/emergency/client-unavailable`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ scheduleId: unavailModal.id, date, reason: unavailForm.reason, note: unavailForm.note || null }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || 'Could not save');
+      toast('Saved — the office has been notified and this visit will not be billed');
+      setUnavailModal(null); setUnavailForm({ reason: '', note: '' });
+      loadData();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setUnavailSubmitting(false); }
+  };
 
   const submitSwapRequest = async () => {
     if (!swapModal || !swapForm.targetCaregiverId) { toast('Pick a coworker to swap with', 'error'); return; }
@@ -1951,9 +1977,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
     schedules.forEach(s => {
       if (s.date) {
-        // One-time shift — include if today or future
-        if (s.date.split('T')[0] >= todayStr) {
-          concreteShifts.push({ ...s, resolvedDate: s.date.split('T')[0] });
+        // One-time shift — include if today or future. A one-time row can carry an
+        // exception too (a client-unavailable cancel is recorded that way, so the
+        // server engine and this list agree): cancelled → gone, modified → new times.
+        const dateStr = s.date.split('T')[0];
+        if (dateStr >= todayStr) {
+          const resolved = applyExceptionForDate(s, dateStr);
+          if (resolved) concreteShifts.push({ ...resolved, resolvedDate: dateStr });
         }
       } else if (s.day_of_week != null) {
         // Recurring template — expand into concrete dates for next 14 days,
@@ -2067,6 +2097,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                       <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => { setUnavailModal(s); setUnavailForm({ reason: '', note: '' }); }}
+                        style={{ background: 'none', border: '1px solid #FECACA', color: '#B91C1C', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                        title="Client refused care, wasn't home, or cancelled — the visit won't be billed">🚫 Client N/A</button>
                       <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
                         style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
                         title="Ask a coworker to take this shift">🔄 Swap</button>
@@ -2094,6 +2127,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                       <div style={{ fontSize: '0.9rem', color: '#666' }}>{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => { setUnavailModal(s); setUnavailForm({ reason: '', note: '' }); }}
+                        style={{ background: 'none', border: '1px solid #FECACA', color: '#B91C1C', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
+                        title="Client refused care, wasn't home, or cancelled — the visit won't be billed">🚫 Client N/A</button>
                       <button onClick={() => { setSwapModal(s); setSwapForm({ targetCaregiverId: '', reason: '' }); }}
                         style={{ background: 'none', border: '1px solid #C7D2FE', color: '#4338CA', padding: '0.3rem 0.6rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
                         title="Ask a coworker to take this shift">🔄 Swap</button>
@@ -2536,6 +2572,36 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <div className="form-actions">
               <button className="btn btn-secondary" onClick={() => setSwapModal(null)}>Cancel</button>
               <button className="btn btn-primary" onClick={submitSwapRequest}>Send Request</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {unavailModal && (
+        <div className="modal active" onClick={() => !unavailSubmitting && setUnavailModal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header"><h2>🚫 Client Not Available</h2><button className="close-btn" onClick={() => setUnavailModal(null)}>×</button></div>
+            <p className="text-muted">
+              {getClientName(unavailModal.client_id)} on {unavailModal.resolvedDate || (unavailModal.date && unavailModal.date.split('T')[0])} ({formatTime(unavailModal.start_time)}–{formatTime(unavailModal.end_time)})
+            </p>
+            <p style={{ fontSize: '0.85rem', color: '#374151', margin: '0 0 0.75rem' }}>
+              Use this when the <strong>client</strong> is the reason the visit didn't happen. The office is notified and the visit is not billed or paid.
+              If <strong>you</strong> can't make a shift, use <em>Report a Missed Shift</em> instead so it can be covered.
+            </p>
+            <div className="form-group">
+              <label>What happened? *</label>
+              <select value={unavailForm.reason} onChange={(e) => setUnavailForm({ ...unavailForm, reason: e.target.value })}>
+                <option value="">Pick a reason…</option>
+                {CLIENT_UNAVAILABLE_REASONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Note {unavailForm.reason === 'other' ? '*' : '(optional)'}</label>
+              <textarea value={unavailForm.note} onChange={(e) => setUnavailForm({ ...unavailForm, note: e.target.value })} placeholder="Who you spoke to, what they said, anything the office should know" rows={3} maxLength={500} />
+            </div>
+            <div className="form-actions">
+              <button className="btn btn-secondary" onClick={() => setUnavailModal(null)} disabled={unavailSubmitting}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitClientUnavailable} disabled={unavailSubmitting || !unavailForm.reason}>{unavailSubmitting ? 'Saving…' : 'Save'}</button>
             </div>
           </div>
         </div>

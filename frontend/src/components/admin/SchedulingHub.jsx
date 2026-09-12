@@ -694,7 +694,11 @@ const SchedulingHub = ({ token }) => {
     const results = [];
     calSchedules.forEach(s => {
       if (s.date) {
-        if (s.date.split('T')[0] === dateStr) results.push(s);
+        if (s.date.split('T')[0] === dateStr) {
+          // One-time rows can be cancelled via exception (client unavailable) — match the server engine.
+          const exc = (s.exceptions || []).find(e => (e.exception_date || '').slice(0, 10) === dateStr);
+          if (!(exc && exc.exception_type === 'cancelled')) results.push(s);
+        }
         return;
       }
       if (s.day_of_week !== null && s.day_of_week !== undefined) {

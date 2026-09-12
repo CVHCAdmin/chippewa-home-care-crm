@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { getTodayCT } from '../../utils/timezone';
 import { isBiweeklyOn } from '../../utils/biweekly';
+import { CLIENT_UNAVAILABLE_REASONS } from '../../utils/cancelReasons';
 
 const PALETTE = [
   '#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6',
@@ -91,6 +92,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
   // ── Delete scope modal ──
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { shift, date }
+  const [unavailForm, setUnavailForm]     = useState(null); // { reason, note } — "client unavailable" sub-step of the delete modal
 
   // ── Drag & drop ──
   const [dragShift, setDragShift]   = useState(null); // { shift, fromDate }
@@ -153,7 +155,11 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       // One-off shift
       if (s.date) {
         if (s.caregiver_id !== caregiverId) return;
-        if (s.date.slice(0,10) === dateStr) results.push({ ...s, _isOneTime: true });
+        if (s.date.slice(0,10) === dateStr) {
+          // One-time rows can be cancelled via exception (client unavailable) — match the server engine.
+          const exc = (s.exceptions || []).find(e => (e.exception_date || '').slice(0,10) === dateStr);
+          if (!(exc && exc.exception_type === 'cancelled')) results.push({ ...s, _isOneTime: true });
+        }
         return;
       }
 
@@ -388,6 +394,32 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
   function openDeleteConfirm(shift, date) {
     setDeleteConfirm({ shift, date });
+  }
+
+  // Client refused / not home / hospital / cancelled ahead: the visit is cancelled
+  // with a REASON so billing review lists it as "not billed — client unavailable"
+  // instead of it silently disappearing. Works for one-time and recurring rows.
+  async function handleClientUnavailable() {
+    if (!deleteConfirm || !unavailForm) return;
+    const { shift, date } = deleteConfirm;
+    const occDate = date || (shift.date ? String(shift.date).slice(0, 10) : null);
+    if (!occDate) { showToast('Could not determine the visit date — reopen the shift from its day cell.', 'error'); return; }
+    if (!unavailForm.reason) { showToast('Pick a reason', 'error'); return; }
+    if (unavailForm.reason === 'other' && !(unavailForm.note || '').trim()) { showToast('Add a note for "Other"', 'error'); return; }
+    setSaving(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/emergency/client-unavailable`, {
+        method: 'POST', headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+        body: JSON.stringify({ scheduleId: shift.id, date: occDate, reason: unavailForm.reason, note: unavailForm.note || null }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || 'Could not save');
+      showToast('Visit marked client-unavailable — it will not be billed');
+      setDeleteConfirm(null); setUnavailForm(null); setEditShift(null);
+      await loadAll();
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally { setSaving(false); }
   }
 
   async function handleDeleteShift(scope) {
@@ -1451,14 +1483,55 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         const { shift, date } = deleteConfirm;
         const isRecurring = shift.day_of_week !== null && shift.day_of_week !== undefined;
         const isSplit = shift.is_split_shift;
-        const dateLabel = date ? new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }) : '';
+        const occDate = date || (shift.date ? String(shift.date).slice(0, 10) : null);
+        const dateLabel = occDate ? new Date(occDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }) : '';
+
+        // Sub-step: the CLIENT is why the visit isn't happening. Records a reason
+        // so the billing review lists the day as "not billed" instead of it vanishing.
+        if (unavailForm) {
+          return (
+            <Modal title="Client refused / not available" onClose={() => { setUnavailForm(null); setDeleteConfirm(null); }}>
+              <p style={{ margin:'0 0 12px', fontSize:14, color:'#374151' }}>
+                {dateLabel} · {shift.start_time?.slice(0,5)}–{shift.end_time?.slice(0,5)}. This one visit is cancelled and
+                <strong> will not be billed or paid</strong>. {isRecurring ? 'Every other occurrence continues.' : ''}
+              </p>
+              <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#374151', marginBottom:4 }}>Reason *</label>
+              <select value={unavailForm.reason} onChange={e => setUnavailForm({ ...unavailForm, reason: e.target.value })}
+                style={{ width:'100%', padding:'8px 10px', border:'1px solid #D1D5DB', borderRadius:6, fontSize:13, marginBottom:10 }}>
+                <option value="">Pick a reason…</option>
+                {CLIENT_UNAVAILABLE_REASONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+              <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#374151', marginBottom:4 }}>Note {unavailForm.reason === 'other' ? '*' : '(optional)'}</label>
+              <textarea value={unavailForm.note} onChange={e => setUnavailForm({ ...unavailForm, note: e.target.value })} rows={3} maxLength={500}
+                placeholder="Who called, what they said, anything billing should know"
+                style={{ width:'100%', padding:'8px 10px', border:'1px solid #D1D5DB', borderRadius:6, fontSize:13, boxSizing:'border-box', marginBottom:12 }} />
+              <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+                <button onClick={() => setUnavailForm(null)} style={cancelBtn} disabled={saving}>Back</button>
+                <button onClick={handleClientUnavailable} disabled={saving || !unavailForm.reason} style={{ ...primaryBtn, background:'#B91C1C' }}>
+                  {saving ? 'Saving...' : 'Mark client unavailable'}
+                </button>
+              </div>
+            </Modal>
+          );
+        }
+
+        const unavailOption = (
+          <button onClick={() => setUnavailForm({ reason:'', note:'' })} disabled={saving || !occDate} style={{
+            padding:'12px 16px', borderRadius:8, border:'1px solid #FECACA', cursor:'pointer',
+            background:'#FEF2F2', textAlign:'left', fontSize:13,
+          }}>
+            <div style={{ fontWeight:700, color:'#991B1B' }}>🚫 Client refused / not available ({dateLabel})</div>
+            <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Cancel this one visit with a reason. It won't be billed or paid, and shows as "not billed" in the invoice review.</div>
+          </button>
+        );
 
         if (!isRecurring) {
           // One-time shift — simple confirm
           return (
             <Modal title="Delete Shift" onClose={() => setDeleteConfirm(null)}>
+              <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:14 }}>{unavailOption}</div>
               <p style={{ margin:'0 0 16px', fontSize:14, color:'#374151' }}>
-                {isSplit ? 'Delete both segments of this split shift?' : 'Delete this shift?'}
+                {isSplit ? 'Or delete both segments of this split shift?' : 'Or delete this shift entirely?'}
               </p>
               <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
                 <button onClick={() => setDeleteConfirm(null)} style={cancelBtn}>Cancel</button>
@@ -1478,6 +1551,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               What would you like to delete?
             </p>
             <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {unavailOption}
               <button onClick={() => handleDeleteShift('this')} disabled={saving} style={{
                 padding:'12px 16px', borderRadius:8, border:'1px solid #D1D5DB', cursor:'pointer',
                 background:'#fff', textAlign:'left', fontSize:13,
