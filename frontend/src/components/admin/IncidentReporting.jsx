@@ -3,6 +3,33 @@ import { confirm } from '../ConfirmModal';
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import { formatDate } from '../../utils/datetime';
+import { getTodayCT } from '../../utils/timezone';
+import { INCIDENT_TYPES, INCIDENT_STATUSES, incidentLabel } from '../../utils/incidentOptions';
+import IncidentDetail from './IncidentDetail';
+
+// Form defaults. Date is the Chicago calendar day and time is the browser's local
+// clock (the old toISOString() defaults were UTC, so evening reports got tomorrow's
+// date and a time 5-6 hours ahead).
+const blankIncidentForm = () => ({
+  clientId: '',
+  caregiverId: '',
+  incidentType: 'accident',
+  severity: 'moderate',
+  incidentDate: getTodayCT(),
+  incidentTime: new Date().toTimeString().slice(0, 5),
+  description: '',
+  witnesses: '',
+  injuriesOrDamage: '',
+  actionsTaken: '',
+  followUpRequired: false,
+  followUpNotes: '',
+  reportedBy: '',
+  reportedDate: getTodayCT(),
+  reporterContactName: '',
+  reporterPhone: '',
+  reporterEmail: '',
+  responseDueDate: '',
+});
 
 const IncidentReporting = ({ token }) => {
   const [clients, setClients] = useState([]);
@@ -13,22 +40,9 @@ const IncidentReporting = ({ token }) => {
   const [filter, setFilter] = useState('all'); // all, critical, severe, moderate, minor
   const [searchTerm, setSearchTerm] = useState('');
   const [message, setMessage] = useState('');
-  const [formData, setFormData] = useState({
-    clientId: '',
-    caregiverId: '',
-    incidentType: 'accident',
-    severity: 'moderate',
-    incidentDate: new Date().toISOString().split('T')[0],
-    incidentTime: new Date().toISOString().split('T')[1].slice(0, 5),
-    description: '',
-    witnesses: '',
-    injuriesOrDamage: '',
-    actionsTaken: '',
-    followUpRequired: false,
-    followUpNotes: '',
-    reportedBy: '',
-    reportedDate: new Date().toISOString().split('T')[0]
-  });
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [detailId, setDetailId] = useState(null);
+  const [formData, setFormData] = useState(blankIncidentForm);
 
   useEffect(() => {
     loadData();
@@ -86,30 +100,17 @@ const IncidentReporting = ({ token }) => {
         body: JSON.stringify(formData)
       });
 
+      const created = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to report incident');
+        throw new Error(created.error || 'Failed to report incident');
       }
 
       setMessage('Incident reported successfully!');
-      setFormData({
-        clientId: '',
-        caregiverId: '',
-        incidentType: 'accident',
-        severity: 'moderate',
-        incidentDate: new Date().toISOString().split('T')[0],
-        incidentTime: new Date().toISOString().split('T')[1].slice(0, 5),
-        description: '',
-        witnesses: '',
-        injuriesOrDamage: '',
-        actionsTaken: '',
-        followUpRequired: false,
-        followUpNotes: '',
-        reportedBy: '',
-        reportedDate: new Date().toISOString().split('T')[0]
-      });
+      setFormData(blankIncidentForm());
       setShowForm(false);
-      loadData();
+      // Straight into the case file so the investigation can start.
+      if (created.id) setDetailId(created.id);
+      else loadData();
     } catch (error) {
       setMessage('Error: ' + error.message);
     }
@@ -124,7 +125,7 @@ const IncidentReporting = ({ token }) => {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
-      if (!response.ok) throw new Error('Failed to delete');
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Failed to delete');
 
       setMessage('Incident deleted');
       setTimeout(() => setMessage(''), 2000);
@@ -164,30 +165,21 @@ const IncidentReporting = ({ token }) => {
     return severity.charAt(0).toUpperCase() + severity.slice(1);
   };
 
-  const getIncidentTypeLabel = (type) => {
-    const labels = {
-      'accident': 'Accident',
-      'fall': 'Fall',
-      'medication_error': 'Medication Error',
-      'missing_medication': 'Missing / Misappropriated Medication',
-      'behavioral': 'Behavioral Issue',
-      'injury': 'Injury',
-      'property_damage': 'Property Damage',
-      'health_emergency': 'Health Emergency',
-      'other': 'Other'
-    };
-    return labels[type] || type;
-  };
+  const getIncidentTypeLabel = (type) => incidentLabel('type', type);
+
+  const statusColor = (status) => ({ open: '#DC2626', investigating: '#D97706', closed: '#059669' }[status || 'open'] || '#6B7280');
 
   const filteredIncidents = incidents
     .filter(incident => {
       if (filter !== 'all' && incident.severity !== filter) return false;
+      if (statusFilter !== 'all' && (incident.status || 'open') !== statusFilter) return false;
       if (searchTerm) {
         const term = searchTerm.toLowerCase();
         return (
           getClientName(incident.client_id).toLowerCase().includes(term) ||
           (incident.description || '').toLowerCase().includes(term) ||
-          (incident.incident_type || '').toLowerCase().includes(term)
+          (incident.incident_type || '').toLowerCase().includes(term) ||
+          (incident.incident_number || '').toLowerCase().includes(term)
         );
       }
       return true;
@@ -200,6 +192,10 @@ const IncidentReporting = ({ token }) => {
         <div className="spinner"></div>
       </div>
     );
+  }
+
+  if (detailId) {
+    return <IncidentDetail incidentId={detailId} token={token} onBack={() => { setDetailId(null); loadData(); }} />;
   }
 
   return (
@@ -263,15 +259,7 @@ const IncidentReporting = ({ token }) => {
                   value={formData.incidentType}
                   onChange={(e) => setFormData({ ...formData, incidentType: e.target.value })}
                 >
-                  <option value="accident">Accident</option>
-                  <option value="fall">Fall</option>
-                  <option value="medication_error">Medication Error</option>
-                  <option value="missing_medication">Missing / Misappropriated Medication</option>
-                  <option value="behavioral">Behavioral Issue</option>
-                  <option value="injury">Injury</option>
-                  <option value="property_damage">Property Damage</option>
-                  <option value="health_emergency">Health Emergency</option>
-                  <option value="other">Other</option>
+                  {INCIDENT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
 
@@ -323,6 +311,43 @@ const IncidentReporting = ({ token }) => {
                   type="date"
                   value={formData.reportedDate}
                   onChange={(e) => setFormData({ ...formData, reportedDate: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Reporter Contact Name</label>
+                <input
+                  type="text"
+                  value={formData.reporterContactName}
+                  onChange={(e) => setFormData({ ...formData, reporterContactName: e.target.value })}
+                  placeholder="e.g. the care manager's name"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Response Due Date</label>
+                <input
+                  type="date"
+                  value={formData.responseDueDate}
+                  onChange={(e) => setFormData({ ...formData, responseDueDate: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Reporter Phone</label>
+                <input
+                  type="tel"
+                  value={formData.reporterPhone}
+                  onChange={(e) => setFormData({ ...formData, reporterPhone: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Reporter Email</label>
+                <input
+                  type="email"
+                  value={formData.reporterEmail}
+                  onChange={(e) => setFormData({ ...formData, reporterEmail: e.target.value })}
                 />
               </div>
             </div>
@@ -409,6 +434,18 @@ const IncidentReporting = ({ token }) => {
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{ flex: 1, minWidth: '200px', padding: '0.75rem', border: '1px solid #ddd', borderRadius: '4px' }}
           />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{ padding: '0.75rem', border: '1px solid #ddd', borderRadius: '4px' }}
+          >
+            <option value="all">All statuses</option>
+            {INCIDENT_STATUSES.map(s => (
+              <option key={s.value} value={s.value}>
+                {s.label} ({incidents.filter(i => (i.status || 'open') === s.value).length})
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="filter-tabs" style={{ marginTop: '1rem' }}>
@@ -445,13 +482,23 @@ const IncidentReporting = ({ token }) => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1rem' }}>
                 <div>
                   <h4 style={{ margin: '0 0 0.25rem 0' }}>
-                    {getClientName(incident.client_id)} - {getIncidentTypeLabel(incident.incident_type)}
+                    {incident.incident_number && <span style={{ color: '#6B7280', fontWeight: 600 }}>{incident.incident_number} · </span>}
+                    {incident.client_name || getClientName(incident.client_id)} - {getIncidentTypeLabel(incident.incident_type)}
                   </h4>
                   <small style={{ color: '#666' }}>
                     {formatDate(incident.incident_date)} at {incident.incident_time || 'Unknown time'}
+                    {incident.reported_by_role === 'caregiver' && ' · Reported from the caregiver app'}
                   </small>
+                  {incident.response_due_date_ymd && !incident.response_sent_date_ymd && (incident.status || 'open') !== 'closed' && (
+                    <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', fontWeight: 700, color: incident.response_due_date_ymd <= getTodayCT() ? '#DC2626' : '#B45309' }}>
+                      Response due {formatDate(incident.response_due_date_ymd)}
+                    </div>
+                  )}
                 </div>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <span className="badge" style={{ background: statusColor(incident.status), color: 'white' }}>
+                    {incidentLabel('status', incident.status || 'open').toUpperCase()}
+                  </span>
                   <span
                     className="badge"
                     style={{
@@ -461,6 +508,12 @@ const IncidentReporting = ({ token }) => {
                   >
                     {getSeverityLabel(incident.severity).toUpperCase()}
                   </span>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => setDetailId(incident.id)}
+                  >
+                    Open
+                  </button>
                   <button
                     className="btn btn-sm btn-danger"
                     onClick={() => handleDeleteIncident(incident.id)}

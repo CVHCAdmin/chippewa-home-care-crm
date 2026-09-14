@@ -75,7 +75,7 @@ router.get('/action-items', verifyToken, requireAdmin, async (req, res) => {
     catch (e) { console.error('[action-items]', e.message); return {}; }
   };
   try {
-    const [pendingApprovals, openShiftsCount, lowAuths, expiringAuths, expiringCerts, stuckPunches, pendingPayrollReviews] = await Promise.all([
+    const [pendingApprovals, openShiftsCount, lowAuths, expiringAuths, expiringCerts, stuckPunches, pendingPayrollReviews, incidentResponsesDue] = await Promise.all([
       safe(`SELECT COUNT(*)::int AS n FROM time_entries WHERE needs_approval = true AND is_complete = true`),
       safe(`SELECT COUNT(*)::int AS n FROM open_shifts WHERE status = 'open' AND shift_date >= CURRENT_DATE AND shift_date <= CURRENT_DATE + INTERVAL '7 days'`),
       safe(`SELECT COUNT(*)::int AS n FROM authorizations WHERE status = 'active' AND (authorized_units - used_units) <= low_units_alert_threshold`),
@@ -83,6 +83,12 @@ router.get('/action-items', verifyToken, requireAdmin, async (req, res) => {
       safe(`SELECT COUNT(*)::int AS n FROM caregiver_certifications WHERE expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`),
       safe(`SELECT COUNT(*)::int AS n FROM time_entries WHERE is_complete = false AND start_time < NOW() - INTERVAL '24 hours'`),
       safe(`SELECT COUNT(*)::int AS n FROM payroll_shift_reviews WHERE status IN ('pending','flagged','missing_punch') AND created_at > NOW() - INTERVAL '30 days'`),
+      // Payer/MCO incident responses due within 3 days (or overdue) and not yet sent.
+      // Chicago date, not CURRENT_DATE (UTC rolls over at 7 PM Chicago).
+      safe(`SELECT COUNT(*)::int AS n FROM incident_reports
+             WHERE COALESCE(status, 'open') <> 'closed'
+               AND response_due_date IS NOT NULL AND response_sent_date IS NULL
+               AND response_due_date <= (NOW() AT TIME ZONE 'America/Chicago')::date + 3`),
     ]);
     const items = [
       { key: 'shift_approvals',  label: 'Time entries awaiting approval', count: pendingApprovals.n || 0, page: 'shift-approvals',  severity: 'high' },
@@ -92,6 +98,7 @@ router.get('/action-items', verifyToken, requireAdmin, async (req, res) => {
       { key: 'expiring_auths',   label: 'Authorizations expiring within 14 days', count: expiringAuths.n || 0, page: 'billing-engine', severity: 'high' },
       { key: 'expiring_certs',   label: 'Caregiver certifications expiring within 30 days', count: expiringCerts.n || 0, page: 'compliance',  severity: 'med' },
       { key: 'payroll_reviews',  label: 'Payroll shift reviews still pending', count: pendingPayrollReviews.n || 0, page: 'payroll',     severity: 'med' },
+      { key: 'incident_responses_due', label: 'Incident responses due within 3 days or overdue', count: incidentResponsesDue.n || 0, page: 'incidents', severity: 'high' },
     ].filter(item => item.count > 0);
     res.json({ items, totalCount: items.reduce((s, i) => s + i.count, 0) });
   } catch (error) { res.status(500).json({ error: error.message }); }

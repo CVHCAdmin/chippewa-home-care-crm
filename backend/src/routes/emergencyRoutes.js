@@ -400,6 +400,9 @@ router.get('/my-shifts', auth, async (req, res) => {
       WHERE s.caregiver_id = $1
         AND s.is_active = true
         AND (s.date >= $2::date OR (s.date IS NULL AND s.day_of_week IS NOT NULL))
+        -- Suspended (service paused, or caregiver removed pending an incident
+        -- investigation): the engine no longer generates these, so don't offer them.
+        AND (s.suspended_from IS NULL OR s.suspended_from > $2::date)
       ORDER BY s.date ASC, s.start_time ASC
       LIMIT 14`,
       [req.user.id, today]

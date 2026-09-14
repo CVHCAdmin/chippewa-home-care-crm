@@ -6,6 +6,7 @@ import { toast } from './Toast';
 import CaregiverClientModal from './CaregiverClientModal';
 import MileageTracker from './MileageTracker';
 import ShiftMissReport from './caregiver/ShiftMissReport';
+import IncidentReportForm from './caregiver/IncidentReportForm';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
@@ -636,7 +637,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     const todayDate = new Date(now); todayDate.setHours(0,0,0,0);
     const scheduledToday = (currentSchedules || [])
       .filter(s => {
-        if (s.date) return new Date(s.date).toDateString() === now.toDateString();
+        if (s.date) return new Date(s.date).toDateString() === now.toDateString() && !isSuspendedOn(s, toYMD(now));
         if (s.day_of_week === todayDay) return isScheduleActiveForDate(s, todayDate);
         return false;
       })
@@ -673,7 +674,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         const hasScheduledShiftNow = (currentSchedules || []).some(s => {
           if (s.client_id !== clientId || !s.start_time) return false;
           const onToday = s.date
-            ? new Date(s.date).toDateString() === now.toDateString()
+            ? (new Date(s.date).toDateString() === now.toDateString() && !isSuspendedOn(s, toYMD(now)))
             : (s.day_of_week === todayDay && isScheduleActiveForDate(s, todayDate));
           if (!onToday) return false;
           const [sh, sm] = s.start_time.split(':').map(Number);
@@ -1215,6 +1216,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const getDayName = (n) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][n] || '';
 
   // Check if a recurring schedule is active for a given date (respects effective_date, end_date & biweekly)
+  // Suspended schedules (service paused, or caregiver removed from this client pending an
+  // incident investigation): the server engine stops generating occurrences on/after
+  // suspended_from, so the phone must not show them or auto-clock-in against them.
+  const isSuspendedOn = (schedule, ymd) =>
+    !!(schedule.suspended_from && ymd && ymd >= String(schedule.suspended_from).slice(0, 10));
+
   const isScheduleActiveForDate = (schedule, targetDate) => {
     if (schedule.effective_date) {
       const effDate = new Date(schedule.effective_date);
@@ -1236,6 +1243,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     // Bi-weekly: shared whole-day parity rule (utils/biweekly.js) — same answer as
     // payroll. Math.round here used to put a Saturday row on the wrong fortnight.
     if (schedule.frequency === 'biweekly' && schedule.anchor_date && !isBiweeklyOn(toYMD(new Date(targetDate)), schedule.anchor_date)) return false;
+    if (isSuspendedOn(schedule, toYMD(new Date(targetDate)))) return false;
     return true;
   };
 
@@ -1283,7 +1291,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       .map(s => applyExceptionForDate(s, localTodayStr))
       .filter(Boolean);
     // Get one-time schedules for today's date
-    const oneTime = schedules.filter(s => s.date && s.date.split('T')[0] === todayStr);
+    const oneTime = schedules.filter(s => s.date && s.date.split('T')[0] === todayStr && !isSuspendedOn(s, localTodayStr));
 
     // Drop a moved-in (covering) shift that exactly matches an own shift today
     const ownToday = new Set(recurring.map(s => `${s.client_id}|${s.start_time}|${s.end_time}`));
@@ -1981,7 +1989,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         // exception too (a client-unavailable cancel is recorded that way, so the
         // server engine and this list agree): cancelled → gone, modified → new times.
         const dateStr = s.date.split('T')[0];
-        if (dateStr >= todayStr) {
+        if (dateStr >= todayStr && !isSuspendedOn(s, dateStr)) {
           const resolved = applyExceptionForDate(s, dateStr);
           if (resolved) concreteShifts.push({ ...resolved, resolvedDate: dateStr });
         }
@@ -2344,6 +2352,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           <li><a href="#" className={currentPage === 'availability' ? 'active' : ''} onClick={() => handlePageClick('availability')}>⏰ Availability</a></li>
           <li><a href="#" className={currentPage === 'client-requests' ? 'active' : ''} onClick={() => handlePageClick('client-requests')}>📩 Client Requests{changeRequests.length > 0 ? ` (${changeRequests.length})` : ''}</a></li>
           <li><a href="#" className={currentPage === 'miss-report' ? 'active' : ''} onClick={() => handlePageClick('miss-report')}>🚨 Report Miss</a></li>
+          <li><a href="#" className={currentPage === 'incident-report' ? 'active' : ''} onClick={() => handlePageClick('incident-report')}>⚠️ Report Incident</a></li>
           <li><a href="#" className={currentPage === 'time-off' ? 'active' : ''} onClick={() => handlePageClick('time-off')}>🏖️ Time Off</a></li>
           <li style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', marginTop: '0.5rem' }}>
             <a href="#" className={currentPage === 'settings' ? 'active' : ''} onClick={() => handlePageClick('settings')}>⚙️ Settings</a>
@@ -2478,6 +2487,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             </div>
           )}
           {currentPage === 'miss-report' && <ShiftMissReport token={token} userId={user.id} onClose={() => setCurrentPage('home')} />}
+          {currentPage === 'incident-report' && <IncidentReportForm token={token} clients={clients} onClose={() => setCurrentPage('home')} />}
           {currentPage === 'settings' && renderSettingsPage()}
         </div>
       </div>
@@ -2678,6 +2688,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             { page: 'open-shifts',   icon: '📋', label: 'Open Shifts' },
             { page: 'availability',  icon: '⏰', label: 'Availability' },
             { page: 'miss-report',   icon: '🚨', label: 'Report Miss' },
+            { page: 'incident-report', icon: '⚠️', label: 'Report Incident' },
             { page: 'time-off',      icon: '🏖️', label: 'Time Off' },
           ].map(({ page, icon, label }) => (
             <button

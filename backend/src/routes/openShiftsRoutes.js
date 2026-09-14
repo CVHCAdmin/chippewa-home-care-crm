@@ -70,15 +70,32 @@ router.post('/:id/smart-fill', auth, async (req, res) => {
       authWarnings = authCheck.warnings || [];
     } catch (e) { console.error('[openShifts smart-fill] auth recheck failed:', e.message); }
 
-    // Same as approve: update existing schedule or create one
+    // Same as approve. A RECURRING pattern gets a per-occurrence override for this one
+    // date — reassigning schedules.caregiver_id would move every past and future
+    // occurrence onto the new caregiver (the recurring-edit history-rewrite trap).
+    // A one-time row is the single occurrence, so updating it directly is correct.
+    // No schedule behind the shift: create a one-time visit (schedules has no
+    // care_type_id column; the old insert named one and failed every time).
     if (s.schedule_id) {
-      await db.query(`UPDATE schedules SET caregiver_id = $1, status = 'scheduled', updated_at = NOW() WHERE id = $2`,
-        [caregiverId, s.schedule_id]);
+      const sched = await db.query(`SELECT day_of_week FROM schedules WHERE id = $1`, [s.schedule_id]);
+      const isRecurring = sched.rows.length > 0 && sched.rows[0].day_of_week !== null;
+      if (isRecurring) {
+        await db.query(`
+          INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_caregiver_id, created_by)
+          VALUES ($1, $2, 'modified', $3, $4)
+          ON CONFLICT (schedule_id, exception_date)
+          DO UPDATE SET override_caregiver_id = EXCLUDED.override_caregiver_id
+          WHERE schedule_exceptions.exception_type <> 'cancelled'
+        `, [s.schedule_id, s.shift_date, caregiverId, req.user.id]);
+      } else {
+        await db.query(`UPDATE schedules SET caregiver_id = $1, status = 'scheduled', updated_at = NOW() WHERE id = $2`,
+          [caregiverId, s.schedule_id]);
+      }
     } else {
       await db.query(`
-        INSERT INTO schedules (client_id, caregiver_id, date, start_time, end_time, care_type_id, status, schedule_type)
-        VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', 'one-time')
-      `, [s.client_id, caregiverId, s.shift_date, s.start_time, s.end_time, s.care_type_id]);
+        INSERT INTO schedules (client_id, caregiver_id, schedule_type, date, start_time, end_time, notes, status)
+        VALUES ($1, $2, 'one-time', $3, $4, $5, $6, 'scheduled')
+      `, [s.client_id, caregiverId, s.shift_date, s.start_time, s.end_time, s.notes || null]);
     }
     await db.query(`
       UPDATE open_shifts
@@ -225,7 +242,10 @@ router.post('/from-schedule/:scheduleId', auth, async (req, res) => {
 // Caregiver claims a shift
 router.post('/:id/claim', auth, async (req, res) => {
   const { id } = req.params;
-  const { caregiverId, notes } = req.body;
+  const { notes } = req.body || {};
+  // The caregiver app (CaregiverDashboard handlePickupShift) posts no body, so a
+  // caregiver always claims for themselves. Only an admin may name someone else.
+  const caregiverId = (req.user.role === 'admin' && req.body?.caregiverId) ? req.body.caregiverId : req.user.id;
 
   try {
     // Check shift is still open
@@ -330,10 +350,14 @@ router.post('/:id/approve', auth, async (req, res) => {
         `, [s.claimed_by, s.schedule_id]);
       }
     } else {
+      // No schedule behind the open shift (e.g. coverage posted after a caregiver was
+      // removed from a client — their pattern is suspended, so an override on it would
+      // never generate). The claim becomes its own one-time visit. schedules has no
+      // care_type_id column: the old insert named one and failed on every approval.
       await db.query(`
-        INSERT INTO schedules (client_id, caregiver_id, date, start_time, end_time, care_type_id, status)
-        VALUES ($1, $2, $3, $4, $5, $6, 'scheduled')
-      `, [s.client_id, s.claimed_by, s.shift_date, s.start_time, s.end_time, s.care_type_id]);
+        INSERT INTO schedules (client_id, caregiver_id, schedule_type, date, start_time, end_time, notes, status)
+        VALUES ($1, $2, 'one-time', $3, $4, $5, $6, 'scheduled')
+      `, [s.client_id, s.claimed_by, s.shift_date, s.start_time, s.end_time, s.notes || null]);
     }
 
     // Update open shift

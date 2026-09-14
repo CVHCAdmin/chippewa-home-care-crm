@@ -695,6 +695,9 @@ const SchedulingHub = ({ token }) => {
     calSchedules.forEach(s => {
       if (s.date) {
         if (s.date.split('T')[0] === dateStr) {
+          // Suspended (service paused / caregiver removed pending investigation): the server
+          // engine drops one-time rows on/after suspended_from too — match it.
+          if (s.suspended_from && dateStr >= s.suspended_from.slice(0, 10)) return;
           // One-time rows can be cancelled via exception (client unavailable) — match the server engine.
           const exc = (s.exceptions || []).find(e => (e.exception_date || '').slice(0, 10) === dateStr);
           if (!(exc && exc.exception_type === 'cancelled')) results.push(s);

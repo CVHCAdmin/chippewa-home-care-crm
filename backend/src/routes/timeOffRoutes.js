@@ -175,7 +175,7 @@ async function postCoverageOpenShifts(timeOff, actingUserId) {
     WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
     SELECT occ.schedule_id, occ.occ_date::text AS shift_date,
            occ.start_time::text AS start_time, occ.end_time::text AS end_time,
-           occ.client_id, s.care_type_id,
+           occ.client_id, c.care_type_id,
            c.first_name AS client_first, c.last_name AS client_last
       FROM occ
       JOIN schedules s ON s.id = occ.schedule_id
