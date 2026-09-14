@@ -65,6 +65,7 @@ export default function IncidentDetail({ incidentId, token, onBack }) {
   const [caregivers, setCaregivers] = useState([]);
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState('');
+  const [includeEvv, setIncludeEvv] = useState(false); // packet Exhibit A; off unless the payer asked for visit records
   const [noteForm, setNoteForm] = useState({ entryDate: getTodayCT(), entryType: 'interview', summary: '' });
   const [uploadForm, setUploadForm] = useState({ category: 'payer_notice', description: '' });
   const [uploading, setUploading] = useState(false);
@@ -129,7 +130,7 @@ export default function IncidentDetail({ incidentId, token, onBack }) {
   const downloadPdf = async (kind) => {
     setDownloading(kind);
     try {
-      const path = kind === 'packet' ? 'response-packet' : 'pdf';
+      const path = kind === 'packet' ? `response-packet${includeEvv ? '?includeEvv=1' : ''}` : 'pdf';
       const res = await fetch(`${API_BASE_URL}/api/incidents/${incidentId}/${path}`, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'PDF generation failed');
       const blob = await res.blob();
@@ -286,6 +287,11 @@ export default function IncidentDetail({ incidentId, token, onBack }) {
           <button className="btn btn-primary" onClick={() => downloadPdf('packet')} disabled={!!downloading}>
             {downloading === 'packet' ? 'Generating…' : '📄 Payer Response Packet'}
           </button>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem', color: '#374151' }}
+            title="Adds every clock-in at the client's home this year. Only include it if the payer asked for visit records.">
+            <input type="checkbox" checked={includeEvv} onChange={e => setIncludeEvv(e.target.checked)} />
+            Include EVV visit history
+          </label>
         </div>
       </div>
 

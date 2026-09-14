@@ -365,7 +365,7 @@ function incidentSections(ui, data, { forPayer }) {
 
 // Truthful schedule-status sentence, derived only from stored data.
 function scheduleStatusSentence(data) {
-  const { incident: i, lastCaregiverVisit } = data;
+  const { incident: i } = data;
   const caregiver = personName(i.caregiver_first, i.caregiver_last);
   const member = personName(i.client_first, i.client_last);
   if (!i.caregiver_id) return 'No caregiver is named on this incident.';
@@ -376,13 +376,9 @@ function scheduleStatusSentence(data) {
   } else {
     parts.push(`CVHC did not remove ${caregiver} from ${member}'s schedule.`);
   }
-  if (lastCaregiverVisit) {
-    const before = i.reported_date_s && lastCaregiverVisit < i.reported_date_s
-      ? `, before this concern was reported to CVHC on ${longDate(i.reported_date_s)}` : '';
-    parts.push(`CVHC's Electronic Visit Verification records show the caregiver's most recent visit to the member's home on ${longDate(lastCaregiverVisit)}${before}.`);
-  } else {
-    parts.push('CVHC\'s Electronic Visit Verification records show no visit by this caregiver to the member\'s home.');
-  }
+  // No EVV "most recent visit" claim here: a caregiver who works without clocking in has
+  // no record, so the last clock-in says nothing about whether they were in the home
+  // (IR-2026-001: Neugene kept working after his last clock-in on Aug 14).
   return parts.join(' ');
 }
 
@@ -398,7 +394,10 @@ function renderIncidentReportPdf(doc, data) {
 }
 
 // ─────────────────────────────── RESPONSE PACKET ───────────────────────────────
-function renderResponsePacketPdf(doc, data) {
+// options.includeEvv: add Exhibit A (EVV clock-in history). Off by default: payers rarely
+// ask for it, and send only what was requested (binder 00-Cover-Letter-Template).
+function renderResponsePacketPdf(doc, data, options = {}) {
+  const includeEvv = !!options.includeEvv;
   const ui = makeLayout(doc);
   const { incident: i, visits, backgroundCheck, trainings } = data;
   const member = personName(i.client_first, i.client_last);
@@ -410,7 +409,7 @@ function renderResponsePacketPdf(doc, data) {
   const relevantTrainings = trainings.filter(t => ['medication_administration', 'medication_reminders', 'misappropriation_policy'].includes(t.training_type));
 
   const enclosures = ['Incident Report and Investigation Summary'];
-  if (visits.length) enclosures.push('Exhibit A: EVV visit history for the member\'s home');
+  if (includeEvv && visits.length) enclosures.push('Exhibit A: EVV visit history for the member\'s home');
   if (i.caregiver_id) {
     enclosures.push('Caregiver background check record');
     enclosures.push(ackSigned ? 'Caregiver training acknowledgement (signed)' : 'Caregiver training record');
@@ -457,7 +456,7 @@ function renderResponsePacketPdf(doc, data) {
   ui.signatures([['Investigated by (signature)', 'Date'], ['Administrator (signature)', 'Date']]);
 
   // ── Exhibit A: EVV ──
-  if (visits.length) {
+  if (includeEvv && visits.length) {
     ui.newPage(true);
     ui.title('Exhibit A — EVV Visit History', `Member: ${member}${idLine ? `  ·  ${idLine}` : ''}`);
     ui.p(`Each row is a date on which a CVHC caregiver clocked in at the member's home, from CVHC's Electronic Visit Verification records, January 1 of ${String(i.incident_date_s).slice(0, 4)} through ${longDate(i.today_s)}. Arrival is the first clock-in that day, Central Time.`, { size: 9, color: MUTED });
@@ -466,7 +465,7 @@ function renderResponsePacketPdf(doc, data) {
       visits.map((v, n) => [n + 1, v.day_s, v.arrival, v.gps ? 'Yes' : 'No', personName(v.cg_first, v.cg_last)]),
       { rowH: 12 });
     const lastVisit = visits[visits.length - 1];
-    ui.p(`Most recent CVHC visit to the member's home: ${lastVisit.day_s}.`, { bold: true, size: 9.5 });
+    ui.p(`Most recent clock-in recorded at the member's home: ${lastVisit.day_s}.`, { bold: true, size: 9.5 });
     ui.p('"GPS location: No" means the clock-in was recorded without a location fix from the caregiver\'s phone.', { size: 8.5, color: MUTED });
   }
 
@@ -535,7 +534,7 @@ function renderResponsePacketPdf(doc, data) {
     ui.kv([['Member', [member, idLine].filter(Boolean).join('  ·  ')], ['Caregiver', caregiver]]);
     ui.p(scheduleStatusSentence(data));
     if (i.disposition) ui.p(`CVHC's investigation concluded the concern was ${label(DISPOSITIONS, i.disposition).toLowerCase()}${i.disposition === 'unsubstantiated' ? ' as to CVHC staff' : ''}.`);
-    ui.p('I certify that this statement is true and accurate to the best of my knowledge, based on CVHC\'s scheduling and Electronic Visit Verification records.');
+    ui.p('I certify that this statement is true and accurate to the best of my knowledge, based on CVHC\'s scheduling records.');
     ui.signatures([['Signature', 'Date'], ['Printed name', 'Title']]);
   }
 
