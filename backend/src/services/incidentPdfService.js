@@ -104,18 +104,18 @@ async function loadIncidentCase(db, incidentId) {
       [`${String(incident.incident_date_s || incident.today_s).slice(0, 4)}-01-01`, incident.today_s, incident.client_id]),
   ]);
 
-  let backgroundCheck = null, trainings = [], lastCaregiverVisit = null;
+  let backgroundCheck = null, earlierBackgroundChecks = [], trainings = [], lastCaregiverVisit = null;
   if (incident.caregiver_id) {
     const [bgc, tr, last] = await Promise.all([
       db.query(`
-        SELECT check_type, provider, status, result,
+        SELECT check_type, provider, status, result, findings,
                to_char(COALESCE(completed_date, completion_date, check_date), 'YYYY-MM-DD') AS completed_s,
                to_char(expiration_date, 'YYYY-MM-DD') AS expires_s,
-               COALESCE(worcs_reference_number, reference_number) AS reference
+               COALESCE(worcs_reference_number, reference_number) AS reference,
+               EXISTS (SELECT 1 FROM background_check_documents d WHERE d.background_check_id = background_checks.id) AS has_document
           FROM background_checks
          WHERE caregiver_id = $1
-         ORDER BY COALESCE(completed_date, completion_date, check_date, created_at::date) DESC NULLS LAST, created_at DESC
-         LIMIT 1`, [incident.caregiver_id]),
+         ORDER BY COALESCE(completed_date, completion_date, check_date, created_at::date) DESC NULLS LAST, created_at DESC`, [incident.caregiver_id]),
       db.query(`
         SELECT training_type, training_name, provider, status,
                to_char(completion_date, 'YYYY-MM-DD') AS completed_s,
@@ -128,12 +128,15 @@ async function loadIncidentCase(db, incidentId) {
           FROM time_entries WHERE client_id = $1 AND caregiver_id = $2`,
         [incident.client_id, incident.caregiver_id]),
     ]);
+    // Most recent check first; earlier completed checks are shown after it (e.g. the check
+    // at hire whose result document is no longer on file).
     backgroundCheck = bgc.rows[0] || null;
+    earlierBackgroundChecks = bgc.rows.slice(1).filter(b => b.status === 'completed');
     trainings = tr.rows;
     lastCaregiverVisit = last.rows[0]?.d || null;
   }
 
-  return { incident, notes: notes.rows, attachments: attachments.rows, visits: visits.rows, backgroundCheck, trainings, lastCaregiverVisit };
+  return { incident, notes: notes.rows, attachments: attachments.rows, visits: visits.rows, backgroundCheck, earlierBackgroundChecks, trainings, lastCaregiverVisit };
 }
 
 // ─────────────────────────────── FORMAT ───────────────────────────────
@@ -399,6 +402,7 @@ function renderResponsePacketPdf(doc, data, options = {}) {
   const includeSchedule = !!options.includeSchedule;
   const ui = makeLayout(doc);
   const { incident: i, visits, backgroundCheck, trainings } = data;
+  const earlierChecks = data.earlierBackgroundChecks || [];
   const member = personName(i.client_first, i.client_last);
   const caregiver = personName(i.caregiver_first, i.caregiver_last);
   const payer = i.is_private_pay ? '' : text(i.payer_name);
@@ -433,12 +437,14 @@ function renderResponsePacketPdf(doc, data, options = {}) {
     const bgcText = backgroundCheck
       ? `Enclosed is the caregiver's background check record${backgroundCheck.provider ? ` (${backgroundCheck.provider})` : ''}${backgroundCheck.result ? `, result: ${String(backgroundCheck.result).toLowerCase()}` : ''}${backgroundCheck.completed_s ? `, completed ${longDate(backgroundCheck.completed_s)}` : ''}.`
       : 'CVHC has no background check record on file in its system for this caregiver.';
+    const earlierText = earlierChecks.map(b =>
+      ` CVHC's records also show a background check completed ${longDate(b.completed_s)}${b.result ? `, result: ${String(b.result).toLowerCase()}` : ''}.${text(b.findings) ? ` ${String(b.findings).trim()}` : ''}`).join('');
     const trText = ackSigned
       ? ` Also enclosed is the caregiver's signed acknowledgement covering medication handling and the misappropriation of client property, signed ${longDate(i.training_ack_signed_s)}.`
       : relevantTrainings.length
         ? ' Also enclosed is the caregiver\'s training record for medication handling and misappropriation.'
         : ' CVHC has no completed medication-handling or misappropriation training on file in its system for this caregiver.';
-    ui.runIn('2. Background check and training. ', bgcText + trText);
+    ui.runIn('2. Background check and training. ', bgcText + earlierText + trText);
     ui.runIn('3. Caregiver schedule status. ', scheduleStatusSentence(data));
   }
   ui.p('Please contact me with any questions or if you need additional information.', { after: 0.4 });
@@ -484,7 +490,19 @@ function renderResponsePacketPdf(doc, data, options = {}) {
         ['Next recheck due', longDate(backgroundCheck.expires_s)],
         ['Reference number', backgroundCheck.reference],
       ]);
-      ui.p('Details above are from CVHC\'s background check record for this caregiver.', { size: 9.5, color: MUTED });
+      for (const b of earlierChecks) {
+        ui.h2(`Earlier background check — ${longDate(b.completed_s)}`);
+        ui.kv([
+          ['Provider', b.provider],
+          ['Status', b.status],
+          ['Result', b.result],
+          ['Date completed', longDate(b.completed_s)],
+          ['Reference number', b.reference],
+          ['Result document on file', b.has_document ? 'Yes' : 'No'],
+          ['Notes', b.findings],
+        ]);
+      }
+      ui.p('Details above are from CVHC\'s background check records for this caregiver.', { size: 9.5, color: MUTED });
     } else {
       ui.p('CVHC has no background check record on file in its system for this caregiver.');
     }
