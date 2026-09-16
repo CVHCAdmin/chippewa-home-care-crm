@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 const {
   INCIDENT_TYPES, SEVERITIES, INCIDENT_STATUSES, DISPOSITIONS, MANDATORY_REPORT_STATUSES,
   ENTRY_TYPES, ATTACHMENT_CATEGORIES, TRAINING_ACK_METHODS,
@@ -87,22 +88,20 @@ async function loadIncidentCase(db, incidentId) {
     db.query(`
       SELECT id, category, file_name, mime_type, file_size, description
         FROM incident_attachments WHERE incident_id = $1 ORDER BY created_at`, [incidentId]),
-    // First clock-in per caregiver per day at the member's home, from Jan 1 of the
-    // incident year onward (Chicago calendar days).
+    // Scheduled visits at the member's home from Jan 1 of the incident year through
+    // today, expanded by the shared schedule engine (cancelled visits excluded;
+    // one-week changes of time or caregiver applied).
     db.query(`
-      SELECT to_char(x.d, 'Dy YYYY-MM-DD') AS day_s, x.arrival, x.gps, x.cg_first, x.cg_last
-        FROM (SELECT DISTINCT ON ((te.start_time AT TIME ZONE 'America/Chicago')::date, te.caregiver_id)
-                     (te.start_time AT TIME ZONE 'America/Chicago')::date AS d,
-                     te.start_time AS started,
-                     to_char(te.start_time AT TIME ZONE 'America/Chicago', 'FMHH12:MI AM') AS arrival,
-                     (te.clock_in_location IS NOT NULL) AS gps,
-                     u.first_name AS cg_first, u.last_name AS cg_last
-                FROM time_entries te
-                JOIN users u ON u.id = te.caregiver_id
-               WHERE te.client_id = $1
-                 AND (te.start_time AT TIME ZONE 'America/Chicago')::date >= make_date(EXTRACT(YEAR FROM $2::date)::int, 1, 1)
-               ORDER BY (te.start_time AT TIME ZONE 'America/Chicago')::date, te.caregiver_id, te.start_time) x
-       ORDER BY x.d, x.started`, [incident.client_id, incident.incident_date_s]),
+      WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+      SELECT to_char(occ.occ_date, 'Dy YYYY-MM-DD') AS day_s,
+             to_char(occ.start_time, 'FMHH12:MI AM') AS start_s,
+             to_char(occ.end_time, 'FMHH12:MI AM')   AS end_s,
+             u.first_name AS cg_first, u.last_name AS cg_last
+        FROM occ
+        LEFT JOIN users u ON u.id = occ.caregiver_id
+       WHERE occ.client_id = $3
+       ORDER BY occ.occ_date, occ.start_time`,
+      [`${String(incident.incident_date_s || incident.today_s).slice(0, 4)}-01-01`, incident.today_s, incident.client_id]),
   ]);
 
   let backgroundCheck = null, trainings = [], lastCaregiverVisit = null;
@@ -394,10 +393,10 @@ function renderIncidentReportPdf(doc, data) {
 }
 
 // ─────────────────────────────── RESPONSE PACKET ───────────────────────────────
-// options.includeEvv: add Exhibit A (EVV clock-in history). Off by default: payers rarely
-// ask for it, and send only what was requested (binder 00-Cover-Letter-Template).
+// options.includeSchedule: add Exhibit A (scheduled visits at the member's home). Off by
+// default: send only what was requested (binder 00-Cover-Letter-Template).
 function renderResponsePacketPdf(doc, data, options = {}) {
-  const includeEvv = !!options.includeEvv;
+  const includeSchedule = !!options.includeSchedule;
   const ui = makeLayout(doc);
   const { incident: i, visits, backgroundCheck, trainings } = data;
   const member = personName(i.client_first, i.client_last);
@@ -409,7 +408,7 @@ function renderResponsePacketPdf(doc, data, options = {}) {
   const relevantTrainings = trainings.filter(t => ['medication_administration', 'medication_reminders', 'misappropriation_policy'].includes(t.training_type));
 
   const enclosures = ['Incident Report and Investigation Summary'];
-  if (includeEvv && visits.length) enclosures.push('Exhibit A: EVV visit history for the member\'s home');
+  if (includeSchedule && visits.length) enclosures.push('Exhibit A: Visit schedule for the member\'s home');
   if (i.caregiver_id) {
     enclosures.push('Caregiver background check record');
     enclosures.push(ackSigned ? 'Caregiver training acknowledgement (signed)' : 'Caregiver training record');
@@ -455,18 +454,18 @@ function renderResponsePacketPdf(doc, data, options = {}) {
   incidentSections(ui, data, { forPayer: true });
   ui.signatures([['Investigated by (signature)', 'Date'], ['Administrator (signature)', 'Date']]);
 
-  // ── Exhibit A: EVV ──
-  if (includeEvv && visits.length) {
+  // ── Exhibit A: visit schedule ──
+  if (includeSchedule && visits.length) {
     ui.newPage(true);
-    ui.title('Exhibit A — EVV Visit History', `Member: ${member}${idLine ? `  ·  ${idLine}` : ''}`);
-    ui.p(`Each row is a date on which a CVHC caregiver clocked in at the member's home, from CVHC's Electronic Visit Verification records, January 1 of ${String(i.incident_date_s).slice(0, 4)} through ${longDate(i.today_s)}. Arrival is the first clock-in that day, Central Time.`, { size: 9, color: MUTED });
+    ui.title('Exhibit A — Visit Schedule', `Member: ${member}${idLine ? `  ·  ${idLine}` : ''}`);
+    // Range is stated from the first visit shown, not Jan 1: schedule patterns that were
+    // deactivated (rather than end-dated) no longer produce visits, so earlier months can
+    // be missing and the exhibit must not imply there were none.
+    ui.p(`Each row is a visit on CVHC's schedule for the member's home, ${longDate(visits[0].day_s.slice(-10))} through ${longDate(i.today_s)}, with the scheduled time (Central Time) and the assigned caregiver.`, { size: 9, color: MUTED });
     ui.table(
-      [{ h: '#', w: 30 }, { h: 'Date', w: 110 }, { h: 'Arrival', w: 75 }, { h: 'GPS location', w: 80 }, { h: 'Caregiver' }],
-      visits.map((v, n) => [n + 1, v.day_s, v.arrival, v.gps ? 'Yes' : 'No', personName(v.cg_first, v.cg_last)]),
+      [{ h: '#', w: 30 }, { h: 'Date', w: 110 }, { h: 'Scheduled time', w: 140 }, { h: 'Caregiver' }],
+      visits.map((v, n) => [n + 1, v.day_s, `${v.start_s} – ${v.end_s}`, personName(v.cg_first, v.cg_last)]),
       { rowH: 12 });
-    const lastVisit = visits[visits.length - 1];
-    ui.p(`Most recent clock-in recorded at the member's home: ${lastVisit.day_s}.`, { bold: true, size: 9.5 });
-    ui.p('"GPS location: No" means the clock-in was recorded without a location fix from the caregiver\'s phone.', { size: 8.5, color: MUTED });
   }
 
   if (i.caregiver_id) {

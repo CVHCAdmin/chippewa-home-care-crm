@@ -1244,12 +1244,12 @@ async function sendIncidentPdf(req, res, kind) {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
     doc.pipe(res);
-    const includeEvv = req.query?.includeEvv === '1';
-    if (kind === 'packet') incidentPdf.renderResponsePacketPdf(doc, data, { includeEvv });
+    const includeSchedule = req.query?.includeSchedule === '1';
+    if (kind === 'packet') incidentPdf.renderResponsePacketPdf(doc, data, { includeSchedule });
     else incidentPdf.renderIncidentReportPdf(doc, data);
     doc.end();
     // Same audit convention as reports.js logReportGeneration.
-    await auditLog(req.user.id, 'REPORT_GENERATED_PDF', 'incident_reports', req.params.id, null, { report: base, includeEvv: kind === 'packet' ? includeEvv : undefined });
+    await auditLog(req.user.id, 'REPORT_GENERATED_PDF', 'incident_reports', req.params.id, null, { report: base, includeSchedule: kind === 'packet' ? includeSchedule : undefined });
   } catch (error) {
     console.error(`[incident ${kind} PDF]`, error);
     if (!res.headersSent) res.status(500).json({ error: error.message });
