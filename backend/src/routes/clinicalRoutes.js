@@ -7,6 +7,7 @@ const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 const { shiftHours } = require('../helpers/shiftHours');
 const { alignBiweeklyAnchor } = require('../helpers/biweekly');
+const { getClientVisitSchedule } = require('../helpers/carePlanSchedule');
 // ─── COMPLIANCE ───────────────────────────────────────────────────────────────
 
 router.get('/compliance/summary', verifyToken, requireAdmin, async (req, res) => {
@@ -62,6 +63,15 @@ router.get('/care-plans/summary', verifyToken, requireAdmin, async (req, res) =>
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// GET /api/care-plans/visit-schedule/:clientId — the client's current recurring visit
+// schedule in words (from the shared schedule engine), for "Fill from current schedule"
+// and for flagging plans whose saved schedule no longer matches.
+router.get('/care-plans/visit-schedule/:clientId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    res.json(await getClientVisitSchedule((t, p) => db.query(t, p), req.params.clientId));
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 router.get('/care-plans/:clientId', verifyToken, async (req, res) => {
   try {
     res.json((await db.query(`SELECT * FROM care_plans WHERE client_id=$1 ORDER BY start_date DESC`, [req.params.clientId])).rows);
@@ -76,18 +86,32 @@ router.get('/care-plans', verifyToken, async (req, res) => {
 
 router.post('/care-plans', verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { clientId, serviceType, serviceDescription, frequency, careGoals, specialInstructions, precautions, medicationNotes, mobilityNotes, dietaryNotes, communicationNotes, startDate, endDate } = req.body;
+    const { clientId, serviceType, serviceDescription, frequency, careGoals, specialInstructions, precautions, medicationNotes, mobilityNotes, dietaryNotes, communicationNotes, startDate, endDate, visitSchedule } = req.body;
     if (!clientId || !serviceType) return res.status(400).json({ error: 'clientId and serviceType are required' });
+    const snap = await resolveVisitSchedule(visitSchedule, clientId);
+    if (snap.error) return res.status(400).json({ error: snap.error });
     const planId = uuidv4();
     const result = await db.query(
-      `INSERT INTO care_plans (id, client_id, service_type, service_description, frequency, care_goals, special_instructions, precautions, medication_notes, mobility_notes, dietary_notes, communication_notes, start_date, end_date, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [planId, clientId, serviceType, serviceDescription||null, frequency||null, careGoals||null, specialInstructions||null, precautions||null, medicationNotes||null, mobilityNotes||null, dietaryNotes||null, communicationNotes||null, startDate||null, endDate||null, req.user.id]
+      `INSERT INTO care_plans (id, client_id, service_type, service_description, frequency, care_goals, special_instructions, precautions, medication_notes, mobility_notes, dietary_notes, communication_notes, start_date, end_date, created_by, visit_schedule, visit_schedule_as_of)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+      [planId, clientId, serviceType, serviceDescription||null, frequency||null, careGoals||null, specialInstructions||null, precautions||null, medicationNotes||null, mobilityNotes||null, dietaryNotes||null, communicationNotes||null, startDate||null, endDate||null, req.user.id,
+       snap.set ? snap.text : null, snap.set ? snap.asOf : null]
     );
     await auditLog(req.user.id, 'CREATE', 'care_plans', planId, null, result.rows[0]);
     res.status(201).json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+
+// visitSchedule is never taken from the browser as text: 'current' makes the server
+// copy the client's live schedule (dated today), '' clears it, absent leaves it alone.
+async function resolveVisitSchedule(value, clientId) {
+  if (value === undefined) return { set: false };
+  if (value === '' || value === null) return { set: true, text: null, asOf: null };
+  if (value !== 'current') return { error: "visitSchedule must be 'current' or ''" };
+  const sched = await getClientVisitSchedule((t, p) => db.query(t, p), clientId);
+  if (!sched.text) return { error: 'This client has no recurring visits scheduled in the next 4 weeks, so there is no schedule to save.' };
+  return { set: true, text: sched.text, asOf: sched.asOf };
+}
 
 // Only fields present in the body are updated; a field sent as '' is cleared
 // (so an end date can be removed). serviceType can't be cleared.
@@ -108,9 +132,17 @@ router.put('/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
     params.push(v);
     sets.push(`${col}=$${params.length}`);
   }
-  params.push(req.params.id);
   const client = await db.pool.connect();
   try {
+    if ('visitSchedule' in req.body) {
+      const plan = await client.query(`SELECT client_id FROM care_plans WHERE id=$1`, [req.params.id]);
+      if (plan.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
+      const snap = await resolveVisitSchedule(req.body.visitSchedule, plan.rows[0].client_id);
+      if (snap.error) return res.status(400).json({ error: snap.error });
+      params.push(snap.text); sets.push(`visit_schedule=$${params.length}`);
+      params.push(snap.asOf); sets.push(`visit_schedule_as_of=$${params.length}`);
+    }
+    params.push(req.params.id);
     await client.query('BEGIN');
     // Transaction-local GUC on the same connection as the UPDATE, so the
     // snapshot trigger records who made the change.
@@ -255,6 +287,9 @@ router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) =>
     if (p.author_first) doc.text(`Created by: ${p.author_first} ${p.author_last}   on ${new Date(p.created_at).toLocaleDateString()}`);
 
     // Sections
+    if (p.visit_schedule) {
+      section(`Visit Schedule (as of ${new Date(p.visit_schedule_as_of).toLocaleDateString('en-US', { timeZone: 'UTC' })})`, p.visit_schedule);
+    }
     section('Service Description', p.service_description);
     section('Care Goals', p.care_goals);
     section('Special Instructions', p.special_instructions);
@@ -340,6 +375,14 @@ router.post('/care-plans/:id/generate-schedule', verifyToken, requireAdmin, asyn
     const planResult = await db.query('SELECT * FROM care_plans WHERE id = $1', [req.params.id]);
     if (planResult.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
     const plan = planResult.rows[0];
+
+    // Never add a second set of recurring shifts on top of an existing schedule.
+    const existing = await getClientVisitSchedule((t, p) => db.query(t, p), plan.client_id);
+    if (existing.upcomingVisits > 0) {
+      return res.status(409).json({
+        error: `This client already has ${existing.upcomingVisits} visit(s) scheduled in the next ${existing.windowDays} days. Generating would double-book them — change the shifts in Scheduling instead.`,
+      });
+    }
 
     // Authorization is advisory — see helpers/authorizationCheck.js. A shortfall
     // is reported back as a warning; it never stops the schedule being generated.

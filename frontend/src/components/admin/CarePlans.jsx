@@ -12,6 +12,11 @@ const CarePlans = ({ token }) => {
   const [expandedClient, setExpandedClient] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editingPlanId, setEditingPlanId] = useState(null);
+  // Saved visit schedule shown in the form; visitScheduleAction is what gets sent:
+  // 'current' = server copies the live schedule, '' = clear, null = leave unchanged.
+  const [visitSchedule, setVisitSchedule] = useState({ text: '', asOf: null, action: null });
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [currentSchedules, setCurrentSchedules] = useState({}); // clientId -> live schedule
   const [showGenModal, setShowGenModal] = useState(null);
   const [caregivers, setCaregivers] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -176,7 +181,7 @@ const CarePlans = ({ token }) => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(visitSchedule.action === null ? formData : { ...formData, visitSchedule: visitSchedule.action })
       });
 
       if (!response.ok) {
@@ -185,8 +190,10 @@ const CarePlans = ({ token }) => {
       }
 
       setMessage(editingPlanId ? 'Care plan updated successfully!' : 'Care plan created successfully!');
+      const savedClientId = formData.clientId;
       closeForm();
       loadData();
+      loadCurrentSchedule(savedClientId);
     } catch (error) {
       setMessage('Error: ' + error.message);
     }
@@ -212,7 +219,39 @@ const CarePlans = ({ token }) => {
     setShowForm(false);
     setEditingPlanId(null);
     setFormData(emptyForm());
+    setVisitSchedule({ text: '', asOf: null, action: null });
   };
+
+  const fetchSchedule = async (clientId) => {
+    const r = await fetch(`${API_BASE_URL}/api/care-plans/visit-schedule/${clientId}`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `Could not load the schedule (HTTP ${r.status})`);
+    return data;
+  };
+
+  const loadCurrentSchedule = async (clientId) => {
+    if (!clientId) return;
+    try {
+      const data = await fetchSchedule(clientId);
+      setCurrentSchedules(prev => ({ ...prev, [clientId]: data }));
+    } catch (e) { setMessage('Error: ' + e.message); }
+  };
+
+  const fillFromSchedule = async () => {
+    if (!formData.clientId) { setMessage('Error: pick a client first'); return; }
+    setScheduleLoading(true);
+    try {
+      const data = await fetchSchedule(formData.clientId);
+      if (!data.text) {
+        setMessage('Error: this client has no recurring visits scheduled in the next 4 weeks.');
+        return;
+      }
+      setVisitSchedule({ text: data.text, asOf: data.asOf, action: 'current' });
+    } catch (e) { setMessage('Error: ' + e.message); }
+    finally { setScheduleLoading(false); }
+  };
+
+  const fmtAsOf = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString() : '');
 
   const startEdit = (plan) => {
     setEditingPlanId(plan.id);
@@ -231,6 +270,7 @@ const CarePlans = ({ token }) => {
       startDate: plan.start_date?.split('T')[0] || '',
       endDate: plan.end_date?.split('T')[0] || ''
     });
+    setVisitSchedule({ text: plan.visit_schedule || '', asOf: plan.visit_schedule_as_of, action: null });
     setMessage('');
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -433,6 +473,33 @@ const CarePlans = ({ token }) => {
             </div>
 
             <div className="form-group">
+              <label>Visit Schedule</label>
+              {visitSchedule.text ? (
+                <div style={{ whiteSpace: 'pre-wrap', padding: '0.6rem 0.75rem', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: '0.9rem' }}>
+                  {visitSchedule.text}
+                  <div style={{ color: '#6B7280', fontSize: '0.8rem', marginTop: 4 }}>
+                    As of {fmtAsOf(visitSchedule.asOf)}{visitSchedule.action === 'current' && ' — saved when you click Save/Create'}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ color: '#9CA3AF', fontSize: '0.85rem' }}>
+                  {visitSchedule.action === '' ? 'Schedule will be removed when you save.' : 'No visit schedule saved on this plan.'}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.4rem' }}>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={fillFromSchedule} disabled={scheduleLoading || !formData.clientId}>
+                  {scheduleLoading ? 'Loading…' : '📅 Fill from current schedule'}
+                </button>
+                {visitSchedule.text && (
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setVisitSchedule({ text: '', asOf: null, action: '' })}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              <small style={{ color: '#6B7280' }}>Copied from the client's shifts in Scheduling. Change shifts there, then fill again.</small>
+            </div>
+
+            <div className="form-group">
               <label>Service Description</label>
               <textarea
                 value={formData.serviceDescription}
@@ -535,7 +602,10 @@ const CarePlans = ({ token }) => {
             return (
               <div key={client.id} className="card">
                 <div
-                  onClick={() => setExpandedClient(isExpanded ? null : client.id)}
+                  onClick={() => {
+                    setExpandedClient(isExpanded ? null : client.id);
+                    if (!isExpanded && clientPlans.length > 0) loadCurrentSchedule(client.id);
+                  }}
                   style={{
                     cursor: 'pointer',
                     display: 'flex',
@@ -636,6 +706,35 @@ const CarePlans = ({ token }) => {
                                 <strong>Period:</strong> {formatDate(plan.start_date)}
                                 {plan.end_date && ` - ${formatDate(plan.end_date)}`}
                               </div>
+
+                              {active && currentSchedules[client.id] && (() => {
+                                const live = currentSchedules[client.id].text || '';
+                                if (!plan.visit_schedule) {
+                                  return (
+                                    <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.75rem', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 6, fontSize: '0.85rem', color: '#92400E' }}>
+                                      No visit schedule is saved on this plan. Click <b>✏️ Edit</b> → <b>Fill from current schedule</b>.
+                                    </div>
+                                  );
+                                }
+                                if (plan.visit_schedule === live) return null;
+                                return (
+                                  <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.75rem', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 6, fontSize: '0.85rem', color: '#991B1B' }}>
+                                    ⚠️ <b>Schedule changed since this plan was saved ({fmtAsOf(plan.visit_schedule_as_of)}).</b> Update the plan: ✏️ Edit → Fill from current schedule.
+                                    <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', color: '#374151' }}>
+                                      <b>Current schedule:</b>{'\n'}{live || 'No recurring visits scheduled in the next 4 weeks.'}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+
+                              {plan.visit_schedule && (
+                                <div style={{ marginBottom: '0.75rem' }}>
+                                  <strong>Visit Schedule</strong> <small style={{ color: '#6B7280' }}>(as of {fmtAsOf(plan.visit_schedule_as_of)})</small>
+                                  <p style={{ margin: '0.25rem 0', whiteSpace: 'pre-wrap' }}>
+                                    {plan.visit_schedule}
+                                  </p>
+                                </div>
+                              )}
 
                               {plan.service_description && (
                                 <div style={{ marginBottom: '0.75rem' }}>
@@ -778,6 +877,8 @@ const CarePlans = ({ token }) => {
           ['service_type', 'Service Type'],
           ['service_description', 'Service Description'],
           ['frequency', 'Frequency'],
+          ['visit_schedule', 'Visit Schedule'],
+          ['visit_schedule_as_of', 'Visit Schedule As Of'],
           ['care_goals', 'Care Goals'],
           ['special_instructions', 'Special Instructions'],
           ['precautions', 'Precautions'],
