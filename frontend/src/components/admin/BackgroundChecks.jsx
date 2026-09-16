@@ -3,6 +3,7 @@ import { toast } from '../Toast';
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import { formatDate } from '../../utils/datetime';
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_ACCEPT } from '../../utils/incidentOptions';
 
 const BackgroundChecks = ({ token }) => {
   const [checks, setChecks] = useState([]);
@@ -12,6 +13,67 @@ const BackgroundChecks = ({ token }) => {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [currentCheck, setCurrentCheck] = useState(null);
   const [caregivers, setCaregivers] = useState([]);
+  const [docsCheck, setDocsCheck] = useState(null); // check whose documents window is open
+  const [docs, setDocs] = useState([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const docsUrl = (checkId, docId) => `${API_BASE_URL}/api/background-checks/${checkId}/documents${docId ? `/${docId}` : ''}`;
+  const errorFrom = async (res, fallback) => (await res.json().catch(() => ({}))).error || `${fallback} (HTTP ${res.status})`;
+
+  const openDocs = async (check) => {
+    setDocsCheck(check); setDocs([]); setDocsLoading(true);
+    try {
+      const res = await fetch(docsUrl(check.id), { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(await errorFrom(res, 'Could not load documents'));
+      setDocs(await res.json());
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setDocsLoading(false); }
+  };
+
+  const uploadDoc = async (file) => {
+    if (!file || !docsCheck) return;
+    if (file.size > ATTACHMENT_MAX_BYTES) { toast('File is too large (7 MB max)', 'error'); return; }
+    setUploading(true);
+    try {
+      const dataUri = await new Promise((resolve, reject) => {
+        const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(file);
+      });
+      const res = await fetch(docsUrl(docsCheck.id), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fileName: file.name, dataUri }),
+      });
+      if (!res.ok) throw new Error(await errorFrom(res, 'Upload failed'));
+      toast('Uploaded');
+      await openDocs(docsCheck);
+      loadChecks();
+    } catch (e) { toast('Upload failed: ' + e.message, 'error'); }
+    finally { setUploading(false); }
+  };
+
+  const viewDoc = async (doc) => {
+    try {
+      const res = await fetch(docsUrl(docsCheck.id, doc.id), { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(await errorFrom(res, 'Could not open file'));
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = doc.file_name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  const deleteDoc = async (doc) => {
+    if (!window.confirm(`Delete "${doc.file_name}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(docsUrl(docsCheck.id, doc.id), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(await errorFrom(res, 'Delete failed'));
+      toast('Deleted');
+      await openDocs(docsCheck);
+      loadChecks();
+    } catch (e) { toast(e.message, 'error'); }
+  };
 
   const checkTypes = [
     { id: 'criminal', name: 'Criminal Background', icon: '🔍' },
@@ -299,11 +361,14 @@ const BackgroundChecks = ({ token }) => {
                     ) : '-'}
                   </td>
                   <td>
-                    <button 
+                    <button
                       className="btn btn-sm btn-secondary"
                       onClick={() => { setCurrentCheck(check); setShowDetailModal(true); }}
                     >
                       Update
+                    </button>{' '}
+                    <button className="btn btn-sm btn-secondary" onClick={() => openDocs(check)}>
+                      📎 Documents{check.document_count ? ` (${check.document_count})` : ''}
                     </button>
                   </td>
                 </tr>
@@ -312,6 +377,50 @@ const BackgroundChecks = ({ token }) => {
           </table>
         )}
       </div>
+
+      {/* Documents Modal */}
+      {docsCheck && (
+        <div className="modal active" onClick={() => setDocsCheck(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📎 Documents — {docsCheck.caregiver_first} {docsCheck.caregiver_last} · {getTypeName(docsCheck.check_type)}</h3>
+              <button className="modal-close" onClick={() => setDocsCheck(null)}>×</button>
+            </div>
+            <p style={{ fontSize: '0.85rem', color: '#6B7280', marginTop: 0 }}>
+              Upload the result letter for this check (PDF or image, 7 MB max). Record its completed date and reference number with <b>Update</b>.
+            </p>
+            <label className="btn btn-primary" style={{ display: 'inline-block', cursor: uploading ? 'wait' : 'pointer', marginBottom: '1rem' }}>
+              {uploading ? 'Uploading…' : '⬆️ Upload file'}
+              <input type="file" accept={ATTACHMENT_ACCEPT} disabled={uploading} style={{ display: 'none' }}
+                onChange={(e) => { uploadDoc(e.target.files[0]); e.target.value = ''; }} />
+            </label>
+            {docsLoading ? (
+              <div className="loading"><div className="spinner"></div></div>
+            ) : docs.length === 0 ? (
+              <p style={{ color: '#9CA3AF' }}>No documents uploaded for this check.</p>
+            ) : (
+              <table className="table">
+                <thead><tr><th>File</th><th>Uploaded</th><th></th></tr></thead>
+                <tbody>
+                  {docs.map(d => (
+                    <tr key={d.id}>
+                      <td>{d.file_name}<div style={{ fontSize: '0.75rem', color: '#9CA3AF' }}>{Math.max(1, Math.round((d.file_size || 0) / 1024))} KB</div></td>
+                      <td style={{ fontSize: '0.85rem' }}>
+                        {new Date(d.created_at).toLocaleDateString()}
+                        {d.uploaded_by_first && <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>{d.uploaded_by_first} {d.uploaded_by_last}</div>}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-sm btn-secondary" onClick={() => viewDoc(d)}>View</button>{' '}
+                        <button className="btn btn-sm btn-danger" onClick={() => deleteDoc(d)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Add Check Modal */}
       {showAddModal && (
