@@ -11,6 +11,7 @@ const CarePlans = ({ token }) => {
   const [isDirty, setIsDirty] = useState(false);
   const [expandedClient, setExpandedClient] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [editingPlanId, setEditingPlanId] = useState(null);
   const [showGenModal, setShowGenModal] = useState(null);
   const [caregivers, setCaregivers] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -169,8 +170,8 @@ const CarePlans = ({ token }) => {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/care-plans`, {
-        method: 'POST',
+      const response = await fetch(`${API_BASE_URL}/api/care-plans${editingPlanId ? `/${editingPlanId}` : ''}`, {
+        method: editingPlanId ? 'PUT' : 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
@@ -179,31 +180,60 @@ const CarePlans = ({ token }) => {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create care plan');
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `Failed to ${editingPlanId ? 'update' : 'create'} care plan`);
       }
 
-      setMessage('Care plan created successfully!');
-      setFormData({
-        clientId: '',
-        serviceType: 'personal_care',
-        serviceDescription: '',
-        frequency: '',
-        careGoals: '',
-        specialInstructions: '',
-        precautions: '',
-        medicationNotes: '',
-        mobilityNotes: '',
-        dietaryNotes: '',
-        communicationNotes: '',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: ''
-      });
-      setShowForm(false);
+      setMessage(editingPlanId ? 'Care plan updated successfully!' : 'Care plan created successfully!');
+      closeForm();
       loadData();
     } catch (error) {
       setMessage('Error: ' + error.message);
     }
+  };
+
+  const emptyForm = () => ({
+    clientId: '',
+    serviceType: 'personal_care',
+    serviceDescription: '',
+    frequency: '',
+    careGoals: '',
+    specialInstructions: '',
+    precautions: '',
+    medicationNotes: '',
+    mobilityNotes: '',
+    dietaryNotes: '',
+    communicationNotes: '',
+    startDate: new Date().toISOString().split('T')[0],
+    endDate: ''
+  });
+
+  const closeForm = () => {
+    setShowForm(false);
+    setEditingPlanId(null);
+    setFormData(emptyForm());
+  };
+
+  const startEdit = (plan) => {
+    setEditingPlanId(plan.id);
+    setFormData({
+      clientId: plan.client_id,
+      serviceType: plan.service_type || 'personal_care',
+      serviceDescription: plan.service_description || '',
+      frequency: plan.frequency || '',
+      careGoals: plan.care_goals || '',
+      specialInstructions: plan.special_instructions || '',
+      precautions: plan.precautions || '',
+      medicationNotes: plan.medication_notes || '',
+      mobilityNotes: plan.mobility_notes || '',
+      dietaryNotes: plan.dietary_notes || '',
+      communicationNotes: plan.communication_notes || '',
+      startDate: plan.start_date?.split('T')[0] || '',
+      endDate: plan.end_date?.split('T')[0] || ''
+    });
+    setMessage('');
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleDeletePlan = async (planId) => {
@@ -240,9 +270,12 @@ const CarePlans = ({ token }) => {
   };
 
   const isActivePlan = (plan) => {
-    const today = new Date().toISOString().split('T')[0];
-    const isAfterStart = !plan.start_date || plan.start_date <= today;
-    const isBeforeEnd = !plan.end_date || plan.end_date >= today;
+    // Dates arrive as full ISO timestamps ("2026-09-16T05:00:00.000Z"); compare the
+    // calendar-date part only, against today's local date.
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const isAfterStart = !plan.start_date || plan.start_date.slice(0, 10) <= today;
+    const isBeforeEnd = !plan.end_date || plan.end_date.slice(0, 10) >= today;
     return isAfterStart && isBeforeEnd;
   };
 
@@ -268,7 +301,7 @@ const CarePlans = ({ token }) => {
           </button>
           <button
             className="btn btn-primary"
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => (showForm ? closeForm() : setShowForm(true))}
           >
             {showForm ? 'Cancel' : 'Add Care Plan'}
           </button>
@@ -333,7 +366,7 @@ const CarePlans = ({ token }) => {
       {/* Add Care Plan Form */}
       {showForm && (
         <div className="card card-form">
-          <h3>Create New Care Plan</h3>
+          <h3>{editingPlanId ? 'Edit Care Plan' : 'Create New Care Plan'}</h3>
           <form onSubmit={handleAddPlan}>
             <div className="form-grid-2">
               <div className="form-group">
@@ -341,6 +374,7 @@ const CarePlans = ({ token }) => {
                 <select
                   value={formData.clientId}
                   onChange={(e) => setFormData({ ...formData, clientId: e.target.value })}
+                  disabled={!!editingPlanId}
                   required
                 >
                   <option value="">Select client...</option>
@@ -479,8 +513,8 @@ const CarePlans = ({ token }) => {
             </div>
 
             <div className="form-actions">
-              <button type="submit" className="btn btn-primary">Create Care Plan</button>
-              <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">{editingPlanId ? 'Save Changes' : 'Create Care Plan'}</button>
+              <button type="button" className="btn btn-secondary" onClick={closeForm}>Cancel</button>
             </div>
           </form>
         </div>
@@ -558,6 +592,12 @@ const CarePlans = ({ token }) => {
                                     onClick={(e) => { e.stopPropagation(); setShowGenModal(plan); setGenForm({ caregiverId: '', startTime: '09:00', endTime: '13:00', daysOfWeek: [], startDate: plan.start_date?.split('T')[0] || '', endDate: plan.end_date?.split('T')[0] || '' }); }}
                                   >
                                     Generate Schedule
+                                  </button>
+                                  <button
+                                    className="btn btn-sm btn-secondary"
+                                    title="Edit this care plan"
+                                    onClick={(e) => { e.stopPropagation(); startEdit(plan); }}>
+                                    ✏️ Edit
                                   </button>
                                   <button
                                     className="btn btn-sm btn-secondary"

@@ -89,19 +89,44 @@ router.post('/care-plans', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// Only fields present in the body are updated; a field sent as '' is cleared
+// (so an end date can be removed). serviceType can't be cleared.
+const CARE_PLAN_UPDATE_FIELDS = {
+  serviceType: 'service_type', serviceDescription: 'service_description', frequency: 'frequency',
+  careGoals: 'care_goals', specialInstructions: 'special_instructions', precautions: 'precautions',
+  medicationNotes: 'medication_notes', mobilityNotes: 'mobility_notes', dietaryNotes: 'dietary_notes',
+  communicationNotes: 'communication_notes', startDate: 'start_date', endDate: 'end_date',
+};
+
 router.put('/care-plans/:id', verifyToken, requireAdmin, async (req, res) => {
+  const sets = [];
+  const params = [];
+  for (const [key, col] of Object.entries(CARE_PLAN_UPDATE_FIELDS)) {
+    if (!(key in req.body)) continue;
+    const v = req.body[key] === '' ? null : req.body[key];
+    if (key === 'serviceType' && !v) return res.status(400).json({ error: 'serviceType cannot be blank' });
+    params.push(v);
+    sets.push(`${col}=$${params.length}`);
+  }
+  params.push(req.params.id);
+  const client = await db.pool.connect();
   try {
-    const { serviceType, serviceDescription, frequency, careGoals, specialInstructions, precautions, medicationNotes, mobilityNotes, dietaryNotes, communicationNotes, startDate, endDate } = req.body;
-    // Set session GUC so the snapshot trigger can record changed_by
-    await db.query(`SELECT set_config('crm.user_id', $1, true)`, [req.user.id]);
-    const result = await db.query(
-      `UPDATE care_plans SET service_type=COALESCE($1,service_type), service_description=COALESCE($2,service_description), frequency=COALESCE($3,frequency), care_goals=COALESCE($4,care_goals), special_instructions=COALESCE($5,special_instructions), precautions=COALESCE($6,precautions), medication_notes=COALESCE($7,medication_notes), mobility_notes=COALESCE($8,mobility_notes), dietary_notes=COALESCE($9,dietary_notes), communication_notes=COALESCE($10,communication_notes), start_date=COALESCE($11,start_date), end_date=COALESCE($12,end_date), updated_at=NOW() WHERE id=$13 RETURNING *`,
-      [serviceType, serviceDescription, frequency, careGoals, specialInstructions, precautions, medicationNotes, mobilityNotes, dietaryNotes, communicationNotes, startDate, endDate, req.params.id]
+    await client.query('BEGIN');
+    // Transaction-local GUC on the same connection as the UPDATE, so the
+    // snapshot trigger records who made the change.
+    await client.query(`SELECT set_config('crm.user_id', $1, true)`, [req.user.id]);
+    const result = await client.query(
+      `UPDATE care_plans SET ${[...sets, 'updated_at=NOW()'].join(', ')} WHERE id=$${params.length} RETURNING *`,
+      params
     );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
+    if (result.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Care plan not found' }); }
+    await client.query('COMMIT');
     await auditLog(req.user.id, 'UPDATE', 'care_plans', req.params.id, null, result.rows[0]);
     res.json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: error.message }); }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: error.message });
+  } finally { client.release(); }
 });
 
 // GET /api/clinical/care-plans/:id/revisions — list snapshots of prior versions
