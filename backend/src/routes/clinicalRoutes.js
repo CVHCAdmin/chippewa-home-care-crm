@@ -113,6 +113,17 @@ async function resolveVisitSchedule(value, clientId) {
   return { set: true, text: sched.text, asOf: sched.asOf };
 }
 
+const CARE_PLAN_SERVICE_LABELS = {
+  personal_care: 'Personal Care', medication_management: 'Medication Management', companionship: 'Companionship',
+  respite_care: 'Respite Care', mobility_assistance: 'Mobility Assistance', meal_prep: 'Meal Preparation',
+  transportation: 'Transportation', other: 'Other',
+};
+// Same categories as the Care Tasks screen (CareTasksManager.jsx), in print order.
+const CARE_TASK_CATEGORY_LABELS = new Map([
+  ['adl', 'Personal Care (ADL)'], ['iadl', 'Homemaking (IADL)'], ['medication', 'Medication Reminders'],
+  ['companion', 'Companion / Social'], ['safety', 'Safety Checks'], ['other', 'Other'],
+]);
+
 // Only fields present in the body are updated; a field sent as '' is cleared
 // (so an end date can be removed). serviceType can't be cleared.
 const CARE_PLAN_UPDATE_FIELDS = {
@@ -250,6 +261,14 @@ router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) =>
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Care plan not found' });
     const p = r.rows[0];
+    // Loaded before the PDF stream starts so a query error can still return JSON.
+    const tasks = (await db.query(
+      `SELECT task_name, category, weekly_frequency, allotted_minutes, assessment_source
+         FROM client_task_templates
+        WHERE client_id = $1 AND is_active = true
+        ORDER BY sort_order, created_at`,
+      [p.client_id]
+    )).rows;
 
     const PDFDocument = require('pdfkit');
     const doc = new PDFDocument({ size: 'LETTER', margin: 54 });
@@ -282,7 +301,7 @@ router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) =>
     doc.moveDown(0.5);
     doc.font('Helvetica').fontSize(9).fillColor('#374151');
     doc.text(`Plan ID: ${p.id}`);
-    doc.text(`Service Type: ${p.service_type || '—'}     Frequency: ${p.frequency || '—'}`);
+    doc.text(`Service Type: ${CARE_PLAN_SERVICE_LABELS[p.service_type] || p.service_type || '—'}     Frequency: ${p.frequency || '—'}`);
     doc.text(`Start: ${p.start_date ? new Date(p.start_date).toLocaleDateString() : '—'}    End: ${p.end_date ? new Date(p.end_date).toLocaleDateString() : 'Ongoing'}`);
     if (p.author_first) doc.text(`Created by: ${p.author_first} ${p.author_last}   on ${new Date(p.created_at).toLocaleDateString()}`);
 
@@ -303,7 +322,27 @@ router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) =>
       section('Emergency Contact', `${p.emergency_contact_name || ''}   ${p.emergency_contact_phone || ''}`.trim());
     }
 
-    // Signature lines for paper workflow
+    // The client's care task checklist (Clients → Tasks, e.g. imported from the MIDAS
+    // assessment), as it stands on the day the PDF is printed.
+    if (tasks.length) {
+      const printedOn = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+      const mins = (t) => (t.weekly_frequency || 1) * (t.allotted_minutes || 0);
+      const lines = [];
+      for (const [cat, label] of CARE_TASK_CATEGORY_LABELS) {
+        const group = tasks.filter(t => (CARE_TASK_CATEGORY_LABELS.has(t.category) ? t.category : 'other') === cat);
+        if (!group.length) continue;
+        if (lines.length) lines.push('');
+        lines.push(`${label} — ${group.reduce((a, t) => a + mins(t), 0)} min/week`);
+        group.forEach(t => lines.push(`   •  ${t.task_name}: ${t.weekly_frequency || 1}x/week × ${t.allotted_minutes || 0} min = ${mins(t)} min/week`));
+      }
+      const total = tasks.reduce((a, t) => a + mins(t), 0);
+      lines.push('', `Total: ${total} min/week (${(total / 60).toFixed(2)} hours)`);
+      if (tasks.some(t => /^midas/.test(t.assessment_source || ''))) lines.push('Tasks imported from the MIDAS assessment.');
+      section(`Care Tasks (as of ${printedOn})`, lines.join('\n'));
+    }
+
+    // Signature lines for paper workflow; keep the block together on one page.
+    if (doc.y > 600) doc.addPage();
     doc.moveDown(2);
     doc.fillColor('#6B7280').fontSize(9);
     const sigY = doc.y;

@@ -4,6 +4,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { formatDate } from '../../utils/datetime';
 
+// Same categories as the Care Tasks screen (CareTasksManager.jsx), in display order.
+const TASK_GROUPS = [
+  ['adl', 'Personal Care (ADL)'], ['iadl', 'Homemaking (IADL)'], ['medication', 'Medication Reminders'],
+  ['companion', 'Companion / Social'], ['safety', 'Safety Checks'], ['other', 'Other'],
+];
+
 const CarePlans = ({ token }) => {
   const [clients, setClients] = useState([]);
   const [carePlans, setCarePlans] = useState({});
@@ -17,6 +23,7 @@ const CarePlans = ({ token }) => {
   const [visitSchedule, setVisitSchedule] = useState({ text: '', asOf: null, action: null });
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [currentSchedules, setCurrentSchedules] = useState({}); // clientId -> live schedule
+  const [careTasks, setCareTasks] = useState({}); // clientId -> active care tasks (Clients → Tasks)
   const [showGenModal, setShowGenModal] = useState(null);
   const [caregivers, setCaregivers] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -234,6 +241,15 @@ const CarePlans = ({ token }) => {
     try {
       const data = await fetchSchedule(clientId);
       setCurrentSchedules(prev => ({ ...prev, [clientId]: data }));
+    } catch (e) { setMessage('Error: ' + e.message); }
+  };
+
+  const loadCareTasks = async (clientId) => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/clients/${clientId}/care-tasks`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `Could not load care tasks (HTTP ${r.status})`);
+      setCareTasks(prev => ({ ...prev, [clientId]: data }));
     } catch (e) { setMessage('Error: ' + e.message); }
   };
 
@@ -604,7 +620,7 @@ const CarePlans = ({ token }) => {
                 <div
                   onClick={() => {
                     setExpandedClient(isExpanded ? null : client.id);
-                    if (!isExpanded && clientPlans.length > 0) loadCurrentSchedule(client.id);
+                    if (!isExpanded && clientPlans.length > 0) { loadCurrentSchedule(client.id); loadCareTasks(client.id); }
                   }}
                   style={{
                     cursor: 'pointer',
@@ -735,6 +751,38 @@ const CarePlans = ({ token }) => {
                                   </p>
                                 </div>
                               )}
+
+                              {active && careTasks[client.id] && (() => {
+                                const tasks = careTasks[client.id];
+                                const mins = (t) => (t.weekly_frequency || 1) * (t.allotted_minutes || 0);
+                                const total = tasks.reduce((a, t) => a + mins(t), 0);
+                                if (!tasks.length) {
+                                  return (
+                                    <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: '#6B7280' }}>
+                                      <strong>Care Tasks:</strong> none yet — add them in Clients → 📋 Tasks.
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div style={{ marginBottom: '0.75rem' }}>
+                                    <strong>Care Tasks</strong> <small style={{ color: '#6B7280' }}>({tasks.length} · {total} min/week · from Clients → 📋 Tasks)</small>
+                                    {TASK_GROUPS.map(([cat, label]) => {
+                                      const group = tasks.filter(t => (TASK_GROUPS.some(([c]) => c === t.category) ? t.category : 'other') === cat);
+                                      if (!group.length) return null;
+                                      return (
+                                        <div key={cat} style={{ marginTop: '0.35rem', fontSize: '0.88rem' }}>
+                                          <div style={{ fontWeight: 600 }}>{label} — {group.reduce((a, t) => a + mins(t), 0)} min/week</div>
+                                          <ul style={{ margin: '0.15rem 0 0', paddingLeft: '1.25rem' }}>
+                                            {group.map(t => (
+                                              <li key={t.id}>{t.task_name}: {t.weekly_frequency || 1}x/week × {t.allotted_minutes || 0} min</li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
 
                               {plan.service_description && (
                                 <div style={{ marginBottom: '0.75rem' }}>
