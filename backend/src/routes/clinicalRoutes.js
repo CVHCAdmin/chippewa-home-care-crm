@@ -325,7 +325,6 @@ router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) =>
     // The client's care task checklist (Clients → Tasks, e.g. imported from the MIDAS
     // assessment), as it stands on the day the PDF is printed.
     if (tasks.length) {
-      const printedOn = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
       const mins = (t) => (t.weekly_frequency || 1) * (t.allotted_minutes || 0);
       const lines = [];
       for (const [cat, label] of CARE_TASK_CATEGORY_LABELS) {
@@ -338,7 +337,7 @@ router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) =>
       const total = tasks.reduce((a, t) => a + mins(t), 0);
       lines.push('', `Total: ${total} min/week (${(total / 60).toFixed(2)} hours)`);
       if (tasks.some(t => /^midas/.test(t.assessment_source || ''))) lines.push('Tasks imported from the MIDAS assessment.');
-      section(`Care Tasks (as of ${printedOn})`, lines.join('\n'));
+      section('Care Tasks', lines.join('\n'));
     }
 
     // Signature lines for paper workflow; keep the block together on one page.
@@ -363,7 +362,6 @@ router.get('/care-plans/:id/pdf', verifyToken, requireAdmin, async (req, res) =>
     // Footer
     doc.moveDown(2);
     doc.fontSize(7).fillColor('#9CA3AF').text(
-      `Generated ${new Date().toLocaleString()} by ${req.user.email || req.user.id}. ` +
       `This document contains Protected Health Information — handle per HIPAA.`,
       54, 720, { width: 504, align: 'center' }
     );
