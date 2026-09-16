@@ -6,6 +6,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+const multer = require('multer');
+const { parseMidasAssessmentPdf, AssessmentPdfError } = require('../services/midasAssessmentPdf');
 
 // Lazy bootstrap — ensures the tables exist on first request (idempotent).
 let _bootstrapped = false;
@@ -162,6 +164,36 @@ router.delete('/care-tasks/:id', verifyToken, requireAdmin, async (req, res) => 
     await auditLog(req.user.id, 'DELETE', 'client_task_templates', req.params.id, null, { soft_deleted: true });
     res.json({ success: true });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/clients/:clientId/care-tasks/parse-assessment-pdf  (multipart, field "file")
+// Reads a MIDAS SHC/PC Assessment Summary PDF on the server and returns the same shape
+// the import endpoint takes, for the admin to preview. Writes nothing.
+const assessmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+router.post('/clients/:clientId/care-tasks/parse-assessment-pdf', verifyToken, requireAdmin, (req, res, next) => {
+  assessmentUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'PDF is larger than 5 MB' : err.message });
+    next();
+  });
+}, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Choose a PDF file' });
+    const c = await db.query(`SELECT first_name, last_name FROM clients WHERE id = $1`, [req.params.clientId]);
+    if (c.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
+
+    const parsed = await parseMidasAssessmentPdf(req.file.buffer);
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    parsed.clientNameMatch = norm(parsed.member.lastName) === norm(c.rows[0].last_name)
+      && norm(parsed.member.firstName) === norm(c.rows[0].first_name);
+    res.json(parsed);
+  } catch (error) {
+    if (error instanceof AssessmentPdfError) return res.status(422).json({ error: error.message });
+    console.error('Parse assessment PDF error:', error);
     res.status(500).json({ error: error.message });
   }
 });

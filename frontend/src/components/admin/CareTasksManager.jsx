@@ -30,6 +30,8 @@ export default function CareTasksManager({ client, token, onClose }) {
   const [replaceExisting, setReplaceExisting] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [pdfReading, setPdfReading] = useState(false);
+  const [nameMismatchOk, setNameMismatchOk] = useState(false);
 
   // Adherence report state ("what's getting done")
   const [showAdherence, setShowAdherence] = useState(false);
@@ -108,8 +110,25 @@ export default function CareTasksManager({ client, token, onClose }) {
   };
 
   // ── MIDAS import ────────────────────────────────────────────────────────
+  const readPdf = async (file) => {
+    if (!file) return;
+    setParseError(''); setImportResult(null); setParsed(null); setNameMismatchOk(false);
+    setPdfReading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch(`${API_BASE_URL}/api/clients/${client.id}/care-tasks/parse-assessment-pdf`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `Could not read the PDF (HTTP ${r.status})`);
+      setParsed(data);
+    } catch (e) { setParseError(e.message); }
+    finally { setPdfReading(false); }
+  };
+
   const parseJson = () => {
-    setParseError(''); setImportResult(null);
+    setParseError(''); setImportResult(null); setNameMismatchOk(false);
     try {
       const obj = JSON.parse(rawJson);
       if (!obj || !Array.isArray(obj.tasks) || obj.tasks.length === 0) {
@@ -243,10 +262,21 @@ export default function CareTasksManager({ client, token, onClose }) {
 
           {showImport && (
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '0.9rem', marginBottom: '1rem' }}>
-              <div style={{ fontWeight: 700, fontSize: '0.92rem', marginBottom: '0.35rem' }}>📥 Import from MIDAS SHC Homemaking assessment</div>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem', marginBottom: '0.35rem' }}>📥 Import from MIDAS assessment</div>
               <div style={{ fontSize: '0.8rem', color: '#1E40AF', marginBottom: '0.5rem' }}>
-                Paste the JSON produced by Claude reading the MIDAS assessment, then Parse → review the reconciliation → Import.
+                Upload the MIDAS <b>SHC/PC Assessment Summary</b> PDF → review the tasks and totals → Import.
               </div>
+              <label className="btn btn-sm btn-primary" style={{ display: 'inline-block', marginBottom: '0.5rem', cursor: pdfReading ? 'wait' : 'pointer' }}>
+                {pdfReading ? 'Reading PDF…' : '📄 Upload assessment PDF'}
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  disabled={pdfReading}
+                  style={{ display: 'none' }}
+                  onChange={(e) => { readPdf(e.target.files[0]); e.target.value = ''; }}
+                />
+              </label>
+              <div style={{ fontSize: '0.75rem', color: '#6B7280', marginBottom: '0.35rem' }}>Or paste JSON:</div>
               <textarea
                 placeholder='{ "source": "midas_shc_homemaking", "assessmentTotals": { "minsPerWeek": 291 }, "tasks": [ … ] }'
                 value={rawJson}
@@ -265,6 +295,26 @@ export default function CareTasksManager({ client, token, onClose }) {
 
               {parsed && (
                 <div style={{ marginTop: '0.6rem' }}>
+                  {parsed.member && (
+                    <div style={{ fontSize: '0.83rem', marginBottom: '0.5rem', color: '#1F2937' }}>
+                      Assessment for <b>{parsed.member.firstName} {parsed.member.lastName}</b>
+                      {parsed.member.memberId && ` · Member ID ${parsed.member.memberId}`}
+                      {parsed.member.assessDate && ` · assessed ${parsed.member.assessDate}`}
+                      {parsed.member.assessor && ` by ${parsed.member.assessor}`}
+                      {parsed.sections?.map(s => (
+                        <div key={s.name} style={{ color: '#6B7280' }}>{s.name}: {s.tasks} task(s), {s.minsPerWeek} min/week</div>
+                      ))}
+                    </div>
+                  )}
+                  {parsed.clientNameMatch === false && (
+                    <div style={{ padding: '0.5rem 0.7rem', borderRadius: 6, fontSize: '0.83rem', marginBottom: '0.5rem', background: '#FEE2E2', color: '#991B1B' }}>
+                      ⚠️ The name on this assessment does not match {client.first_name} {client.last_name}.
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.3rem' }}>
+                        <input type="checkbox" checked={nameMismatchOk} onChange={(e) => setNameMismatchOk(e.target.checked)} />
+                        I checked — this assessment belongs to this client
+                      </label>
+                    </div>
+                  )}
                   <div style={{
                     padding: '0.5rem 0.7rem', borderRadius: 6, fontSize: '0.83rem', marginBottom: '0.5rem',
                     background: reconcileOk === false ? '#FEE2E2' : reconcileOk === true ? '#D1FAE5' : '#F3F4F6',
@@ -294,7 +344,7 @@ export default function CareTasksManager({ client, token, onClose }) {
                       </tbody>
                     </table>
                   </div>
-                  <button onClick={runImport} className="btn btn-sm btn-primary" disabled={importing} style={{ marginTop: '0.5rem' }}>
+                  <button onClick={runImport} className="btn btn-sm btn-primary" disabled={importing || (parsed.clientNameMatch === false && !nameMismatchOk)} style={{ marginTop: '0.5rem' }}>
                     {importing ? 'Importing…' : `Import ${parsed.tasks.length} task(s)${replaceExisting ? ' (replace current)' : ''}`}
                   </button>
                 </div>
