@@ -137,7 +137,6 @@ function generateMidasExport(claims, provider) {
 
   const csvRows = [
     `"MIDAS Upload Packet - ${provider.agencyName}"`,
-    `"Generated: ${new Date().toLocaleString()}"`,
     '',
     headers.map(h => `"${h}"`).join(','),
     ...rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')),

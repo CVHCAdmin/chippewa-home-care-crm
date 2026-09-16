@@ -387,7 +387,7 @@ function renderIncidentReportPdf(doc, data) {
   const ui = makeLayout(doc);
   const i = data.incident;
   ui.letterhead(false);
-  ui.title('Incident Report', `${dash(i.incident_number)}  ·  Printed ${longDate(i.today_s)}`);
+  ui.title('Incident Report', dash(i.incident_number));
   incidentSections(ui, data, { forPayer: false });
   ui.signatures([['Investigated by (signature)', 'Date'], ['Administrator (signature)', 'Date']]);
   ui.footers(`${AGENCY.name}  ·  Incident ${dash(i.incident_number)}`);

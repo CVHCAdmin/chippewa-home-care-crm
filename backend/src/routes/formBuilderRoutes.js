@@ -198,7 +198,6 @@ router.get('/submissions/:id/pdf', auth, async (req, res) => {
 
     // Footer
     doc.fontSize(7).fillColor('#9CA3AF').text(
-      `Generated ${new Date().toLocaleString()} by ${req.user.email || req.user.id}. ` +
       `Contains Protected Health Information — handle per HIPAA.`,
       54, 720, { width: 504, align: 'center' }
     );

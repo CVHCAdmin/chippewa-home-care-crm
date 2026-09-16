@@ -265,7 +265,6 @@ router.post('/compliance-report.pdf', async (req, res) => {
     doc.moveDown(0.4);
     doc.fillColor('#374151').font('Helvetica').fontSize(10);
     doc.text(`Period: ${startDate || 'all-time'} to ${endDate || new Date().toISOString().slice(0,10)}`);
-    doc.text(`Generated: ${new Date().toLocaleString()}`);
     doc.moveDown(0.5);
 
     // Summary block

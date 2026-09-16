@@ -322,7 +322,7 @@ const RouteOptimizer = ({ token }) => {
       </tbody>
     </table>
     <div class="footer">
-      Generated ${new Date().toLocaleString()} · ${r.summary.routingSource === 'google_routes_api' ? 'Google Routes API (actual road miles)' : 'Estimated distances'} · Mileage rate: $${mileageRate}/mi
+      ${r.summary.routingSource === 'google_routes_api' ? 'Google Routes API (actual road miles)' : 'Estimated distances'} · Mileage rate: $${mileageRate}/mi
     </div>
     <script>window.onload = () => window.print();</script>
     </body></html>`);

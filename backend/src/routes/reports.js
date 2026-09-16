@@ -758,7 +758,6 @@ router.post('/:type/export', auth, async (req, res) => {
       doc.fontSize(18).fillColor('#2ABBA7').text('Chippewa Valley Home Care', 50, 50);
       doc.fontSize(13).fillColor('#333').text(`${reportType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} Report`, 50, 75);
       doc.fontSize(10).fillColor('#666').text(`Period: ${startDate} – ${endDate}`, 50, 95);
-      doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`, 50, 110);
       doc.moveTo(50, 130).lineTo(562, 130).strokeColor('#2ABBA7').stroke();
 
       if (data.length === 0) {
@@ -1392,7 +1391,7 @@ function renderClientReportPdf(doc, data) {
   doc.fontSize(20).font('Helvetica-Bold').text(`${c.first_name} ${c.last_name}`, 50, doc.y);
   doc.moveDown(0.2);
   doc.fontSize(10).fillColor(MUTED).font('Helvetica')
-     .text(`Report Period: ${fmtDate(data.period.from)} – ${fmtDate(data.period.to)}    •    Generated ${fmtDateTime(data.generatedAt)}`);
+     .text(`Report Period: ${fmtDate(data.period.from)} – ${fmtDate(data.period.to)}`);
   doc.fillColor(INK);
   doc.moveDown(0.8);
 
@@ -2067,10 +2066,6 @@ router.post('/:type/export-pdf', auth, async (req, res) => {
       const outstanding = parseFloat(revenue?.total_billed || 0) - parseFloat(revenue?.collected || 0);
       doc.text(`Outstanding: $${outstanding.toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
     }
-
-    // Footer
-    doc.fontSize(8).fillColor('#9CA3AF')
-      .text(`Generated ${new Date().toLocaleDateString()} by CVHC CRM`, 50, doc.page.height - 40);
 
     doc.end();
   } catch (error) {
