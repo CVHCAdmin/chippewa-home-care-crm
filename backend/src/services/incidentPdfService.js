@@ -47,6 +47,14 @@ const TRAINING_TYPE_LABELS = {
   misappropriation_policy: 'Client Funds, Property & Misappropriation Policy', other: 'Other',
 };
 
+// Same calendar day three months earlier ("past 3 months" as a payer means it).
+const threeMonthsBefore = (ymd) => {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCMonth(dt.getUTCMonth() - 3);
+  return dt.toISOString().slice(0, 10);
+};
+
 // ─────────────────────────────── DATA ───────────────────────────────
 async function loadIncidentCase(db, incidentId) {
   const inc = await db.query(`
@@ -104,7 +112,7 @@ async function loadIncidentCase(db, incidentId) {
       [`${String(incident.incident_date_s || incident.today_s).slice(0, 4)}-01-01`, incident.today_s, incident.client_id]),
   ]);
 
-  let backgroundCheck = null, earlierBackgroundChecks = [], trainings = [], lastCaregiverVisit = null;
+  let backgroundCheck = null, earlierBackgroundChecks = [], trainings = [], lastCaregiverVisit = null, otherMembers = [];
   if (incident.caregiver_id) {
     const [bgc, tr, last] = await Promise.all([
       db.query(`
@@ -134,9 +142,50 @@ async function loadIncidentCase(db, incidentId) {
     earlierBackgroundChecks = bgc.rows.slice(1).filter(b => b.status === 'completed');
     trainings = tr.rows;
     lastCaregiverVisit = last.rows[0]?.d || null;
+
+    // Other members of the SAME payer this caregiver served in the three months before the
+    // concern was reported. Counts both scheduled visits (shared schedule engine) and
+    // clock-ins, because a visit worked without clocking in still happened.
+    if (incident.client_id) {
+      const to = incident.reported_date_s || incident.today_s;
+      const from = threeMonthsBefore(to);
+      otherMembers = (await db.query(`
+        WITH ${SCHEDULE_OCCURRENCES_CTE('occ')},
+        sched AS (
+          SELECT occ.client_id, COUNT(*)::int AS n, MIN(occ.occ_date) AS first_d, MAX(occ.occ_date) AS last_d
+            FROM occ WHERE occ.caregiver_id = $4 GROUP BY 1),
+        punched AS (
+          SELECT t.client_id, COUNT(*)::int AS n,
+                 MIN((t.start_time AT TIME ZONE 'America/Chicago')::date) AS first_d,
+                 MAX((t.start_time AT TIME ZONE 'America/Chicago')::date) AS last_d
+            FROM time_entries t
+           WHERE t.caregiver_id = $4
+             AND (t.start_time AT TIME ZONE 'America/Chicago')::date BETWEEN $1::date AND $2::date
+           GROUP BY 1)
+        SELECT c.first_name, c.last_name, rs.name AS payer,
+               COALESCE(s.n, 0) AS scheduled_visits, COALESCE(p.n, 0) AS clock_ins,
+               to_char(LEAST(COALESCE(s.first_d, p.first_d), COALESCE(p.first_d, s.first_d)), 'MM/DD/YYYY') AS first_s,
+               to_char(GREATEST(COALESCE(s.last_d, p.last_d), COALESCE(p.last_d, s.last_d)), 'MM/DD/YYYY') AS last_s
+          FROM clients c
+          LEFT JOIN sched s   ON s.client_id = c.id
+          LEFT JOIN punched p ON p.client_id = c.id
+          LEFT JOIN referral_sources rs ON rs.id = c.referral_source_id
+         WHERE c.id <> $3
+           AND (s.client_id IS NOT NULL OR p.client_id IS NOT NULL)
+           -- Same payer as the member on this incident: by referral source, or by the payer
+           -- on their authorizations (some clients carry the payer only there).
+           AND (
+             c.referral_source_id = (SELECT referral_source_id FROM clients WHERE id = $3)
+             OR EXISTS (SELECT 1 FROM authorizations a
+                         WHERE a.client_id = c.id
+                           AND a.payer_id = (SELECT referral_source_id FROM clients WHERE id = $3))
+           )
+         ORDER BY c.last_name, c.first_name`,
+        [from, to, incident.client_id, incident.caregiver_id])).rows;
+    }
   }
 
-  return { incident, notes: notes.rows, attachments: attachments.rows, visits: visits.rows, backgroundCheck, earlierBackgroundChecks, trainings, lastCaregiverVisit };
+  return { incident, notes: notes.rows, attachments: attachments.rows, visits: visits.rows, backgroundCheck, earlierBackgroundChecks, trainings, lastCaregiverVisit, otherMembers };
 }
 
 // ─────────────────────────────── FORMAT ───────────────────────────────
@@ -403,6 +452,7 @@ function renderResponsePacketPdf(doc, data, options = {}) {
   const ui = makeLayout(doc);
   const { incident: i, visits, backgroundCheck, trainings } = data;
   const earlierChecks = data.earlierBackgroundChecks || [];
+  const otherMembers = data.otherMembers || [];
   const member = personName(i.client_first, i.client_last);
   const caregiver = personName(i.caregiver_first, i.caregiver_last);
   const payer = i.is_private_pay ? '' : text(i.payer_name);
@@ -446,6 +496,21 @@ function renderResponsePacketPdf(doc, data, options = {}) {
         : ' CVHC has no completed medication-handling or misappropriation training on file in its system for this caregiver.';
     ui.runIn('2. Background check and training. ', bgcText + earlierText + trText);
     ui.runIn('3. Caregiver schedule status. ', scheduleStatusSentence(data));
+    let n = 4;
+    if (text(i.payer_response_notes)) {
+      ui.runIn(`${n++}. Additional information. `, String(i.payer_response_notes).trim());
+    }
+    if (otherMembers.length) {
+      const window = `${shortDate(threeMonthsBefore(i.reported_date_s || i.today_s))} – ${shortDate(i.reported_date_s || i.today_s)}`;
+      ui.runIn(`${n++}. Other members served by this caregiver. `,
+        `In the three months before this concern was reported (${window}), CVHC's records show this caregiver was scheduled with or clocked in for the following ${text(payer) || 'payer'} member(s):`);
+      ui.bullets(otherMembers.map(m => {
+        const counts = [m.scheduled_visits ? `${m.scheduled_visits} scheduled visit${m.scheduled_visits === 1 ? '' : 's'}` : null,
+                        m.clock_ins ? `${m.clock_ins} clock-in${m.clock_ins === 1 ? '' : 's'}` : 'no clock-ins recorded'].filter(Boolean).join(', ');
+        const span = m.first_s && m.last_s ? `, ${m.first_s}–${m.last_s}` : '';
+        return `${personName(m.first_name, m.last_name)} — ${counts}${span}`;
+      }), false, 9.5);
+    }
   }
   ui.p('Please contact me with any questions or if you need additional information.', { after: 0.4 });
   ui.p('Sincerely,', { after: 0 });

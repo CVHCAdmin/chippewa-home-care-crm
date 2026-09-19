@@ -725,13 +725,15 @@ router.put('/incidents/:id', verifyToken, requireAdmin, async (req, res) => {
          description=$7, witnesses=$8, injuries_or_damage=$9, actions_taken=$10, follow_up_required=$11, follow_up_notes=$12,
          reported_by=$13, reported_date=$14, reporter_contact_name=$15, reporter_phone=$16, reporter_email=$17,
          response_due_date=$18, response_sent_date=$19, status=$20, disposition=$21, findings=$22,
-         mandatory_report_status=$23, mandatory_report_details=$24, closed_date=$25, updated_at=NOW()
+         mandatory_report_status=$23, mandatory_report_details=$24, closed_date=$25,
+         payer_response_notes=$27, updated_at=NOW()
        WHERE id=$26 RETURNING *`,
       [b.clientId, orNull(b.caregiverId), b.incidentType, b.severity || p.severity || 'moderate', b.incidentDate, orNull(b.incidentTime),
        String(b.description).trim(), orNull(b.witnesses), orNull(b.injuriesOrDamage), orNull(b.actionsTaken), !!b.followUpRequired, orNull(b.followUpNotes),
        orNull(b.reportedBy), orNull(b.reportedDate), orNull(b.reporterContactName), orNull(b.reporterPhone), orNull(b.reporterEmail),
        orNull(b.responseDueDate), orNull(b.responseSentDate), status, orNull(b.disposition), orNull(b.findings),
-       orNull(b.mandatoryReportStatus), orNull(b.mandatoryReportDetails), closedDate, req.params.id]
+       orNull(b.mandatoryReportStatus), orNull(b.mandatoryReportDetails), closedDate, req.params.id,
+       orNull(b.payerResponseNotes)]
     );
     await auditLog(req.user.id, 'UPDATE', 'incident_reports', req.params.id, withoutSignature(p), withoutSignature(r.rows[0]));
     res.json(withoutSignature(r.rows[0]));

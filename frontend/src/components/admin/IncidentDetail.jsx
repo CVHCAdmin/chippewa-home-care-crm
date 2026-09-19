@@ -47,6 +47,7 @@ const toForm = (i) => ({
   status: i.status || 'open',
   disposition: i.disposition || '',
   findings: i.findings || '',
+  payerResponseNotes: i.payer_response_notes || '',
   mandatoryReportStatus: i.mandatory_report_status || '',
   mandatoryReportDetails: i.mandatory_report_details || '',
   closedDate: i.closed_date_ymd || '',
@@ -665,6 +666,11 @@ export default function IncidentDetail({ incidentId, token, onBack }) {
           <label>Findings</label>
           <textarea rows="4" value={form.findings} onChange={e => set('findings', e.target.value)}
             placeholder="What the investigation found. This text goes into the payer response letter." />
+        </div>
+        <div className="form-group">
+          <label>Additional Information for the Payer</label>
+          <textarea rows="3" value={form.payerResponseNotes} onChange={e => set('payerResponseNotes', e.target.value)}
+            placeholder="Anything the payer asked that the case file has no field for. Printed in the response letter as its own numbered item." />
         </div>
         {form.status === 'closed' && (
           <div className="form-group" style={{ maxWidth: 260 }}>
