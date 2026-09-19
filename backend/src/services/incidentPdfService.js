@@ -502,13 +502,13 @@ function renderResponsePacketPdf(doc, data, options = {}) {
     }
     if (otherMembers.length) {
       const window = `${shortDate(threeMonthsBefore(i.reported_date_s || i.today_s))} – ${shortDate(i.reported_date_s || i.today_s)}`;
+      // Names and the period each member was assigned — what the payer asked for. Visit
+      // counts are deliberately not printed here; the visit schedule exhibit carries detail.
       ui.runIn(`${n++}. Other members served by this caregiver. `,
-        `In the three months before this concern was reported (${window}), CVHC's records show this caregiver was scheduled with or clocked in for the following ${text(payer) || 'payer'} member(s):`);
+        `In the three months before this concern was reported (${window}), CVHC's records show this caregiver was assigned to the following ${text(payer) || 'payer'} member(s):`);
       ui.bullets(otherMembers.map(m => {
-        const counts = [m.scheduled_visits ? `${m.scheduled_visits} scheduled visit${m.scheduled_visits === 1 ? '' : 's'}` : null,
-                        m.clock_ins ? `${m.clock_ins} clock-in${m.clock_ins === 1 ? '' : 's'}` : 'no clock-ins recorded'].filter(Boolean).join(', ');
-        const span = m.first_s && m.last_s ? `, ${m.first_s}–${m.last_s}` : '';
-        return `${personName(m.first_name, m.last_name)} — ${counts}${span}`;
+        const span = m.first_s && m.last_s ? ` — ${m.first_s === m.last_s ? m.first_s : `${m.first_s} to ${m.last_s}`}` : '';
+        return `${personName(m.first_name, m.last_name)}${span}`;
       }), false, 9.5);
     }
   }
