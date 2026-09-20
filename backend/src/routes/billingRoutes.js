@@ -108,6 +108,12 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
   );
   const cb = clientBilling.rows[0] || {};
   if (cb.is_private_pay) referralSourceId = null;
+  // Private pay bills the clock, not the schedule (office policy 2026-09-19): the client
+  // pays for the time the caregiver was actually there. Payer clients keep billing the
+  // scheduled block — that is what the authorization covers. A punch LONGER than the
+  // schedule is still held for review either way, because that is usually a missed
+  // clock-out rather than extra care.
+  const privatePay = !!cb.is_private_pay;
 
   if (referralSourceId) {
     const rateResult = await db.query(`
@@ -430,7 +436,14 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
         scheduledStart: visit.start_time, timeEntryId: entry.time_entry_id,
       });
       // With no schedule to bill against there is nothing to choose between.
-      const chosen = !haveSched ? 'clocked' : (choices[key] === 'clocked' ? 'clocked' : 'scheduled');
+      const runsLong = haveSched && actualMin > schedMin + PAY_GRACE_MIN;
+      const defaultBasis = !haveSched ? 'clocked'
+        : (privatePay && !runsLong) ? 'clocked'
+        : 'scheduled';
+      const chosen = !haveSched ? 'clocked'
+        : choices[key] === 'clocked' ? 'clocked'
+        : choices[key] === 'scheduled' ? 'scheduled'
+        : defaultBasis;
       const billedMin = chosen === 'clocked' ? actualMin : schedMin;
       hours = billedMin / 60.0;
       billedBasis = chosen;
@@ -450,14 +463,16 @@ async function generateLineItems(clientId, referralSourceId, careTypeId, billing
         clocked_minutes: Math.round(actualMin),
         clocked_amount: lineAmount(actualMin / 60),
         time_entry_id: entry.time_entry_id,
-        needs_choice: disagrees,
+        // A private-pay punch that came in SHORT needs no decision — billing the clock is
+        // the policy. Long punches (missed clock-out) still stop the invoice for review.
+        needs_choice: disagrees && (!privatePay || runsLong),
         // Long punches are usually a missed clock-out rather than extra care, so
         // the default stays 'scheduled' — billing the raw punch is one click away
         // but never the thing that happens by not looking.
         status: !haveSched ? 'unscheduled'
               : !disagrees ? 'match'
               : actualMin < schedMin ? 'short' : 'long',
-        default_basis: haveSched ? 'scheduled' : 'clocked',
+        default_basis: defaultBasis,
         chosen_basis: chosen,
       });
       startISO = entry.start_time;
