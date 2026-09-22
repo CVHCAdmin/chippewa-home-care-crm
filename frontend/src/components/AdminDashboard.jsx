@@ -25,6 +25,7 @@ const ApplicationsDashboard = React.lazy(() => import('./admin/ApplicationsDashb
 const JobPostingsAdmin = React.lazy(() => import('./admin/JobPostingsAdmin'));
 const OnboardingPacketsAdmin = React.lazy(() => import('./admin/OnboardingPacketsAdmin'));
 const CarePlans = React.lazy(() => import('./admin/CarePlans'));
+const VisitDocumentation = React.lazy(() => import('./admin/VisitDocumentation'));
 const IncidentReporting = React.lazy(() => import('./admin/IncidentReporting'));
 const NotificationCenter = React.lazy(() => import('./admin/NotificationCenter'));
 const ComplianceTracking = React.lazy(() => import('./admin/ComplianceTracking'));
@@ -94,6 +95,7 @@ const NAV_SECTIONS = [
   {
     id: 'clinical', label: 'Clinical', icon: '🩺',
     items: [
+      { id: 'visit-docs', label: 'Visit Documentation', icon: '📝' },
       { id: 'adl', label: 'ADL Tracking', icon: '🩺' },
       { id: 'medications', label: 'Medications', icon: '💊' },
       { id: 'incidents', label: 'Incidents', icon: '⚠️' },
@@ -116,6 +118,7 @@ const NAV_SECTIONS = [
     items: [
       { id: 'billing', label: 'Invoices', icon: '🧾' },
       { id: 'billing-import', label: 'Invoice Import', icon: '📥' },
+      { id: 'visit-docs', label: 'Visit Notes → Invoice', icon: '📝' },
       { id: 'claims', label: 'Claims', icon: '📑' },
       { id: 'billing-engine', label: 'Claims & EVV Engine', icon: '⚡' },
       { id: 'payroll', label: 'Payroll', icon: '💵' },
@@ -279,6 +282,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'job-postings': return <JobPostingsAdmin token={token} />;
       case 'onboarding-packets': return <OnboardingPacketsAdmin token={token} />;
       case 'care-plans': return <CarePlans token={token} />;
+      case 'visit-docs': return <VisitDocumentation token={token} />;
       case 'incidents': return <IncidentReporting token={token} />;
       case 'notifications': return <NotificationCenter token={token} />;
       case 'messages': return <MessageBoard token={token} />;

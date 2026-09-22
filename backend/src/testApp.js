@@ -74,6 +74,7 @@ app.use('/api/payroll',           verifyToken, require('./routes/payrollRoutes')
 app.use('/api/audit-logs',        verifyToken, require('./routes/auditLogs'));
 app.use('/api/users',             verifyToken, require('./routes/users'));
 app.use('/api/claims',            verifyToken, require('./routes/claimsRoutes'));
+app.use('/api/visit-docs',                     require('./routes/visitDocumentationRoutes'));
 app.use('/api/stripe',                         require('./routes/stripeRoutes'));
 app.use('/api/applications', (req, res, next) => {
   if (req.method === 'POST' && req.path === '/') return next();
