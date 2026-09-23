@@ -73,6 +73,12 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = c => (r.status
     const [a, b, c] = deb.slice(-3);
     const pick = (v) => ({ visitDate: v.visit_date, startTime: v.start_time, caregiverId: v.caregiver_id });
 
+    // Real notes exist in prod now (the office bulk-filled Clarence). Clear them
+    // inside this rolled-back transaction so the save/bulk checks start from a
+    // known state without depending on — or touching — live documentation.
+    const wiped = (await client.query(`DELETE FROM visit_documentation WHERE client_id=$1 RETURNING 1`, [CLARENCE])).rowCount;
+    console.log(`      cleared ${wiped} existing notes in-transaction (rolled back)`);
+
     // The live VA rate is removed inside this (rolled-back) transaction so the
     // no-rate path is still exercised, then put back for the invoicing checks.
     const liveRates = (await client.query(`DELETE FROM referral_source_rates WHERE referral_source_id=$1 RETURNING *`, [VA])).rows;

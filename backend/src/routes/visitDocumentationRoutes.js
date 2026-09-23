@@ -328,8 +328,9 @@ router.post('/clients/:clientId/invoice', async (req, res) => {
 });
 
 // ─── GET /api/visit-docs/invoices/:invoiceId/packet.pdf ───────────────────────
-// Page 1+: the invoice. Then "Visit Documentation": one block per billed visit
-// with its tasks and note, in date order.
+// Page 1+: the invoice, with each visit's care note printed under its lines. Then
+// "Visit Documentation": one block per billed visit with its tasks and note, in
+// date order, for a payer that wants the documentation on its own pages.
 router.get('/invoices/:invoiceId/packet.pdf', async (req, res) => {
   try {
     const inv = (await db.query(`
@@ -431,14 +432,37 @@ router.get('/invoices/:invoiceId/packet.pdf', async (req, res) => {
     };
     header();
     let totalHours = 0;
-    for (const l of lines) {
+    let lastVisitKey = null;
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
       if (doc.y + 16 > 738) { doc.addPage(); header(); }
       const y = doc.y;
       totalHours += Number(l.hours);
       doc.fillColor('#111827').font('Helvetica').fontSize(8.5);
       const cells = [l.visit_date ? fmtDate(l.visit_date) : '', l.description, l.caregiver_name || '', Number(l.hours).toFixed(2), money(l.rate), money(l.amount)];
-      cols.forEach(([x, w, , a], i) => doc.text(cells[i], x + 2, y, { width: w - 4, align: a || 'left', lineBreak: false, ellipsis: true }));
+      cols.forEach(([x, w, , a], i2) => doc.text(cells[i2], x + 2, y, { width: w - 4, align: a || 'left', lineBreak: false, ellipsis: true }));
       doc.y = y + 14;
+
+      // The visit's care note prints under the last line of that visit, so each
+      // charge on the invoice carries the documentation for the care it bills.
+      const k = l.visit_date && l.start_time ? visitKey(l) : null;
+      const next = lines[i + 1];
+      const nextK = next && next.visit_date && next.start_time ? visitKey(next) : null;
+      if (k && k !== nextK && k !== lastVisitKey) {
+        lastVisitKey = k;
+        const d = docByKey.get(k);
+        const done = Array.isArray(d?.tasks) ? d.tasks.filter((t) => t.done).map((t) => t.taskName) : [];
+        const bits = [];
+        if (done.length) bits.push(done.join('; '));
+        if (d?.note) bits.push(d.note);
+        const text = bits.length ? bits.join(' — ') : 'No note recorded for this visit.';
+        const w = R - (L + 64) - 4;
+        const h = doc.heightOfString(text, { width: w, lineGap: 0 }) + 4;
+        if (doc.y + h > 738) doc.addPage();
+        doc.fillColor(bits.length ? '#4B5563' : '#9CA3AF').font('Helvetica-Oblique').fontSize(7.5)
+          .text(text, L + 64, doc.y, { width: w, lineGap: 0 });
+        doc.moveDown(0.25);
+      }
     }
     ensure(50);
     rule('#9CA3AF');
