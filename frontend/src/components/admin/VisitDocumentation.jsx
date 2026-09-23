@@ -33,6 +33,9 @@ const VisitDocumentation = ({ token }) => {
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [creating, setCreating] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkNote, setBulkNote] = useState('Personal care provided. Walked hallways with assistance. Vacuumed and dusted.');
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
@@ -126,6 +129,25 @@ const VisitDocumentation = ({ token }) => {
     } finally { setCreating(false); }
   };
 
+  // Writes the same note (with every care task ticked) to visits that have none.
+  // Visits that already have a note are left alone.
+  const bulkFill = async () => {
+    setBulkBusy(true); setMessage(null);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/visit-docs/clients/${clientId}/visits/bulk`, {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to, note: bulkNote, onlyMissing: true }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      setBulkOpen(false);
+      setMessage({ type: 'success', text: `Filled ${body.written} visit${body.written === 1 ? '' : 's'}${body.skipped ? `, left ${body.skipped} that already had a note` : ''}. Edit any day that was different.` });
+      await load(true);
+    } catch (e) {
+      setMessage({ type: 'error', text: `Bulk fill failed: ${e.message}` });
+    } finally { setBulkBusy(false); }
+  };
+
   const downloadPacket = async (inv) => {
     try {
       const r = await fetch(`${API_BASE_URL}/api/visit-docs/invoices/${inv.id}/packet.pdf`, { headers });
@@ -192,6 +214,11 @@ const VisitDocumentation = ({ token }) => {
             <button className="btn btn-sm btn-secondary" disabled={!billable.length}
               onClick={() => setSelected(new Set(billable.map(vkey)))}>Select all not invoiced ({billable.length})</button>
             <button className="btn btn-sm btn-secondary" disabled={!selected.size} onClick={() => setSelected(new Set())}>Clear</button>
+            <button className="btn btn-sm btn-secondary" disabled={!data.visits.some((v) => !v.doc)}
+              onClick={() => setBulkOpen(true)}
+              title="Write one note, with the care-plan tasks ticked, to every visit that has no note yet">
+              Fill notes for visits without one ({data.visits.filter((v) => !v.doc).length})
+            </button>
             <span style={{ flex: '1 1 auto' }}>
               {selected.size ? <>{selected.size} selected · <strong>{money(pickedTotal)}</strong>{pickedUndocumented ? <span style={{ color: '#B45309' }}> · {pickedUndocumented} without a note</span> : null}</> : 'Tick visits to invoice'}
             </span>
@@ -199,6 +226,22 @@ const VisitDocumentation = ({ token }) => {
               {creating ? 'Creating…' : `Create invoice from ${selected.size || ''} selected`}
             </button>
           </div>
+
+          {bulkOpen && (
+            <div className="card" style={{ border: '1px solid #93C5FD', background: '#EFF6FF' }}>
+              <strong>Fill {data.visits.filter((v) => !v.doc).length} visits without a note</strong>
+              <p style={{ margin: '0.4rem 0', color: '#374151' }}>
+                This note is written to each of those visits, with every care task ticked. Visits that already have a note are left alone. Edit any day that was different afterwards.
+              </p>
+              <textarea rows={3} style={{ width: '100%' }} value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <button className="btn btn-primary btn-sm" disabled={bulkBusy || !bulkNote.trim()} onClick={bulkFill}>
+                  {bulkBusy ? 'Filling…' : `Fill ${data.visits.filter((v) => !v.doc).length} visits`}
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => setBulkOpen(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
 
           <div className="card" style={{ overflowX: 'auto', padding: 0 }}>
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>

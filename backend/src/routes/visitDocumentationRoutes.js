@@ -171,6 +171,57 @@ router.put('/clients/:clientId/visits', async (req, res) => {
   }
 });
 
+// ─── POST /api/visit-docs/clients/:clientId/visits/bulk — fill many at once ───
+// Body: { from, to, note, onlyMissing } — writes the same note, with every active
+// care task ticked, to each scheduled visit in the range. onlyMissing (default true)
+// never touches a visit that already has a note, so it can't overwrite real entries.
+// For back-filling a caregiver who doesn't use the app; edit the days that differed.
+router.post('/clients/:clientId/visits/bulk', async (req, res) => {
+  const { clientId } = req.params;
+  const { from, to, note, onlyMissing } = req.body || {};
+  if (!DATE_RE.test(from || '') || !DATE_RE.test(to || '') || from > to) {
+    return res.status(400).json({ error: 'from and to (YYYY-MM-DD) are required' });
+  }
+  const cleanNote = typeof note === 'string' ? note.trim() : '';
+  if (!cleanNote) return res.status(400).json({ error: 'A note is required.' });
+  const skipExisting = onlyMissing !== false;
+
+  const dbc = await db.pool.connect();
+  try {
+    const [visits, taskRows, existing] = await Promise.all([
+      scheduledVisits(dbc, clientId, from, to),
+      dbc.query(`SELECT id, task_name FROM client_task_templates WHERE client_id = $1 AND is_active = true ORDER BY sort_order, created_at`, [clientId]),
+      dbc.query(`SELECT visit_date::text AS visit_date, start_time::text AS start_time, caregiver_id
+                   FROM visit_documentation WHERE client_id = $1 AND visit_date BETWEEN $2 AND $3`, [clientId, from, to]),
+    ]);
+    const have = new Set(existing.rows.map(visitKey));
+    const targets = visits.filter((v) => !(skipExisting && have.has(visitKey(v))));
+    if (targets.length === 0) return res.json({ written: 0, skipped: visits.length });
+    const tasks = JSON.stringify(taskRows.rows.map((t) => ({ taskId: t.id, taskName: t.task_name, done: true })));
+
+    await dbc.query('BEGIN');
+    for (const v of targets) {
+      await dbc.query(`
+        INSERT INTO visit_documentation (client_id, caregiver_id, visit_date, start_time, end_time, schedule_id, tasks, note, entered_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+        ON CONFLICT (client_id, visit_date, start_time, caregiver_id) DO UPDATE
+          SET end_time = EXCLUDED.end_time, schedule_id = EXCLUDED.schedule_id, tasks = EXCLUDED.tasks,
+              note = EXCLUDED.note, entered_by = EXCLUDED.entered_by, updated_at = NOW()`,
+        [clientId, v.caregiver_id, v.visit_date, hms(v.start_time), v.end_time, v.schedule_id, tasks, cleanNote, req.user.id]);
+    }
+    await dbc.query('COMMIT');
+    await auditLog(req.user.id, 'BULK_FILL', 'visit_documentation', clientId, null,
+      { from, to, written: targets.length, skipped: visits.length - targets.length, note: cleanNote });
+    res.json({ written: targets.length, skipped: visits.length - targets.length });
+  } catch (error) {
+    await dbc.query('ROLLBACK').catch(() => {});
+    console.error('visit-docs bulk error:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    dbc.release();
+  }
+});
+
 // ─── POST /api/visit-docs/clients/:clientId/invoice — invoice picked visits ───
 // Body: { visits: [{ visitDate, startTime, caregiverId }] }
 // Each visit is re-checked against the schedule and refused if any invoice already

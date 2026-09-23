@@ -73,11 +73,23 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = c => (r.status
     const [a, b, c] = deb.slice(-3);
     const pick = (v) => ({ visitDate: v.visit_date, startTime: v.start_time, caregiverId: v.caregiver_id });
 
+    // The live VA rate is removed inside this (rolled-back) transaction so the
+    // no-rate path is still exercised, then put back for the invoicing checks.
+    const liveRates = (await client.query(`DELETE FROM referral_source_rates WHERE referral_source_id=$1 RETURNING *`, [VA])).rows;
     r = fakeRes(); await invoice({ user, params: { clientId: CLARENCE }, body: { visits: [pick(a)] } }, r);
     check('invoice refused with no VA rate (400)', r.statusCode === 400, r.body?.error);
 
-    await client.query(`INSERT INTO referral_source_rates (referral_source_id, care_type_id, rate_amount, rate_type, effective_date)
-                        SELECT $1, care_type_id, 35.00, 'hourly', '2026-06-01' FROM clients WHERE id=$2`, [VA, CLARENCE]);
+    if (liveRates.length) {
+      for (const rt of liveRates) {
+        await client.query(`INSERT INTO referral_source_rates (id, referral_source_id, care_type_id, rate_amount, rate_type, effective_date, end_date, is_active)
+                            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [rt.id, rt.referral_source_id, rt.care_type_id, rt.rate_amount, rt.rate_type, rt.effective_date, rt.end_date, rt.is_active]);
+      }
+      check('live VA rate restored in-transaction', true, liveRates.map(rt => `${rt.rate_amount}/${rt.rate_type}`));
+    } else {
+      await client.query(`INSERT INTO referral_source_rates (referral_source_id, care_type_id, rate_amount, rate_type, effective_date)
+                          SELECT $1, care_type_id, 35.00, 'hourly', '2026-06-01' FROM clients WHERE id=$2`, [VA, CLARENCE]);
+    }
 
     const tasks = [{ taskId: 't1', taskName: 'Home health aide: personal care and walking hallways', done: true },
                    { taskId: 't2', taskName: 'Homemaking: vacuum and dust', done: true }];
@@ -88,6 +100,16 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = c => (r.status
     check('saving again updates the same row', n.n === 1 && n.note === 'Edited note.', n);
     r = fakeRes(); await save({ user, params: { clientId: CLARENCE }, body: { visitDate: '2026-09-21', startTime: '10:00:00', caregiverId: DEB, note: 'x' } }, r);
     check('note on the cancelled 9/21 visit refused (404)', r.statusCode === 404, r.body);
+
+    const bulk = handler(router, 'post', '/clients/:clientId/visits/bulk');
+    r = fakeRes(); await bulk({ user, params: { clientId: CLARENCE }, body: { ...range, note: 'Standard visit note.' } }, r);
+    check('bulk fill writes every visit without a note, skips the one with', r.statusCode === 200 && r.body.written === visits.length - 1 && r.body.skipped === 1, r.body);
+    const kept = (await client.query(`SELECT note FROM visit_documentation WHERE client_id=$1 AND visit_date=$2 AND start_time=$3`, [CLARENCE, a.visit_date, a.start_time])).rows[0];
+    check('bulk fill did NOT overwrite the existing note', kept.note === 'Edited note.', kept);
+    const filled = (await client.query(`SELECT count(*)::int n, count(*) FILTER (WHERE jsonb_array_length(tasks) = 2 AND tasks->0->>'done' = 'true')::int tasked FROM visit_documentation WHERE client_id=$1 AND note='Standard visit note.'`, [CLARENCE])).rows[0];
+    check('bulk-filled rows carry both care tasks, ticked', filled.n === visits.length - 1 && filled.tasked === filled.n, filled);
+    r = fakeRes(); await bulk({ user, params: { clientId: CLARENCE }, body: { ...range, note: '' } }, r);
+    check('bulk fill with an empty note refused (400)', r.statusCode === 400, r.body);
 
     r = fakeRes(); await invoice({ user, params: { clientId: CLARENCE }, body: { visits: [pick(a), pick(b), pick(c)] } }, r);
     check('invoice 3 picked visits (201)', r.statusCode === 201, r.body?.error);
