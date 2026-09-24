@@ -139,6 +139,23 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = c => (r.status
     check('list shows the 3 visits as invoiced', inv3.length === 3, inv3.length);
     check('list shows the saved note', r.body.visits.find(v => v.visit_date === a.visit_date && v.start_time === a.start_time)?.doc?.note === 'Edited note.');
 
+    // The Invoices screen prints from GET /api/billing/invoices/:id — its lines must
+    // carry the visit note, or the printed invoice shows charges with no documentation.
+    const billing = require('../src/routes/billingRoutes');
+    const invDetail = handler(billing, 'get', '/invoices/:id');
+    r = fakeRes(); await new Promise((done) => {
+      const res2 = { status(c) { this.statusCode = c; return this; }, json(b) { r.statusCode = this.statusCode || 200; r.body = b; done(); } };
+      invDetail({ params: { id: inv.id }, user, query: {} }, res2);
+    });
+    const withNote = (r.body.line_items || []).filter((l) => l.visit_note);
+    check('invoice detail returns a note on every billed line', r.body.line_items?.length === 6 && withNote.length === 6, { lines: r.body.line_items?.length, withNote: withNote.length });
+    // Visit a keeps its edited note; b and c carry the bulk-filled one.
+    const noteTexts = [...new Set(withNote.map((l) => l.visit_note))].sort();
+    check('each line carries its own visit note, with ticked tasks',
+      JSON.stringify(noteTexts) === JSON.stringify(['Edited note.', 'Standard visit note.'])
+      && withNote.every((l) => Array.isArray(l.visit_tasks) && l.visit_tasks.length === 2 && l.visit_tasks.every((t) => t.done)),
+      noteTexts);
+
     const out = process.argv[2];
     const pdfRes = new PassThrough();
     const chunks = [];

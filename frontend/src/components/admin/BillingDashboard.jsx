@@ -49,6 +49,13 @@ const generateTimeOptions = () => {
 
 const TIME_OPTIONS = generateTimeOptions();
 
+// A visit bills two lines (aide + homemaking); its care note prints once, on the
+// first of them. Returns null for a missing/blank line so it never matches.
+const visitNoteKey = (item) =>
+  item && item.service_date && item.start_time
+    ? `${String(item.service_date).slice(0, 10)}|${item.start_time}|${item.caregiver_id}`
+    : null;
+
 const BillingDashboard = ({ token }) => {
   const [activeTab, setActiveTab] = useState('invoices');
   const [invoices, setInvoices] = useState([]);
@@ -2389,6 +2396,16 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                             {item.caregiver_first_name && ` - ${item.caregiver_first_name} ${item.caregiver_last_name}`}
                             {item.time_range && ` ${item.time_range}`}
                           </div>
+                          {/* The visit's care note, printed once per visit (a visit bills
+                              two lines — aide + homemaking — and the payer wants the
+                              documentation for the care, not for each split line). */}
+                          {item.visit_note && visitNoteKey(item) !== visitNoteKey(selectedInvoice.line_items[idx - 1]) && (
+                            <div className="invoice-item-note" style={{ fontSize: '0.78em', color: '#555', fontStyle: 'italic', marginTop: '2px' }}>
+                              {(Array.isArray(item.visit_tasks) ? item.visit_tasks.filter(t => t.done).map(t => t.taskName) : []).join('; ')}
+                              {Array.isArray(item.visit_tasks) && item.visit_tasks.some(t => t.done) ? ' — ' : ''}
+                              {item.visit_note}
+                            </div>
+                          )}
                         </td>
                         <td>{Number(parseFloat(item.hours || 0)).toFixed(2)}</td>
                         <td>{Number(parseFloat(item.rate || 0)).toFixed(2)}</td>

@@ -858,18 +858,29 @@ router.get('/invoices/:id', auth, async (req, res) => {
 
     const invoice = invoiceResult.rows[0];
 
+    // visit_documentation (v69) arrived after some deployments, so only join it
+    // when it really exists — an invoice must not fail to open on a DB that
+    // hasn't had the migration applied yet.
+    const hasVisitDocs = (await db.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_name = 'visit_documentation' LIMIT 1`
+    )).rows.length > 0;
+
     const lineItemsResult = await db.query(`
       SELECT 
         ili.*,
         u.first_name as caregiver_first_name,
         u.last_name as caregiver_last_name,
         COALESCE(ili.service_date, DATE(te.start_time)) as service_date
+        ${hasVisitDocs ? ', vd.note AS visit_note, vd.tasks AS visit_tasks' : ''}
       FROM invoice_line_items ili
       LEFT JOIN users u ON ili.caregiver_id = u.id
       LEFT JOIN time_entries te ON ili.time_entry_id = te.id
+      ${hasVisitDocs ? `LEFT JOIN visit_documentation vd
+        ON vd.client_id = $2 AND vd.visit_date = ili.service_date
+       AND vd.start_time = ili.start_time AND vd.caregiver_id = ili.caregiver_id` : ''}
       WHERE ili.invoice_id = $1
       ORDER BY COALESCE(ili.service_date, DATE(te.start_time)), u.last_name
-    `, [req.params.id]);
+    `, hasVisitDocs ? [req.params.id, invoice.client_id] : [req.params.id]);
 
     let lineItems = lineItemsResult.rows;
 
