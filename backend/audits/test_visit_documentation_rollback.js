@@ -68,9 +68,18 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = c => (r.status
       deb.length > 0 && deb.every(v => v.split.length === 2 && v.split[0].minutes === 100 && v.split[1].minutes === 20), deb[0]?.split);
     const odd = visits.filter(v => v.minutes !== 120).map(v => `${v.visit_date} ${v.start_time}-${v.end_time} ${v.caregiver_name}`);
     console.log('      visits not 2 hours long:', odd);
-    check('nothing marked invoiced yet', visits.every(v => !v.invoiced));
+    console.log(`      ${visits.filter(v => v.invoiced).length} visits already on a real invoice`);
 
-    const [a, b, c] = deb.slice(-3);
+    // The office bills Clarence for real now, so a clean slate can't be assumed.
+    // Remove his invoices inside this rolled-back transaction and re-list, so the
+    // billing checks run against known state without touching live invoices.
+    const killedLines = (await client.query(`DELETE FROM invoice_line_items WHERE invoice_id IN (SELECT id FROM invoices WHERE client_id=$1) RETURNING 1`, [CLARENCE])).rowCount;
+    const killedInv = (await client.query(`DELETE FROM invoices WHERE client_id=$1 RETURNING 1`, [CLARENCE])).rowCount;
+    console.log(`      cleared ${killedInv} invoice(s) / ${killedLines} lines in-transaction (rolled back)`);
+    r = fakeRes(); await list({ user, params: { clientId: CLARENCE }, query: range }, r);
+    const freeVisits = r.body.visits.filter(v => v.caregiver_id === DEB && v.minutes === 120 && !v.invoiced);
+    check('visits are billable again once those invoices are gone', freeVisits.length >= 3, freeVisits.length);
+    const [a, b, c] = freeVisits.slice(-3);
     const pick = (v) => ({ visitDate: v.visit_date, startTime: v.start_time, caregiverId: v.caregiver_id });
 
     // Real notes exist in prod now (the office bulk-filled Clarence). Clear them

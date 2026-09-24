@@ -148,6 +148,18 @@ const VisitDocumentation = ({ token }) => {
     } finally { setBulkBusy(false); }
   };
 
+  // The care notes on their own, for the date range on screen — no invoice.
+  const downloadNotes = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/visit-docs/clients/${clientId}/notes.pdf?from=${from}&to=${to}`, { headers });
+      if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.error || `HTTP ${r.status}`); }
+      const url = window.URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = `care-notes-${data?.client?.name?.replace(/\s+/g, '-') || 'client'}-${from}-to-${to}.pdf`; a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) { setMessage({ type: 'error', text: `Care notes PDF failed: ${e.message}` }); }
+  };
+
   const downloadPacket = async (inv) => {
     try {
       const r = await fetch(`${API_BASE_URL}/api/visit-docs/invoices/${inv.id}/packet.pdf`, { headers });
@@ -208,6 +220,10 @@ const VisitDocumentation = ({ token }) => {
             {data.homemakingMinutesPerVisit > 0 && (
               <div style={{ color: '#6B7280' }}>Each visit bills {data.homemakingMinutesPerVisit} min homemaking, the rest home health aide</div>
             )}
+            <button className="btn btn-sm btn-secondary" style={{ marginLeft: 'auto' }} onClick={downloadNotes}
+              title="Print the care notes for this date range, with no invoice">
+              📄 Print care notes ({from} – {to})
+            </button>
           </div>
 
           <div className="card" style={{ position: 'sticky', top: 'env(safe-area-inset-top, 0px)', zIndex: 5, display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>

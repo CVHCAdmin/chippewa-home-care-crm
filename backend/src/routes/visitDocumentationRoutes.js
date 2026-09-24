@@ -327,6 +327,92 @@ router.post('/clients/:clientId/invoice', async (req, res) => {
   }
 });
 
+// One visit's documentation block: date/time/caregiver, its task checklist and
+// its note. Shared by the invoice packet and the care-notes-only printout.
+function drawVisitBlock(doc, v, L, R, ensure) {
+  const tasks = Array.isArray(v.doc?.tasks) ? v.doc.tasks : [];
+  const noteText = v.doc?.note || '';
+  const est = 34 + tasks.length * 12 + (noteText ? doc.heightOfString(noteText, { width: R - L - 12 }) + 8 : 14);
+  ensure(est);
+  doc.fillColor('#111827').font('Helvetica-Bold').fontSize(10)
+    .text(`${fmtDate(v.visit_date)}   ${fmtTime12(v.start_time)} – ${fmtTime12(v.end_time)}   ·   ${v.caregiver_name || ''}`, L, doc.y);
+  doc.font('Helvetica').fontSize(9).fillColor('#111827');
+  for (const t of tasks) doc.text(`${t.done ? '[X]' : '[  ]'}  ${t.taskName}`, L + 12, doc.y);
+  if (noteText) {
+    doc.moveDown(0.2).text(noteText, L + 12, doc.y, { width: R - L - 12, lineGap: 1.5 });
+  } else if (!tasks.length) {
+    doc.fillColor('#9CA3AF').text('No note recorded for this visit.', L + 12, doc.y);
+  }
+  doc.moveDown(0.5);
+  doc.moveTo(L, doc.y).lineTo(R, doc.y).strokeColor('#E5E7EB').stroke();
+  doc.moveDown(0.5);
+}
+
+// ─── GET /api/visit-docs/clients/:clientId/notes.pdf?from&to ──────────────────
+// The care notes on their own — every scheduled visit in the range with its
+// tasks and note — for a payer, a chart or the client's file, with no invoice
+// involved. Visits with no note are listed and say so, so a gap is visible.
+router.get('/clients/:clientId/notes.pdf', async (req, res) => {
+  const { clientId } = req.params;
+  const { from, to } = req.query;
+  if (!DATE_RE.test(from || '') || !DATE_RE.test(to || '') || from > to) {
+    return res.status(400).json({ error: 'from and to (YYYY-MM-DD) are required' });
+  }
+  try {
+    const client = (await db.query(
+      `SELECT c.first_name, c.last_name, c.date_of_birth::text AS dob, c.address, c.city, c.state, c.zip,
+              rs.name AS payer_name
+         FROM clients c LEFT JOIN referral_sources rs ON rs.id = c.referral_source_id
+        WHERE c.id = $1`, [clientId])).rows[0];
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const visits = await scheduledVisits(db, clientId, from, to);
+    const docs = (await db.query(
+      `SELECT visit_date::text AS visit_date, start_time::text AS start_time, caregiver_id, tasks, note
+         FROM visit_documentation WHERE client_id = $1 AND visit_date BETWEEN $2 AND $3`,
+      [clientId, from, to])).rows;
+    const docByKey = new Map(docs.map((d) => [visitKey(d), d]));
+    const rows = visits.map((v) => ({ ...v, doc: docByKey.get(visitKey(v)) || null }));
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'LETTER', margin: 54 });
+    const fname = `care-notes-${client.last_name}-${client.first_name}-${from}-to-${to}.pdf`.replace(/[^a-zA-Z0-9._-]/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+    doc.pipe(res);
+
+    const L = 54, R = 558;
+    const ensure = (h) => { if (doc.y + h > 720) doc.addPage(); };
+    const documented = rows.filter((r) => r.doc).length;
+
+    doc.fillColor('#1D4ED8').font('Helvetica-Bold').fontSize(18).text('Care Notes', L, 54);
+    doc.fillColor('#6B7280').font('Helvetica').fontSize(9).text(process.env.AGENCY_NAME || 'Chippewa Valley Home Care');
+    doc.moveDown(0.5);
+    doc.fillColor('#111827').font('Helvetica-Bold').fontSize(13).text(`${client.first_name} ${client.last_name}`);
+    const small = [];
+    if (client.dob) small.push(`DOB: ${fmtDate(client.dob)}`);
+    if (client.payer_name) small.push(client.payer_name);
+    if (client.address) small.push(`${client.address}${client.city ? `, ${client.city}` : ''}${client.state ? `, ${client.state}` : ''} ${client.zip || ''}`.trim());
+    doc.font('Helvetica').fontSize(9).fillColor('#6B7280').text(small.join('  ·  '));
+    doc.text(`${fmtDate(from)} – ${fmtDate(to)}  ·  ${rows.length} visit${rows.length === 1 ? '' : 's'}  ·  ${documented} documented`);
+    doc.moveDown(0.4);
+    doc.moveTo(L, doc.y).lineTo(R, doc.y).strokeColor('#BFDBFE').stroke();
+    doc.moveDown(0.5);
+
+    if (rows.length === 0) {
+      doc.fillColor('#6B7280').font('Helvetica').fontSize(10).text('No scheduled visits in this date range.', L, doc.y);
+    }
+    for (const v of rows) drawVisitBlock(doc, v, L, R, ensure);
+
+    doc.fontSize(7.5).fillColor('#9CA3AF')
+      .text('This document contains Protected Health Information — handle per HIPAA.', L, Math.max(doc.y + 10, 730), { width: R - L, align: 'center' });
+    doc.end();
+  } catch (error) {
+    console.error('visit-docs notes pdf error:', error);
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── GET /api/visit-docs/invoices/:invoiceId/packet.pdf ───────────────────────
 // Page 1+: the invoice, with each visit's care note printed under its lines. Then
 // "Visit Documentation": one block per billed visit with its tasks and note, in
@@ -481,26 +567,7 @@ router.get('/invoices/:invoiceId/packet.pdf', async (req, res) => {
       .text(`${inv.first_name} ${inv.last_name}  ·  Invoice ${inv.invoice_number}  ·  ${fmtDate(inv.period_start)} – ${fmtDate(inv.period_end)}  ·  ${visits.length} visit${visits.length === 1 ? '' : 's'}`);
     doc.moveDown(0.4);
     rule();
-    for (const v of visits) {
-      const tasks = Array.isArray(v.doc?.tasks) ? v.doc.tasks : [];
-      const noteText = v.doc?.note || '';
-      const est = 34 + tasks.length * 12 + (noteText ? doc.heightOfString(noteText, { width: R - L - 12 }) + 8 : 14);
-      ensure(est);
-      doc.fillColor('#111827').font('Helvetica-Bold').fontSize(10)
-        .text(`${fmtDate(v.visit_date)}   ${fmtTime12(v.start_time)} – ${fmtTime12(v.end_time)}   ·   ${v.caregiver_name || ''}`, L, doc.y);
-      doc.font('Helvetica').fontSize(9).fillColor('#111827');
-      for (const t of tasks) {
-        doc.text(`${t.done ? '[X]' : '[  ]'}  ${t.taskName}`, L + 12, doc.y);
-      }
-      if (noteText) {
-        doc.moveDown(0.2).text(noteText, L + 12, doc.y, { width: R - L - 12, lineGap: 1.5 });
-      } else if (!tasks.length) {
-        doc.fillColor('#9CA3AF').text('No note recorded for this visit.', L + 12, doc.y);
-      }
-      doc.moveDown(0.5);
-      doc.moveTo(L, doc.y).lineTo(R, doc.y).strokeColor('#E5E7EB').stroke();
-      doc.moveDown(0.5);
-    }
+    for (const v of visits) drawVisitBlock(doc, v, L, R, ensure);
 
     doc.end();
   } catch (error) {
