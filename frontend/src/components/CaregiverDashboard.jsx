@@ -10,6 +10,7 @@ import IncidentReportForm from './caregiver/IncidentReportForm';
 import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
+import { savePunch, newLocalId, offlineSession, flushPunches, isUnreachable, pendingPunches } from '../offlinePunches';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { isBiweeklyOn, toYMD } from '../utils/biweekly';
@@ -327,6 +328,34 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     };
   }, []);
 
+  // Send punches saved on the phone while there was no signal: now, when the
+  // connection comes back, when the app is reopened, and every 30s while any wait.
+  useEffect(() => {
+    if (!user?.id) return;
+    let stopped = false;
+    const trySend = async () => {
+      if (stopped || !pendingPunches(user.id).length) return;
+      const r = await flushPunches({ apiBase: API_BASE_URL, token, userId: user.id });
+      if (stopped) return;
+      if (r.sent) { toast(`✅ Saved ${r.sent === 1 ? 'punch' : `${r.sent} punches`} sent to the office.`, 'success'); loadData(); }
+      for (const x of r.rejected) {
+        toast(`⚠️ A saved ${x.punch.kind === 'in' ? 'clock-in' : 'clock-out'} could not be recorded: ${x.error}`, 'error');
+      }
+      if (r.rejected.length && !r.sent) loadData();
+    };
+    trySend();
+    const onVisible = () => { if (document.visibilityState === 'visible') trySend(); };
+    window.addEventListener('online', trySend);
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = setInterval(trySend, 30000);
+    return () => {
+      stopped = true;
+      window.removeEventListener('online', trySend);
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(interval);
+    };
+  }, [user?.id, token]);
+
   // Poll for unread messages
   useEffect(() => {
     const checkUnread = async () => {
@@ -453,7 +482,17 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         if (data?.id) {
           setActiveSession(data);
           setSelectedClient(data.client_id);
+        } else {
+          // The server has no open visit. A clock-in still saved on this phone is
+          // one — keep showing it; otherwise drop an offline visit that has synced.
+          const saved = offlineSession(user.id);
+          if (saved) { setActiveSession(saved); setSelectedClient(saved.client_id); }
+          else setActiveSession(s => (s && s.offline ? null : s));
         }
+      } else {
+        // Couldn't reach the server — a visit saved on the phone is still in progress.
+        const saved = offlineSession(user.id);
+        if (saved) { setActiveSession(s => s || saved); setSelectedClient(c => c || saved.client_id); }
       }
       if (visitsRes.ok) setRecentVisits(await visitsRes.json());
       loadMyHours();
@@ -894,6 +933,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     if (clockingIn) return;
     setClockingIn(true);
     impact('medium'); // the tap registered — say so immediately
+    const tapAt = new Date().toISOString(); // the real clock-in time, even if the send fails
 
     try {
       // INSTANT PUNCH: never wait on GPS at the tap. Use whatever fix is already
@@ -927,11 +967,24 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       }
 
       beginStage('send');
-      const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/clock-in`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ clientId: selectedClient, latitude: lat, longitude: lng })
-      });
+      let res = null;
+      try {
+        res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/clock-in`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ clientId: selectedClient, latitude: lat, longitude: lng })
+        });
+      } catch { res = null; } // never reached the server
+      if (isUnreachable(res)) {
+        // No signal: save the tap on the phone with its real time; it sends itself later.
+        const localId = newLocalId();
+        const saved = savePunch({ userId: user.id, localId, kind: 'in', at: tapAt, clientId: selectedClient, latitude: lat, longitude: lng });
+        if (!saved) throw new Error('No signal, and this phone could not save the clock-in. Call the office with your start time.');
+        hapticNotify('warning');
+        toast(`No signal — clock-in saved on your phone at ${new Date(tapAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. It will send by itself when you have signal.`, 'warning');
+        setActiveSession({ id: `offline-${localId}`, offline: true, client_id: selectedClient, start_time: tapAt });
+        return;
+      }
 
       if (!res.ok) {
         // If offline, service worker queued it — res will have queued:true
@@ -994,8 +1047,28 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     // on activeSession.id below — close the modal cleanly instead of trapping the user.
     if (!activeSession?.id) { toast('No active session — reopen and try again.', 'error'); setShowNoteModal(false); return; }
     if (clockingOut) return; // ignore re-taps while the first one is in flight
+    const isOfflineVisit = String(activeSession.id).startsWith('offline-');
+    // A visit saved offline is only on this phone until it syncs — the note is the
+    // only record of the visit if the office has to fix it, so ask for one.
+    if (isOfflineVisit && !String(visitNote || '').trim()) {
+      setNoteError('No signal — please add a short visit note so this visit can be saved on your phone.');
+      return;
+    }
     setClockingOut(true);
     cancelLateFixRetries(); // shift is ending — stop any pending late-fix attempts
+    const tapAt = new Date().toISOString(); // the real clock-out time, even if the send fails
+    // Reset the screen after a clock-out that was saved on the phone.
+    const finishSavedOffline = () => {
+      hapticNotify('warning');
+      toast(`No signal — clock-out saved on your phone at ${new Date(tapAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. It will send by itself when you have signal.${pendingPhotos.length ? ' Photos could not be saved offline.' : ''}`, 'warning');
+      clockOutFixRef.current = null;
+      setActiveSession(null);
+      setSelectedClient('');
+      setVisitNote('');
+      setNoteError('');
+      setPendingPhotos([]);
+      setShowNoteModal(false);
+    };
     try {
       impact('heavy'); // strong haptic for clock out
 
@@ -1015,12 +1088,32 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         else reportGpsFailure('clock-out', { code: 3 }, activeSession?.client_id || selectedClient);
       }
 
+      if (isOfflineVisit) {
+        // Its clock-in is still on the phone — queue the clock-out behind it.
+        const saved = savePunch({ userId: user.id, localId: newLocalId(), kind: 'out', at: tapAt,
+          inLocalId: String(activeSession.id).slice('offline-'.length), entryId: null,
+          latitude: lat, longitude: lng, notes: visitNote });
+        if (!saved) throw new Error('This phone could not save the clock-out. Call the office with your end time.');
+        finishSavedOffline();
+        return;
+      }
+
       beginStage('send');
-      const res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ latitude: lat, longitude: lng, notes: visitNote })
-      });
+      let res = null;
+      try {
+        res = await fetchWithTimeout(`${API_BASE_URL}/api/time-entries/${activeSession.id}/clock-out`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ latitude: lat, longitude: lng, notes: visitNote })
+        });
+      } catch { res = null; } // never reached the server
+      if (isUnreachable(res)) {
+        const saved = savePunch({ userId: user.id, localId: newLocalId(), kind: 'out', at: tapAt,
+          inLocalId: null, entryId: activeSession.id, latitude: lat, longitude: lng, notes: visitNote });
+        if (!saved) throw new Error('No signal, and this phone could not save the clock-out. Call the office with your end time.');
+        finishSavedOffline();
+        return;
+      }
 
       if (!res.ok) {
         const data = await res.json();

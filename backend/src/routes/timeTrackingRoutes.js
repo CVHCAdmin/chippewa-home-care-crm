@@ -30,6 +30,51 @@ function applyExcessiveDurationGuard({ durationMinutes, allottedMinutes, billabl
   };
 }
 
+// OFFLINE PUNCHES — when a tap can't reach the server (no signal at the client's
+// house), the app saves it on the phone with the tap time and replays it later with
+// `offlineAt`. The server then records the TAP time, not the arrival time, and flags
+// the entry 'offline_punch' so the office reviews it (payroll shows it as pending).
+// The window is bounded: a tap older than 12h, or one claiming the future, is refused.
+const OFFLINE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const OFFLINE_FUTURE_SLACK_MS = 2 * 60 * 1000;
+function parseOfflineAt(offlineAt) {
+  if (offlineAt == null || offlineAt === '') return { at: null };
+  const at = new Date(offlineAt);
+  if (isNaN(at.getTime())) return { error: 'Invalid offline punch time.' };
+  const now = Date.now();
+  if (at.getTime() > now + OFFLINE_FUTURE_SLACK_MS) return { error: 'Offline punch time is in the future — check the phone clock.' };
+  if (at.getTime() < now - OFFLINE_MAX_AGE_MS) return { error: 'This saved punch is more than 12 hours old — please tell the office your times.', code: 'offline_punch_too_old' };
+  return { at };
+}
+// Keep the offline flag once set: clock-out and auto-close recompute
+// needs_approval from scratch and would otherwise erase it.
+function withOfflineFlag({ needsApproval, approvalReason }, isOffline) {
+  if (!isOffline) return { needsApproval, approvalReason };
+  const reasons = String(approvalReason || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!reasons.includes('offline_punch')) reasons.push('offline_punch');
+  return { needsApproval: true, approvalReason: reasons.join(',') };
+}
+const hasOfflineFlag = (reason) => String(reason || '').split(',').map(s => s.trim()).includes('offline_punch');
+
+// Tell the office about an offline punch the server could not place safely.
+async function notifyOfflineConflict(caregiverId, clientId, at, why) {
+  try {
+    const who = await db.query(`SELECT first_name, last_name FROM users WHERE id=$1`, [caregiverId]);
+    const cl = await db.query(`SELECT first_name, last_name FROM clients WHERE id=$1`, [clientId]);
+    const name = who.rows[0] ? `${who.rows[0].first_name} ${who.rows[0].last_name}` : 'A caregiver';
+    const client = cl.rows[0] ? `${cl.rows[0].first_name} ${cl.rows[0].last_name}` : 'a client';
+    const when = at.toLocaleString('en-US', { timeZone: 'America/Chicago' });
+    const admins = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = true`);
+    for (const a of admins.rows) {
+      await db.query(
+        `INSERT INTO notifications (user_id, type, title, message, status) VALUES ($1, 'offline_punch_conflict', $2, $3, 'new')`,
+        [a.id, `Offline clock-in needs review: ${name}`,
+         `${name}'s phone saved a clock-in for ${client} at ${when} with no signal, but it overlaps other time already recorded (${why}). Check their time for that day and fix it in Payroll → Shift Review.`]
+      );
+    }
+  } catch (e) { console.error('[offline punch] notify:', e.message); }
+}
+
 // Lazy-load sendPushToUser to avoid circular require with pushNotificationRoutes.
 // Gracefully no-ops when VAPID keys aren't configured in env.
 let _sendPush = null;
@@ -221,6 +266,65 @@ router.post('/clock-in', verifyToken, async (req, res) => {
         code: 'auto_transition_disabled',
       });
     }
+    // Offline replay: `punchAt` is the saved tap time. null = a normal live tap, and
+    // every query below then falls back to NOW() exactly as before.
+    const offline = parseOfflineAt(req.body.offlineAt);
+    if (offline.error) return res.status(400).json({ error: offline.error, code: offline.code || 'offline_punch_invalid' });
+    const punchAt = offline.at;
+    const punchAtIso = punchAt ? punchAt.toISOString() : null;
+
+    if (punchAt) {
+      // Place the saved tap against what the server already has for this caregiver.
+      const around = await db.query(
+        `SELECT id, client_id, start_time, end_time, approval_reason FROM time_entries
+          WHERE caregiver_id = $1
+            AND (end_time IS NULL OR end_time > $2::timestamptz - INTERVAL '2 minutes')
+          ORDER BY start_time`,
+        [req.user.id, punchAtIso]
+      );
+      const t = punchAt.getTime();
+      const startMs = (e) => new Date(e.start_time).getTime();
+      // Already recorded (a replay whose first attempt did reach the server).
+      const same = around.rows.find(e => e.client_id === clientId && Math.abs(startMs(e) - t) <= 120000);
+      if (same) return res.status(200).json({ id: same.id, client_id: same.client_id, start_time: same.start_time, duplicate: true });
+      // Already clocked in (or recorded) for this client at the tap time.
+      const covering = around.rows.find(e => startMs(e) <= t && (!e.end_time || new Date(e.end_time).getTime() > t));
+      if (covering && covering.client_id === clientId) {
+        return res.status(200).json({ id: covering.id, client_id: covering.client_id, start_time: covering.start_time, duplicate: true });
+      }
+      const later = around.rows.filter(e => startMs(e) > t);
+      // The case this exists for: the tap failed at the door, then the app clocked
+      // her in later for the SAME visit (auto clock-in on arrival / a re-tap).
+      // It is one visit — move its start back to the real tap time.
+      if (later.length === 1 && later[0].client_id === clientId && !later[0].end_time && !covering) {
+        const loc = latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude, source: 'offline', captured_at: punchAtIso }) : null;
+        const flag = withOfflineFlag({ needsApproval: true, approvalReason: later[0].approval_reason }, true);
+        const merged = await db.query(
+          `UPDATE time_entries SET start_time = $1,
+                  clock_in_location = COALESCE($2::jsonb,
+                    CASE WHEN clock_in_location IS NULL THEN NULL
+                         ELSE clock_in_location || jsonb_build_object('source', 'later_punch', 'captured_at', start_time) END),
+                  needs_approval = true, approval_reason = $3, updated_at = NOW()
+            WHERE id = $4 AND end_time IS NULL
+            RETURNING id, client_id, start_time`,
+          [punchAtIso, loc, flag.approvalReason, later[0].id]
+        );
+        if (merged.rows[0]) {
+          await auditLog(req.user.id, 'UPDATE', 'time_entries', later[0].id, { start_time: later[0].start_time }, { start_time: punchAtIso, reason: 'offline_punch_merged' });
+          return res.status(200).json({ ...merged.rows[0], merged: true });
+        }
+      }
+      // Anything else overlaps recorded time in a way the server shouldn't guess
+      // about — keep nothing, tell the office with the details, tell the phone.
+      const closedCovering = covering && covering.end_time;
+      if (later.length || closedCovering) {
+        await notifyOfflineConflict(req.user.id, clientId, punchAt, later.length ? 'later time already recorded' : 'another visit covers that time');
+        return res.status(409).json({ error: 'Your saved clock-in overlaps time already recorded — the office has been notified to fix it.', code: 'offline_conflict' });
+      }
+      // Otherwise (no overlap, or an open visit for another client that it closes
+      // at the tap time — same as a live clock-in) continue down the normal path.
+    }
+
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
     let hasLiveOccurrenceNow = false;
@@ -229,15 +333,15 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     // client/referral-source so we can apply the correct billing rule when
     // auto-closing (see clock-out for the rule).
     const openEntries = await db.query(
-      `SELECT te.id, te.start_time, te.client_id, te.allotted_minutes,
-        EXTRACT(EPOCH FROM (NOW() - te.start_time)) as seconds_elapsed,
+      `SELECT te.id, te.start_time, te.client_id, te.allotted_minutes, te.approval_reason,
+        EXTRACT(EPOCH FROM (COALESCE($2::timestamptz, NOW()) - te.start_time)) as seconds_elapsed,
         c.is_private_pay,
         rs.payer_type as referral_payer_type
        FROM time_entries te
        LEFT JOIN clients c ON te.client_id = c.id
        LEFT JOIN referral_sources rs ON c.referral_source_id = rs.id
        WHERE te.caregiver_id = $1 AND te.end_time IS NULL`,
-      [req.user.id]
+      [req.user.id, punchAtIso]
     );
 
     // Idempotent clock-in: if there's an open entry for the same client
@@ -271,7 +375,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       }
 
       const VARIANCE_GRACE_MINUTES = 7;
-      const durationMinutes = Math.round((new Date() - new Date(openEntry.start_time)) / 60000);
+      const durationMinutes = Math.round(((punchAt || new Date()) - new Date(openEntry.start_time)) / 60000);
       const allottedMinutes = openEntry.allotted_minutes;
       const isPrivatePay = openEntry.is_private_pay === true || openEntry.referral_payer_type === 'private_pay';
 
@@ -297,11 +401,12 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       ({ billableMinutes, needsApproval, approvalReason } = applyExcessiveDurationGuard({
         durationMinutes, allottedMinutes, billableMinutes, needsApproval, approvalReason,
       }));
+      ({ needsApproval, approvalReason } = withOfflineFlag({ needsApproval, approvalReason }, !!punchAt || hasOfflineFlag(openEntry.approval_reason)));
 
       const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
 
       await db.query(
-        `UPDATE time_entries SET end_time = NOW(), duration_minutes = $1, is_complete = true,
+        `UPDATE time_entries SET end_time = COALESCE($8::timestamptz, NOW()), duration_minutes = $1, is_complete = true,
           discrepancy_minutes = $2, billable_minutes = $3,
           needs_approval = $6, approval_reason = $7,
           notes = CASE WHEN notes IS NULL OR notes = '' THEN $5
@@ -310,7 +415,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
          WHERE id = $4`,
         [durationMinutes, discrepancyMinutes, billableMinutes, openEntry.id,
           '(Auto-closed: caregiver clocked into new client)',
-          needsApproval, approvalReason]
+          needsApproval, approvalReason, punchAtIso]
       );
       await auditLog(req.user.id, 'UPDATE', 'time_entries', openEntry.id, null, { auto_closed: true, duration_minutes: durationMinutes });
       // Generate EVV for auto-closed entry
@@ -335,9 +440,11 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       //
       // Dates come from the DB in America/Chicago, not from the Node process: Postgres runs
       // UTC, so `new Date().getDay()` was already tomorrow's weekday after 19:00 Chicago.
+      // (Offline replay: match against the TAP time, not when it arrived.)
       const nowCt = await db.query(
-        `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d,
-                to_char((NOW() AT TIME ZONE 'America/Chicago')::time, 'HH24:MI:SS') AS t`
+        `SELECT to_char((COALESCE($1::timestamptz, NOW()) AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS d,
+                to_char((COALESCE($1::timestamptz, NOW()) AT TIME ZONE 'America/Chicago')::time, 'HH24:MI:SS') AS t`,
+        [punchAtIso]
       );
       const { d: todayCt, t: nowTimeCt } = nowCt.rows[0];
       const sched = await db.query(
@@ -381,9 +488,12 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     let result;
     try {
       result = await db.query(
-        `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, clock_in_location, schedule_id, allotted_minutes)
-         VALUES ($1,$2,$3,NOW(),$4,$5,$6) RETURNING *`,
-        [entryId, req.user.id, clientId, latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null, linkedScheduleId, allottedMinutes]
+        `INSERT INTO time_entries (id, caregiver_id, client_id, start_time, clock_in_location, schedule_id, allotted_minutes,
+                                   needs_approval, approval_reason)
+         VALUES ($1,$2,$3,COALESCE($7::timestamptz, NOW()),$4,$5,$6, $8, $9) RETURNING *`,
+        [entryId, req.user.id, clientId,
+         latitude && longitude ? JSON.stringify(punchAt ? { lat: latitude, lng: longitude, source: 'offline', captured_at: punchAtIso } : { lat: latitude, lng: longitude }) : null,
+         linkedScheduleId, allottedMinutes, punchAtIso, !!punchAt, punchAt ? 'offline_punch' : null]
       );
     } catch (insertErr) {
       // uniq_open_time_entry_per_caregiver (v56): two concurrent submits of the
@@ -464,7 +574,13 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
       });
     }
 
-    const durationSeconds = (new Date() - new Date(entry.start_time)) / 1000;
+    // Offline replay: end the visit at the saved tap time, never before it started.
+    const offline = parseOfflineAt(req.body.offlineAt);
+    if (offline.error) return res.status(400).json({ error: offline.error, code: offline.code || 'offline_punch_invalid' });
+    let endAt = offline.at;
+    if (endAt && endAt < new Date(entry.start_time)) endAt = new Date(entry.start_time);
+
+    const durationSeconds = ((endAt || new Date()) - new Date(entry.start_time)) / 1000;
     const durationMinutes = Math.round(durationSeconds / 60);
     const allottedMinutes = entry.allotted_minutes;
     const isPrivatePay = entry.is_private_pay === true || entry.referral_payer_type === 'private_pay';
@@ -505,17 +621,21 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
     ({ billableMinutes, needsApproval, approvalReason } = applyExcessiveDurationGuard({
       durationMinutes, allottedMinutes, billableMinutes, needsApproval, approvalReason,
     }));
+    ({ needsApproval, approvalReason } = withOfflineFlag({ needsApproval, approvalReason }, !!endAt || hasOfflineFlag(entry.approval_reason)));
 
     const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
 
+    const outLoc = latitude && longitude
+      ? JSON.stringify(endAt ? { lat: latitude, lng: longitude, source: 'offline', captured_at: endAt.toISOString() } : { lat: latitude, lng: longitude })
+      : null;
     const result = await db.query(
-      `UPDATE time_entries SET end_time=NOW(), clock_out_location=$1, duration_minutes=$2, is_complete=true,
+      `UPDATE time_entries SET end_time=COALESCE($9::timestamptz, NOW()), clock_out_location=$1, duration_minutes=$2, is_complete=true,
         notes=$3, discrepancy_minutes=$4, billable_minutes=$5,
         needs_approval=$7, approval_reason=$8,
         updated_at=NOW() WHERE id=$6 RETURNING *`,
-      [latitude && longitude ? JSON.stringify({ lat: latitude, lng: longitude }) : null,
+      [outLoc,
        durationMinutes, notes || null, discrepancyMinutes, billableMinutes, req.params.id,
-       needsApproval, approvalReason]
+       needsApproval, approvalReason, endAt ? endAt.toISOString() : null]
     );
     await auditLog(req.user.id, 'UPDATE', 'time_entries', req.params.id, null, result.rows[0]);
 
