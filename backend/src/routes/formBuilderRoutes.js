@@ -76,7 +76,11 @@ router.get('/submissions', auth, async (req, res) => {
   try {
     let q = `
       SELECT fs.*, ft.name AS template_name, ft.category,
-        u.first_name || ' ' || u.last_name AS submitted_by_name
+        u.first_name || ' ' || u.last_name AS submitted_by_name,
+        CASE fs.entity_type
+          WHEN 'client'    THEN (SELECT c.first_name || ' ' || c.last_name FROM clients c WHERE c.id = fs.entity_id)
+          WHEN 'caregiver' THEN (SELECT e.first_name || ' ' || e.last_name FROM users e WHERE e.id = fs.entity_id)
+        END AS entity_name
       FROM form_submissions fs
       LEFT JOIN form_templates ft ON fs.template_id = ft.id
       LEFT JOIN users u ON fs.submitted_by = u.id
@@ -154,7 +158,7 @@ router.get('/submissions/:id/pdf', auth, async (req, res) => {
     // Submission meta
     doc.fillColor('#6B7280').font('Helvetica').fontSize(8);
     doc.text(`Submission: ${s.id}`);
-    doc.text(`Submitted by ${s.submitted_by_name || s.submitted_by || 'unknown'} on ${new Date(s.created_at || s.submitted_at).toLocaleString()}`);
+    doc.text(`Submitted by ${s.submitted_by_name || s.submitted_by || 'unknown'} on ${new Date(s.created_at || s.submitted_at).toLocaleString('en-US', { timeZone: 'America/Chicago' })}`);
     doc.text(`Status: ${s.status || 'submitted'}`);
     doc.moveDown(0.6);
 
@@ -166,6 +170,13 @@ router.get('/submissions/:id/pdf', auth, async (req, res) => {
       return String(v);
     };
     for (const f of fields) {
+      if (f.type === 'section') {
+        doc.moveDown(0.5);
+        doc.fillColor('#1D4ED8').font('Helvetica-Bold').fontSize(12).text(f.label || '', 54);
+        doc.moveTo(54, doc.y + 1).lineTo(558, doc.y + 1).strokeColor('#BFDBFE').stroke();
+        doc.moveDown(0.4);
+        continue;
+      }
       doc.fillColor('#374151').font('Helvetica-Bold').fontSize(9).text(f.label || f.id, { continued: false });
       doc.fillColor('#111827').font('Helvetica').fontSize(10).text(renderVal(data[f.id]), { indent: 16, paragraphGap: 2 });
       doc.moveDown(0.25);
@@ -173,6 +184,7 @@ router.get('/submissions/:id/pdf', auth, async (req, res) => {
 
     // Signature block
     if (s.requires_signature) {
+      if (doc.y > 560) doc.addPage();   // keep both signature lines on one page, clear of the footer
       doc.moveDown(1.5);
       const y = doc.y;
       doc.fillColor('#6B7280').fontSize(9);
@@ -192,11 +204,12 @@ router.get('/submissions/:id/pdf', auth, async (req, res) => {
 
       if (s.signature) {
         doc.moveDown(1);
-        doc.fillColor('#6B7280').fontSize(8).text(`Electronic signature on file (captured ${s.signed_at ? new Date(s.signed_at).toLocaleString() : 'at submission'}).`);
+        doc.fillColor('#6B7280').fontSize(8).text(`Electronic signature on file (captured ${s.signed_at ? new Date(s.signed_at).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : 'at submission'}).`);
       }
     }
 
     // Footer
+    if (doc.y > 705) doc.addPage();
     doc.fontSize(7).fillColor('#9CA3AF').text(
       `Contains Protected Health Information — handle per HIPAA.`,
       54, 720, { width: 504, align: 'center' }
