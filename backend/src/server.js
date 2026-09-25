@@ -701,6 +701,10 @@ if (require.main === module) {
       // Shift reminder pushes (every 5 min, finds shifts starting in ~1 hour)
       const { startCron: startShiftReminders } = require('./jobs/shiftReminders');
       startShiftReminders();
+
+      // Over-scheduled-time texts (every 5 min: +5 / +30 / +60 past the visit length)
+      const { startCron: startOvertimeAlerts } = require('./jobs/overtimeAlerts');
+      startOvertimeAlerts();
     }
   });
 }
