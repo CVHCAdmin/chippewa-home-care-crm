@@ -15,6 +15,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/shared');
 const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
 
 // Legacy per-row hours calc. Used with "(date in range) OR (any recurring)", it
@@ -1945,6 +1946,113 @@ router.get('/client-visits-summary', auth, async (req, res) => {
     res.json({ rows: result.rows, period: { startDate, endDate } });
   } catch (error) {
     console.error('[reports/client-visits-summary]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── CLIENT HOURS BY WEEK ───────────────────────────────────────────────────
+// Who was at each client, and when, for one Sunday–Saturday week: every
+// scheduled visit beside the clock-in/out that belongs to it, plus clock-ins
+// with no visit on the schedule and visits cancelled with a reason. Used to
+// enter MIDAS hours. Read-only.
+//
+// Dates are America/Chicago (the DB runs UTC) so an evening visit lands on its
+// own day. A punch pairs with a visit the way payroll pairs them: same
+// caregiver + client + Chicago date, nearest scheduled start.
+// GET /api/reports/client-week?weekStart=YYYY-MM-DD[&clientId=uuid]
+router.get('/client-week', auth, requireAdmin, async (req, res) => {
+  const { weekStart, clientId } = req.query;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(weekStart || ''))) return res.status(400).json({ error: 'weekStart (YYYY-MM-DD) required' });
+  const start = new Date(`${weekStart}T12:00:00Z`);
+  if (isNaN(start) || start.getUTCDay() !== 0) return res.status(400).json({ error: 'weekStart must be a Sunday' });
+  const end = new Date(start.getTime() + 6 * 86400000);
+  const weekEnd = end.toISOString().slice(0, 10);
+  const cid = clientId || null;
+  try {
+    const [occ, punches, cancelled] = await Promise.all([
+      db.query(`
+        WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
+        SELECT occ.schedule_id, to_char(occ.occ_date, 'YYYY-MM-DD') AS day, occ.client_id, occ.caregiver_id,
+               occ.start_time::text AS sched_start, occ.end_time::text AS sched_end, occ.minutes AS sched_minutes,
+               COALESCE(s.is_training, false) AS is_training,
+               u.first_name || ' ' || u.last_name AS caregiver_name
+          FROM occ
+          JOIN schedules s ON s.id = occ.schedule_id
+          JOIN users u ON u.id = occ.caregiver_id
+         WHERE ($3::uuid IS NULL OR occ.client_id = $3::uuid)
+         ORDER BY occ.occ_date, occ.start_time`, [weekStart, weekEnd, cid]),
+      db.query(`
+        SELECT te.id, te.client_id, te.caregiver_id, te.start_time, te.end_time, te.approval_reason,
+               to_char((te.start_time AT TIME ZONE 'America/Chicago')::date, 'YYYY-MM-DD') AS day,
+               to_char(te.start_time AT TIME ZONE 'America/Chicago', 'HH24:MI') AS start_hm,
+               CASE WHEN te.end_time IS NOT NULL
+                    THEN ROUND(EXTRACT(EPOCH FROM (te.end_time - te.start_time)) / 60)::int END AS clocked_minutes,
+               u.first_name || ' ' || u.last_name AS caregiver_name
+          FROM time_entries te
+          JOIN users u ON u.id = te.caregiver_id
+         WHERE (te.start_time AT TIME ZONE 'America/Chicago')::date BETWEEN $1::date AND $2::date
+           AND ($3::uuid IS NULL OR te.client_id = $3::uuid)
+         ORDER BY te.start_time`, [weekStart, weekEnd, cid]),
+      db.query(`
+        SELECT to_char(se.exception_date, 'YYYY-MM-DD') AS day, COALESCE(se.override_client_id, s.client_id) AS client_id,
+               s.start_time::text AS sched_start, s.end_time::text AS sched_end, se.cancel_reason,
+               u.first_name || ' ' || u.last_name AS caregiver_name
+          FROM schedule_exceptions se
+          JOIN schedules s ON s.id = se.schedule_id
+          LEFT JOIN users u ON u.id = s.caregiver_id
+         WHERE se.exception_type = 'cancelled' AND se.cancel_reason IS NOT NULL
+           AND se.exception_date BETWEEN $1::date AND $2::date
+           AND ($3::uuid IS NULL OR COALESCE(se.override_client_id, s.client_id) = $3::uuid)`, [weekStart, weekEnd, cid]),
+    ]);
+
+    const hmToMin = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+    const unmatched = [...punches.rows];
+    const visits = occ.rows.map(v => {
+      const cands = unmatched.filter(p => p.caregiver_id === v.caregiver_id && p.client_id === v.client_id && p.day === v.day);
+      cands.sort((a, b) => Math.abs(hmToMin(a.start_hm) - hmToMin(v.sched_start)) - Math.abs(hmToMin(b.start_hm) - hmToMin(v.sched_start)));
+      const p = cands[0] || null;
+      if (p) unmatched.splice(unmatched.indexOf(p), 1);
+      return {
+        type: 'visit', day: v.day, client_id: v.client_id, caregiver_name: v.caregiver_name, is_training: v.is_training,
+        sched_start: v.sched_start, sched_end: v.sched_end, sched_minutes: v.sched_minutes,
+        clock_in: p ? p.start_time : null, clock_out: p ? p.end_time : null,
+        clocked_minutes: p ? p.clocked_minutes : null, time_entry_id: p ? p.id : null,
+        flags: p && p.approval_reason ? String(p.approval_reason).split(',').map(s => s.trim()).filter(Boolean) : [],
+      };
+    });
+    const extra = unmatched.map(p => ({
+      type: 'unscheduled', day: p.day, client_id: p.client_id, caregiver_name: p.caregiver_name, is_training: false,
+      sched_start: null, sched_end: null, sched_minutes: null,
+      clock_in: p.start_time, clock_out: p.end_time, clocked_minutes: p.clocked_minutes, time_entry_id: p.id,
+      flags: p.approval_reason ? String(p.approval_reason).split(',').map(s => s.trim()).filter(Boolean) : [],
+    }));
+    const cancels = cancelled.rows.map(c => ({
+      type: 'cancelled', day: c.day, client_id: c.client_id, caregiver_name: c.caregiver_name || '', cancel_reason: c.cancel_reason,
+      sched_start: c.sched_start, sched_end: c.sched_end, sched_minutes: null, clock_in: null, clock_out: null, clocked_minutes: null, flags: [],
+    }));
+
+    const all = [...visits, ...extra, ...cancels];
+    const ids = [...new Set(all.map(r => r.client_id))];
+    const names = ids.length
+      ? (await db.query(`SELECT id, first_name, last_name, is_private_pay FROM clients WHERE id = ANY($1::uuid[])`, [ids])).rows
+      : [];
+    const byId = new Map(names.map(c => [c.id, c]));
+    const sortKey = (r) => `${r.day} ${r.sched_start || (r.clock_in ? new Date(r.clock_in).toISOString() : '')}`;
+    const clients = ids.map(id => {
+      const c = byId.get(id) || {};
+      const rows = all.filter(r => r.client_id === id).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+      return {
+        client_id: id, name: `${c.first_name || ''} ${c.last_name || ''}`.trim(), is_private_pay: !!c.is_private_pay,
+        rows,
+        scheduled_minutes: rows.reduce((s, r) => s + (r.type === 'visit' ? r.sched_minutes || 0 : 0), 0),
+        clocked_minutes: rows.reduce((s, r) => s + (r.clocked_minutes || 0), 0),
+        missing_clock_ins: rows.filter(r => r.type === 'visit' && !r.clock_in).length,
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ weekStart, weekEnd, clients });
+  } catch (error) {
+    console.error('[reports/client-week]', error);
     res.status(500).json({ error: error.message });
   }
 });

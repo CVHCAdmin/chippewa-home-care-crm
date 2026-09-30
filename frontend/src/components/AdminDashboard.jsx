@@ -26,6 +26,7 @@ const JobPostingsAdmin = React.lazy(() => import('./admin/JobPostingsAdmin'));
 const OnboardingPacketsAdmin = React.lazy(() => import('./admin/OnboardingPacketsAdmin'));
 const CarePlans = React.lazy(() => import('./admin/CarePlans'));
 const VisitDocumentation = React.lazy(() => import('./admin/VisitDocumentation'));
+const ClientWeekHours = React.lazy(() => import('./admin/ClientWeekHours'));
 const IncidentReporting = React.lazy(() => import('./admin/IncidentReporting'));
 const NotificationCenter = React.lazy(() => import('./admin/NotificationCenter'));
 const ComplianceTracking = React.lazy(() => import('./admin/ComplianceTracking'));
@@ -121,6 +122,7 @@ const NAV_SECTIONS = [
       { id: 'visit-docs', label: 'Visit Notes → Invoice', icon: '📝' },
       { id: 'claims', label: 'Claims', icon: '📑' },
       { id: 'billing-engine', label: 'Claims & EVV Engine', icon: '⚡' },
+      { id: 'client-week', label: 'Client Hours by Week', icon: '🗓️' },
       { id: 'payroll', label: 'Payroll', icon: '💵' },
       { id: 'shift-approvals', label: 'Shift Approvals', icon: '⚠️' },
       { id: 'expenses', label: 'Expenses', icon: '💳' },
@@ -283,6 +285,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'onboarding-packets': return <OnboardingPacketsAdmin token={token} />;
       case 'care-plans': return <CarePlans token={token} />;
       case 'visit-docs': return <VisitDocumentation token={token} />;
+      case 'client-week': return <ClientWeekHours token={token} />;
       case 'incidents': return <IncidentReporting token={token} />;
       case 'notifications': return <NotificationCenter token={token} />;
       case 'messages': return <MessageBoard token={token} />;
