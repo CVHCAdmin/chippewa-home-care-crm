@@ -1090,8 +1090,21 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       {/* Generate Invoice Form */}
       {showReconcile && reconcileData && (() => {
         const rows = reconcileData.reconcile;
-        const needs = rows.filter(r => r.needs_choice);
-        const settled = rows.filter(r => !r.needs_choice);
+        // Any day whose clock-in differs from its schedule gets the Scheduled / Clocked
+        // buttons — not just the ones over the 7-minute grace. A private-pay visit
+        // punched 1:58–4:04 for a 2:00–4:00 shift billed $69.30 instead of $66 with no
+        // way to choose. The server already bills whichever basis is picked per day.
+        const differs = (r) => r.status !== 'no_punch' && r.status !== 'unscheduled'
+          && r.clocked_minutes != null && r.scheduled_minutes != null
+          && r.clocked_minutes !== r.scheduled_minutes;
+        const needs = rows.filter(r => r.needs_choice || differs(r));
+        const settled = rows.filter(r => !(r.needs_choice || differs(r)));
+        const choosable = needs.filter(r => r.status !== 'unscheduled');
+        const pickAll = (basis) => setReconcileChoices(prev => {
+          const next = { ...prev };
+          choosable.forEach(r => { next[r.key] = basis; });
+          return next;
+        });
         const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
         const mins = (m) => m == null ? '—' : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
         const clock = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' }) : '';
@@ -1117,9 +1130,16 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
           <div className="card" style={{ maxWidth: 'none' }}>
             <h3>🧾 Review Before Invoicing</h3>
             <p className="text-muted" style={{ marginTop: 0 }}>
-              Every day is billed at its <strong>scheduled</strong> hours. These {needs.length} day
-              {needs.length === 1 ? '' : 's'} clocked in differently — pick which to bill for each.
+              Days with no clock-in bill their <strong>scheduled</strong> hours. These {needs.length} day
+              {needs.length === 1 ? '' : 's'} clocked in differently from the schedule — pick which to bill for each.
             </p>
+            {choosable.length > 1 && (
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.85rem', color: '#374151', fontWeight: 600 }}>Set all {choosable.length} days to:</span>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => pickAll('scheduled')}>Scheduled</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => pickAll('clocked')}>Clocked</button>
+              </div>
+            )}
 
             {overlaps.length > 0 && (
               <div style={{ padding: '0.9rem 1rem', background: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: 8, marginBottom: '1rem' }}>
@@ -1167,9 +1187,9 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                                 <span style={{ color: '#6B7280' }}>{mins(r.scheduled_minutes)} · {money(r.scheduled_amount)}</span></>}</td>
                           <td>
                             {clock(r.clocked_start)}–{clock(r.clocked_end)}<br />
-                            <span style={{ color: r.status === 'short' ? '#B91C1C' : '#B45309' }}>
+                            <span style={{ color: r.clocked_minutes < r.scheduled_minutes ? '#B91C1C' : '#B45309' }}>
                               {mins(r.clocked_minutes)} · {money(r.clocked_amount)}
-                              {noSched ? '' : r.status === 'short' ? ' (short)' : ' (over)'}
+                              {noSched ? '' : r.clocked_minutes < r.scheduled_minutes ? ' (short)' : ' (over)'}
                             </span>
                             {wild && <div style={{ fontSize: '0.72rem', color: '#B91C1C' }}>likely a missed clock-out</div>}
                             {noSched && <div style={{ fontSize: '0.72rem', color: '#6B7280' }}>add it to the schedule if this visit should bill normally</div>}
