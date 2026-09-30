@@ -1969,7 +1969,7 @@ router.get('/client-week', auth, requireAdmin, async (req, res) => {
   const weekEnd = end.toISOString().slice(0, 10);
   const cid = clientId || null;
   try {
-    const [occ, punches, cancelled] = await Promise.all([
+    const [occ, punches, cancelled, reviews] = await Promise.all([
       db.query(`
         WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
         SELECT occ.schedule_id, to_char(occ.occ_date, 'YYYY-MM-DD') AS day, occ.client_id, occ.caregiver_id,
@@ -2003,7 +2003,43 @@ router.get('/client-week', auth, requireAdmin, async (req, res) => {
          WHERE se.exception_type = 'cancelled' AND se.cancel_reason IS NOT NULL
            AND se.exception_date BETWEEN $1::date AND $2::date
            AND ($3::uuid IS NULL OR COALESCE(se.override_client_id, s.client_id) = $3::uuid)`, [weekStart, weekEnd, cid]),
+      // Payroll's decisions on these shifts (Payroll → Shift Review).
+      db.query(`
+        SELECT psr.caregiver_id, psr.schedule_id, psr.time_entry_id, to_char(psr.shift_date, 'YYYY-MM-DD') AS day,
+               psr.status, psr.payable_minutes, psr.scheduled_minutes, psr.actual_minutes, psr.resolution_notes,
+               COALESCE(psr.reviewed_at, psr.updated_at) AS decided_at
+          FROM payroll_shift_reviews psr
+         WHERE psr.shift_date BETWEEN $1::date AND $2::date
+           AND ($3::uuid IS NULL OR psr.client_id = $3::uuid)`, [weekStart, weekEnd, cid]),
     ]);
+
+    // One payroll decision per shift. Old overlapping pay periods left some shifts
+    // with several review rows: a correction beats a plain approval, then newest wins.
+    const RANK = { manual_entry: 3, excused: 3, approved: 2 };
+    const better = (a, b) => !a ? b : ((RANK[b.status] || 0) - (RANK[a.status] || 0)
+      || new Date(b.decided_at || 0) - new Date(a.decided_at || 0)) > 0 ? b : a;
+    const reviewByEntry = new Map(), reviewBySlot = new Map();
+    for (const r of reviews.rows) {
+      if (r.time_entry_id) reviewByEntry.set(r.time_entry_id, better(reviewByEntry.get(r.time_entry_id), r));
+      if (r.schedule_id) {
+        const k = `${r.caregiver_id}|${r.day}|${r.schedule_id}`;
+        reviewBySlot.set(k, better(reviewBySlot.get(k), r));
+      }
+    }
+    // Only what the office should see: corrections, and visits paid with no clock-in.
+    // Routine "Bulk approved at scheduled hours" rows add nothing and are left out.
+    const payrollNote = (rev) => {
+      if (!rev) return null;
+      const note = rev.resolution_notes && !/^Bulk approved/.test(rev.resolution_notes) ? rev.resolution_notes.trim() : null;
+      if (rev.status === 'manual_entry') return { kind: 'manual', payable_minutes: rev.payable_minutes, note };
+      if (rev.status === 'excused') return { kind: 'excused', payable_minutes: 0, note };
+      if (rev.status === 'approved' && !rev.time_entry_id) return { kind: 'paid_no_clock_in', payable_minutes: rev.payable_minutes, note };
+      if (rev.status === 'approved' && rev.payable_minutes != null
+          && rev.payable_minutes !== rev.scheduled_minutes && rev.payable_minutes !== rev.actual_minutes) {
+        return { kind: 'adjusted', payable_minutes: rev.payable_minutes, note };
+      }
+      return note ? { kind: 'note', payable_minutes: rev.payable_minutes, note } : null;
+    };
 
     const hmToMin = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
     const unmatched = [...punches.rows];
@@ -2018,6 +2054,11 @@ router.get('/client-week', auth, requireAdmin, async (req, res) => {
         clock_in: p ? p.start_time : null, clock_out: p ? p.end_time : null,
         clocked_minutes: p ? p.clocked_minutes : null, time_entry_id: p ? p.id : null,
         flags: p && p.approval_reason ? String(p.approval_reason).split(',').map(s => s.trim()).filter(Boolean) : [],
+        payroll: (() => {
+          const n = payrollNote((p && reviewByEntry.get(p.id)) || reviewBySlot.get(`${v.caregiver_id}|${v.day}|${v.schedule_id}`));
+          // Never say "no clock-in" beside a visit that shows one.
+          return n && n.kind === 'paid_no_clock_in' && p ? null : n;
+        })(),
       };
     });
     const extra = unmatched.map(p => ({
@@ -2025,6 +2066,7 @@ router.get('/client-week', auth, requireAdmin, async (req, res) => {
       sched_start: null, sched_end: null, sched_minutes: null,
       clock_in: p.start_time, clock_out: p.end_time, clocked_minutes: p.clocked_minutes, time_entry_id: p.id,
       flags: p.approval_reason ? String(p.approval_reason).split(',').map(s => s.trim()).filter(Boolean) : [],
+      payroll: payrollNote(reviewByEntry.get(p.id)),
     }));
     const cancels = cancelled.rows.map(c => ({
       type: 'cancelled', day: c.day, client_id: c.client_id, caregiver_name: c.caregiver_name || '', cancel_reason: c.cancel_reason,

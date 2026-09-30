@@ -1,7 +1,7 @@
 // src/components/admin/ClientWeekHours.jsx
 // Who was at each client, and when — one Sunday–Saturday week at a time, every
 // scheduled visit beside its actual clock-in/out. Built for entering MIDAS hours.
-// Read-only: corrections still go through Payroll → Shift Review.
+// Read-only: corrections are made in Payroll → Shift Review and shown here.
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { cancelReasonLabel } from '../../utils/cancelReasons';
@@ -13,6 +13,17 @@ const dayLabel = (ymd) => new Date(`${ymd}T12:00:00`).toLocaleDateString('en-US'
 const hm = (t) => { if (!t) return ''; const [h, m] = String(t).split(':').map(Number); return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
 const clock = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' }) : '';
 const hrs = (m) => m == null ? '' : (m / 60).toFixed(2);
+// Payroll's correction for a shift (Payroll → Shift Review), in plain words.
+const payrollText = (p) => {
+  if (!p) return '';
+  const h = p.payable_minutes != null ? `${(p.payable_minutes / 60).toFixed(2)} h` : '';
+  const head = p.kind === 'manual' ? `✏️ Paid ${h} (manual entry)`
+    : p.kind === 'excused' ? '🚫 Excused — not paid'
+    : p.kind === 'paid_no_clock_in' ? `✅ Paid ${h}, no clock-in`
+    : p.kind === 'adjusted' ? `✏️ Paid ${h}`
+    : '';
+  return [head, p.note].filter(Boolean).join(' — ');
+};
 const FLAG_LABELS = { offline_punch: 'saved offline', admin_force_clockout: 'office clock-out', excessive_duration: 'very long punch', zero_duration: 'accidental tap' };
 
 const ClientWeekHours = ({ token }) => {
@@ -72,7 +83,7 @@ const ClientWeekHours = ({ token }) => {
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table className="table" style={{ fontSize: '0.86rem', marginTop: '0.5rem' }}>
-              <thead><tr><th>Day</th><th>Caregiver</th><th>Scheduled</th><th>Clocked in – out</th><th style={{ textAlign: 'right' }}>Sched h</th><th style={{ textAlign: 'right' }}>Clocked h</th><th>Note</th></tr></thead>
+              <thead><tr><th>Day</th><th>Caregiver</th><th>Scheduled</th><th>Clocked in – out</th><th style={{ textAlign: 'right' }}>Sched h</th><th style={{ textAlign: 'right' }}>Clocked h</th><th>Note</th><th>Payroll</th></tr></thead>
               <tbody>
                 {c.rows.map((r, i) => {
                   const diff = r.type === 'visit' && r.clocked_minutes != null ? r.clocked_minutes - r.sched_minutes : null;
@@ -92,6 +103,9 @@ const ClientWeekHours = ({ token }) => {
                       <td style={{ textAlign: 'right', color: diff == null ? undefined : diff > 7 ? '#B45309' : diff < -7 ? '#B91C1C' : undefined }}>{hrs(r.clocked_minutes)}</td>
                       <td style={{ color: note === 'No clock-in' || note === 'Not on the schedule' ? '#B45309' : '#6B7280' }}>
                         {[note, ...flags].filter(Boolean).join(' · ')}
+                      </td>
+                      <td style={{ color: r.payroll && (r.payroll.kind === 'manual' || r.payroll.kind === 'adjusted') ? '#1D4ED8' : r.payroll && r.payroll.kind === 'excused' ? '#991B1B' : '#374151', fontWeight: r.payroll && r.payroll.kind !== 'paid_no_clock_in' ? 600 : 400 }}>
+                        {payrollText(r.payroll)}
                       </td>
                     </tr>
                   );

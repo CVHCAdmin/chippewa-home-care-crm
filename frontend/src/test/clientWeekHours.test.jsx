@@ -12,13 +12,13 @@ const week = {
       { type: 'visit', day: '2026-09-21', caregiver_name: 'Patricia Wittmann', sched_start: '14:00:00', sched_end: '16:00:00', sched_minutes: 120,
         clock_in: '2026-09-21T19:00:00.000Z', clock_out: '2026-09-21T21:03:00.000Z', clocked_minutes: 123, flags: [] },
       { type: 'visit', day: '2026-09-24', caregiver_name: 'Patricia Wittmann', sched_start: '14:00:00', sched_end: '16:00:00', sched_minutes: 120,
-        clock_in: null, clock_out: null, clocked_minutes: null, flags: [] },
+        clock_in: null, clock_out: null, clocked_minutes: null, flags: [], payroll: { kind: 'paid_no_clock_in', payable_minutes: 120, note: null } },
       { type: 'cancelled', day: '2026-09-26', caregiver_name: 'Patricia Wittmann', sched_start: '14:00:00', sched_end: '16:00:00', cancel_reason: 'client_hospital', flags: [] },
     ],
   }, {
     client_id: 'k', name: 'Kathy Boardman', is_private_pay: false, scheduled_minutes: 240, clocked_minutes: 151, missing_clock_ins: 0,
     rows: [{ type: 'visit', day: '2026-09-24', caregiver_name: 'Gina Schneider', sched_start: '13:00:00', sched_end: '17:00:00', sched_minutes: 240,
-      clock_in: '2026-09-24T20:53:00.000Z', clock_out: '2026-09-24T23:25:00.000Z', clocked_minutes: 151, flags: ['time_variance', 'offline_punch'] }],
+      clock_in: '2026-09-24T20:53:00.000Z', clock_out: '2026-09-24T23:25:00.000Z', clocked_minutes: 151, flags: ['time_variance', 'offline_punch'], payroll: { kind: 'manual', payable_minutes: 290, note: 'caregiver reported 1:10-6:00' } }],
   }],
 };
 
@@ -37,6 +37,8 @@ describe('Client Hours by Week', () => {
     expect(screen.getByText(/Cancelled — /)).toBeTruthy();
     expect(screen.getByText(/saved offline/)).toBeTruthy();
     expect(screen.getByText('3:53 PM – 6:25 PM')).toBeTruthy();
+    expect(screen.getByText('✏️ Paid 4.83 h (manual entry) — caregiver reported 1:10-6:00')).toBeTruthy();
+    expect(screen.getByText('✅ Paid 2.00 h, no clock-in')).toBeTruthy();
 
     // Filter to one client.
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'k' } });
