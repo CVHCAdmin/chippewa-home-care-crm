@@ -34,11 +34,14 @@ describe('Client Hours by Week', () => {
     expect(screen.getAllByText('2:00 PM – 4:00 PM').length).toBeGreaterThan(0);
     expect(screen.getByText('2:00 PM – 4:03 PM')).toBeTruthy();            // clock times in Chicago
     expect(screen.getByText('No clock-in')).toBeTruthy();
+    expect(screen.getByText('8.2')).toBeTruthy();                           // 123 clocked min = 8.2 units
+    expect(screen.getAllByText('4.00 h (16 units)').length).toBe(2);        // weekly scheduled totals
+    expect(screen.getByText('2.05 h (8.2 units)')).toBeTruthy();             // Diane's clocked total
     expect(screen.getByText(/Cancelled — /)).toBeTruthy();
     expect(screen.getByText(/saved offline/)).toBeTruthy();
     expect(screen.getByText('3:53 PM – 6:25 PM')).toBeTruthy();
-    expect(screen.getByText('✏️ Paid 4.83 h (manual entry) — caregiver reported 1:10-6:00')).toBeTruthy();
-    expect(screen.getByText('✅ Paid 2.00 h, no clock-in')).toBeTruthy();
+    expect(screen.getByText('✏️ Paid 4.83 h / 19.33 units (manual entry) — caregiver reported 1:10-6:00')).toBeTruthy();
+    expect(screen.getByText('✅ Paid 2.00 h / 8 units, no clock-in')).toBeTruthy();
 
     // Filter to one client.
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'k' } });

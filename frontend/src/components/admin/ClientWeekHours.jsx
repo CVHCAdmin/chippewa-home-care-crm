@@ -13,10 +13,12 @@ const dayLabel = (ymd) => new Date(`${ymd}T12:00:00`).toLocaleDateString('en-US'
 const hm = (t) => { if (!t) return ''; const [h, m] = String(t).split(':').map(Number); return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
 const clock = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' }) : '';
 const hrs = (m) => m == null ? '' : (m / 60).toFixed(2);
+// 15-minute units, same as the claims engine: minutes ÷ 15 to 2 decimals (8, 8.2, 8.27).
+const units = (m) => m == null ? '' : String(Math.round((m / 15) * 100) / 100);
 // Payroll's correction for a shift (Payroll → Shift Review), in plain words.
 const payrollText = (p) => {
   if (!p) return '';
-  const h = p.payable_minutes != null ? `${(p.payable_minutes / 60).toFixed(2)} h` : '';
+  const h = p.payable_minutes != null ? `${(p.payable_minutes / 60).toFixed(2)} h / ${units(p.payable_minutes)} units` : '';
   const head = p.kind === 'manual' ? `✏️ Paid ${h} (manual entry)`
     : p.kind === 'excused' ? '🚫 Excused — not paid'
     : p.kind === 'paid_no_clock_in' ? `✅ Paid ${h}, no clock-in`
@@ -77,13 +79,13 @@ const ClientWeekHours = ({ token }) => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem' }}>
             <h3 style={{ margin: 0 }}>{c.name}{c.is_private_pay && <span style={{ fontSize: '0.75rem', color: '#6B7280', fontWeight: 400 }}> · private pay</span>}</h3>
             <div style={{ fontSize: '0.9rem' }}>
-              Scheduled <strong>{hrs(c.scheduled_minutes)} h</strong> · Clocked <strong>{hrs(c.clocked_minutes)} h</strong>
+              Scheduled <strong>{hrs(c.scheduled_minutes)} h ({units(c.scheduled_minutes)} units)</strong> · Clocked <strong>{hrs(c.clocked_minutes)} h ({units(c.clocked_minutes)} units)</strong>
               {c.missing_clock_ins > 0 && <span style={{ color: '#B45309' }}> · {c.missing_clock_ins} with no clock-in</span>}
             </div>
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table className="table" style={{ fontSize: '0.86rem', marginTop: '0.5rem' }}>
-              <thead><tr><th>Day</th><th>Caregiver</th><th>Scheduled</th><th>Clocked in – out</th><th style={{ textAlign: 'right' }}>Sched h</th><th style={{ textAlign: 'right' }}>Clocked h</th><th>Note</th><th>Payroll</th></tr></thead>
+              <thead><tr><th>Day</th><th>Caregiver</th><th>Scheduled</th><th>Clocked in – out</th><th style={{ textAlign: 'right' }}>Sched h</th><th style={{ textAlign: 'right' }}>Sched units</th><th style={{ textAlign: 'right' }}>Clocked h</th><th style={{ textAlign: 'right' }}>Clocked units</th><th>Note</th><th>Payroll</th></tr></thead>
               <tbody>
                 {c.rows.map((r, i) => {
                   const diff = r.type === 'visit' && r.clocked_minutes != null ? r.clocked_minutes - r.sched_minutes : null;
@@ -100,7 +102,9 @@ const ClientWeekHours = ({ token }) => {
                       <td>{r.sched_start ? `${hm(r.sched_start)} – ${hm(r.sched_end)}` : '—'}</td>
                       <td>{r.clock_in ? `${clock(r.clock_in)} – ${r.clock_out ? clock(r.clock_out) : '…'}` : '—'}</td>
                       <td style={{ textAlign: 'right' }}>{r.type === 'visit' ? hrs(r.sched_minutes) : ''}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{r.type === 'visit' ? units(r.sched_minutes) : ''}</td>
                       <td style={{ textAlign: 'right', color: diff == null ? undefined : diff > 7 ? '#B45309' : diff < -7 ? '#B91C1C' : undefined }}>{hrs(r.clocked_minutes)}</td>
+                      <td style={{ textAlign: 'right', color: diff == null ? undefined : diff > 7 ? '#B45309' : diff < -7 ? '#B91C1C' : undefined }}>{units(r.clocked_minutes)}</td>
                       <td style={{ color: note === 'No clock-in' || note === 'Not on the schedule' ? '#B45309' : '#6B7280' }}>
                         {[note, ...flags].filter(Boolean).join(' · ')}
                       </td>
