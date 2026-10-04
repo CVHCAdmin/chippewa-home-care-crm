@@ -2155,7 +2155,7 @@ const SchedulingHub = ({ token }) => {
                 className='btn'
                 style={{ background: '#F59E0B', color: '#fff', border: 'none' }}
                 title='Mark this shift as available for another caregiver to pick up'
-              >📋 Mark Available</button>
+              >📋 Move to Available Shifts</button>
               <button onClick={() => setEditModal(null)} className='btn btn-secondary'>Cancel</button>
             </div>
           </div>
@@ -2167,11 +2167,12 @@ const SchedulingHub = ({ token }) => {
         <MakeShiftAvailableModal
           token={token}
           schedule={makeAvailableModal.schedule}
+          date={makeAvailableModal.schedule.date || makeAvailableModal.schedule.editDate}
           clientName={makeAvailableModal.clientName}
           caregiverName={makeAvailableModal.caregiverName}
           onClose={() => setMakeAvailableModal(null)}
-          onDone={({ notified }) => {
-            showMsg(notified > 0 ? `Shift posted — notified ${notified} caregiver${notified === 1 ? '' : 's'}` : 'Shift posted to open shift board');
+          onDone={({ notified, texted, warning }) => {
+            showMsg(warning || `Posted to Available Shifts — ${notified} caregiver${notified === 1 ? '' : 's'} can accept it${texted ? `, ${texted} texted` : ''}`, warning ? 'error' : undefined);
             loadCaregiverSchedules(selectedCaregiverId);
             if (mainTab === 'staffing' && staffingTab === 'open-shifts') loadOpenShifts();
           }}

@@ -177,4 +177,4 @@ function startCron() {
 
 function stopCron() { if (timer) clearInterval(timer); timer = null; }
 
-module.exports = { startCron, stopCron, scanOnce, ensureTable, toE164, _setSender, THRESHOLDS };
+module.exports = { startCron, stopCron, scanOnce, ensureTable, toE164, sendText, _setSender, THRESHOLDS };

@@ -1212,8 +1212,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
       });
-      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-      showMsg('Shift claimed!');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      // "It's yours — …" when the office offered it first-come, otherwise pending approval.
+      showMsg(data.message || 'Shift claimed!');
       loadOpenShifts();
       loadData();
     } catch (error) {

@@ -5,6 +5,7 @@ import { API_BASE_URL } from '../../config';
 import { getTodayCT } from '../../utils/timezone';
 import { isBiweeklyOn } from '../../utils/biweekly';
 import { CLIENT_UNAVAILABLE_REASONS } from '../../utils/cancelReasons';
+import MakeShiftAvailableModal from './MakeShiftAvailableModal';
 
 const PALETTE = [
   '#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6',
@@ -89,6 +90,9 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   // edit box uses — this modal is the one people actually reach from the grid.
   const [suspendBusy, setSuspendBusy] = useState(false);
   const [suspendFrom, setSuspendFrom] = useState('');
+
+  // "Move to Available Shifts" — offer this one visit to chosen caregivers.
+  const [offerShift, setOfferShift] = useState(null); // { shift, date }
 
   // ── Delete scope modal ──
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { shift, date }
@@ -1403,6 +1407,14 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               );
             })()}
 
+            {editDate && (
+              <button type="button" disabled={saving}
+                onClick={() => { setOfferShift({ shift: editShift, date: editDate }); setEditShift(null); }}
+                style={{ ...cancelBtn, width:'100%', marginTop:12, color:'#92400E', borderColor:'#FCD34D', background:'#FFFBEB', fontWeight:700 }}>
+                &#128203; Move to Available Shifts ({dateLabel} only)
+              </button>
+            )}
+
             <div style={{ display:'flex', justifyContent:'space-between', marginTop:16 }}>
               <button onClick={() => openDeleteConfirm(editShift, editDate)} disabled={saving} style={{ ...cancelBtn, color:'#EF4444', borderColor:'#FECACA' }}>
                 {saving ? '...' : 'Delete'}
@@ -1417,6 +1429,22 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           </Modal>
         );
       })()}
+
+      {/* ═══════ MOVE TO AVAILABLE SHIFTS ═══════ */}
+      {offerShift && (
+        <MakeShiftAvailableModal
+          token={token}
+          schedule={offerShift.shift}
+          date={offerShift.date}
+          clientName={(() => { const c = clientMap[offerShift.shift.client_id]; return c ? `${c.first_name} ${c.last_name}` : ''; })()}
+          caregiverName={(() => { const c = caregivers.find(x => x.id === offerShift.shift.caregiver_id); return c ? `${c.first_name} ${c.last_name}` : ''; })()}
+          onClose={() => setOfferShift(null)}
+          onDone={({ notified, texted, warning }) => {
+            if (warning) showToast(warning, 'error');
+            else showToast(`Posted to Available Shifts — ${notified} caregiver${notified === 1 ? '' : 's'} can accept it${texted ? `, ${texted} texted` : ''}`);
+          }}
+        />
+      )}
 
       {/* ═══════ DROP CONFIRM MODAL ═══════ */}
       {dropTarget && (() => {
