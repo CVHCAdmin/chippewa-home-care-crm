@@ -111,6 +111,28 @@ const usesAdminGate = (router, method, p) => layerFor(router, method, p).route.s
       check('approve → moves that day', ap.code === 200 && (await owner(v2.schedule_id, v2.day)).caregiver_id === Y.id, ap.body && ap.body.error);
     }
 
+    // 6b. Office list, turn down, and remove.
+    const v3 = pick[1];
+    const day5 = new Date(new Date(`${v3.day}T12:00:00Z`).getTime() + 7 * 86400000).toISOString().slice(0, 10);
+    const p5 = await call('post', '/from-schedule/:scheduleId', { params: { scheduleId: v3.schedule_id }, body: { date: day5, visibleTo: [X.id, Z.id], autoAssign: false }, user: A });
+    check('post for approval-mode list test', p5.code === 200, p5.body && p5.body.error);
+    await call('post', '/:id/claim', { params: { id: p5.body.id }, user: Z });
+    let list = await call('get', '/', { query: { status: 'active' }, user: A });
+    let row = list.body.find(s => s.id === p5.body.id);
+    check('office list shows the accepted shift (waiting for approval)', row && row.status === 'claimed' && !!row.claimed_by_first, row && row.status);
+    check('office list says who it was offered to', row && typeof row.offered_to === 'string' && row.offered_to.split(', ').length === 2, row && row.offered_to);
+    check('office list has the client name', row && !!row.client_first_name);
+    let rj = await call('post', '/:id/reject', { params: { id: p5.body.id }, body: { reason: 'test' }, user: A });
+    check('turn down → back to open for the others', rj.code === 200 && (await client.query(`SELECT status FROM open_shifts WHERE id=$1`, [p5.body.id])).rows[0].status === 'open');
+    let rm = await call('post', '/:id/cancel', { params: { id: p5.body.id }, user: A });
+    check('remove → 200', rm.code === 200, rm.body && rm.body.error);
+    check('removed shift no longer visible to caregivers', !(await sees(X)) || !(await call('get', '/available', { user: X })).body.some(s => s.id === p5.body.id));
+    check('removed shift leaves the visit with its caregiver', (await owner(v3.schedule_id, day5) || {}).caregiver_id === v3.caregiver_id);
+    list = await call('get', '/', { query: { status: 'all' }, user: A });
+    check("'all' includes removed and filled", list.body.some(s => s.status === 'cancelled') && list.body.some(s => s.status === 'filled'));
+    rm = await call('post', '/:id/cancel', { params: { id: os.id }, user: A });
+    check('a filled shift cannot be removed (400)', rm.code === 400);
+
     // 7. Call-out fix: a called-out (cancelled) day comes back on the substitute.
     const day3 = new Date(new Date(`${v.day}T12:00:00Z`).getTime() + 7 * 86400000).toISOString().slice(0, 10);
     await client.query(`INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, cancel_reason, created_by)

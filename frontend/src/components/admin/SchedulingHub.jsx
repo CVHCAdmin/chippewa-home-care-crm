@@ -121,11 +121,9 @@ const SchedulingHub = ({ token }) => {
   // ── Open Shifts state ──
   const [openShifts, setOpenShifts]                 = useState([]);
   const [openShiftsLoading, setOpenShiftsLoading]   = useState(false);
-  const [openShiftFilter, setOpenShiftFilter]       = useState('open');
+  const [openShiftFilter, setOpenShiftFilter]       = useState('active'); // open + accepted-awaiting-approval
   const [showCreateShift, setShowCreateShift]       = useState(false);
   const [createShiftPreFill, setCreateShiftPreFill] = useState({});
-  const [shiftClaims, setShiftClaims]               = useState([]);
-  const [currentShift, setCurrentShift]             = useState(null);
 
   // ── Shift Swaps state ──
   const [swaps, setSwaps]             = useState([]);
@@ -805,16 +803,30 @@ const SchedulingHub = ({ token }) => {
     } catch (e) { showMsg('Failed: ' + e.message, 'error'); }
   };
 
-  const approveShiftClaim = async (shiftId, claimId) => {
+  // Open-shift actions. Approval used to call PUT /claims/:id/approve, a route that
+  // doesn't exist, behind a "claims" button that never showed — so an accepted shift
+  // could not be approved from here at all.
+  const approveOpenShift = async (shift) => {
     try {
-      await api(`/api/open-shifts/${shiftId}/claims/${claimId}/approve`, { method: 'PUT' });
-      showMsg('Claim approved!'); setCurrentShift(null); loadOpenShifts();
+      await api(`/api/open-shifts/${shift.id}/approve`, { method: 'POST' });
+      showMsg(`Approved — the shift is on ${shift.claimed_by_first || 'their'}'s schedule`); loadOpenShifts();
     } catch (e) { showMsg('Failed: ' + e.message, 'error'); }
   };
-
-  const loadShiftClaims = async (shift) => {
-    try { const data = await api(`/api/open-shifts/${shift.id}/claims`); setShiftClaims(Array.isArray(data) ? data : []); setCurrentShift(shift); }
-    catch (e) { console.error(e); }
+  const turnDownOpenShift = async (shift) => {
+    const ok = await confirm(`Turn down ${shift.claimed_by_first || 'this caregiver'}? The shift goes back to available for the others.`);
+    if (!ok) return;
+    try {
+      await api(`/api/open-shifts/${shift.id}/reject`, { method: 'POST', body: JSON.stringify({ reason: 'Turned down by office' }) });
+      showMsg('Turned down — the shift is available again'); loadOpenShifts();
+    } catch (e) { showMsg('Failed: ' + e.message, 'error'); }
+  };
+  const removeOpenShift = async (shift) => {
+    const ok = await confirm('Remove this from Available Shifts? Caregivers will no longer see it. The visit stays with the caregiver it was scheduled for.', { danger: true });
+    if (!ok) return;
+    try {
+      await api(`/api/open-shifts/${shift.id}/cancel`, { method: 'POST' });
+      showMsg('Removed from Available Shifts'); loadOpenShifts();
+    } catch (e) { showMsg('Failed: ' + e.message, 'error'); }
   };
 
   // ═══════════════════════════════════════════════
@@ -1366,7 +1378,7 @@ const SchedulingHub = ({ token }) => {
         <div>
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
             <select value={openShiftFilter} onChange={(e) => setOpenShiftFilter(e.target.value)} style={{ padding: '0.4rem 0.75rem', borderRadius: '6px', border: '1px solid #ddd' }}>
-              <option value='open'>Open</option><option value='claimed'>Claimed</option><option value='filled'>Filled</option><option value=''>All</option>
+              <option value='active'>Open &amp; waiting for approval</option><option value='open'>Open</option><option value='claimed'>Waiting for approval</option><option value='filled'>Filled</option><option value='cancelled'>Removed</option><option value='all'>All</option>
             </select>
             <button className='btn btn-primary btn-sm' onClick={() => { setCreateShiftPreFill({}); setShowCreateShift(true); }}>+ Post Open Shift</button>
           </div>
@@ -1377,14 +1389,30 @@ const SchedulingHub = ({ token }) => {
                 <div key={shift.id} className='card' style={{ padding: '1rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <div>
-                      <strong>{shift.client_first || ''} {shift.client_last || ''}</strong>
+                      <strong>{shift.client_first_name || ''} {shift.client_last_name || ''}</strong>
                       <div style={{ fontSize: '0.85rem', color: '#666' }}>{shift.shift_date ? formatDate(shift.shift_date, { weekday: 'short', month: 'short', day: 'numeric' }) : ''} · {formatTime(shift.start_time)} – {formatTime(shift.end_time)}</div>
+                      <div style={{ fontSize: '0.82rem', color: '#555', marginTop: '0.3rem' }}>
+                        Offered to: {shift.offered_to || 'all caregivers'}
+                      </div>
+                      {shift.claimed_by_first && (
+                        <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                          {shift.status === 'filled' ? 'Taken by' : 'Accepted by'} <strong>{shift.claimed_by_first} {shift.claimed_by_last}</strong>
+                        </div>
+                      )}
                       {shift.notes && <div style={{ fontSize: '0.82rem', color: '#888', marginTop: '0.3rem' }}>{shift.notes}</div>}
                     </div>
-                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                      <span style={bge(shift.status === 'open' ? '#FEF3C7' : shift.status === 'claimed' ? '#DBEAFE' : '#D1FAE5', shift.status === 'open' ? '#D97706' : shift.status === 'claimed' ? '#2563EB' : '#059669')}>{shift.status?.toUpperCase()}</span>
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={bge(shift.status === 'open' ? '#FEF3C7' : shift.status === 'claimed' ? '#DBEAFE' : shift.status === 'cancelled' ? '#F3F4F6' : '#D1FAE5', shift.status === 'open' ? '#D97706' : shift.status === 'claimed' ? '#2563EB' : shift.status === 'cancelled' ? '#6B7280' : '#059669')}>
+                        {shift.status === 'claimed' ? 'WAITING FOR APPROVAL' : shift.status === 'cancelled' ? 'REMOVED' : shift.status?.toUpperCase()}
+                      </span>
                       {shift.urgency === 'urgent' && <span style={bge('#FEE2E2', '#DC2626')}>URGENT</span>}
-                      {(shift.claim_count > 0 || shift.claims_count > 0) && <button className='btn btn-sm btn-secondary' onClick={() => loadShiftClaims(shift)}>{shift.claim_count || shift.claims_count} claim(s)</button>}
+                      {shift.status === 'claimed' && <>
+                        <button className='btn btn-sm btn-success' onClick={() => approveOpenShift(shift)}>✓ Approve</button>
+                        <button className='btn btn-sm btn-secondary' onClick={() => turnDownOpenShift(shift)}>✗ Turn down</button>
+                      </>}
+                      {(shift.status === 'open' || shift.status === 'claimed') && (
+                        <button className='btn btn-sm btn-danger' onClick={() => removeOpenShift(shift)}>🗑 Remove</button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1953,27 +1981,6 @@ const SchedulingHub = ({ token }) => {
               <div className='form-group'><label>Notes</label><textarea name='notes' rows={2} /></div>
               <div className='modal-actions'><button type='submit' className='btn btn-primary'>Post Shift</button><button type='button' className='btn btn-secondary' onClick={() => { setShowCreateShift(false); setCreateShiftPreFill({}); }}>Cancel</button></div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* SHIFT CLAIMS MODAL */}
-      {currentShift && (
-        <div className='modal active' onClick={() => setCurrentShift(null)}>
-          <div className='modal-content' onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
-            <div className='modal-header'><h2>Claims for Shift</h2><button className='close-btn' onClick={() => setCurrentShift(null)}>×</button></div>
-            {shiftClaims.length === 0 ? <p style={{ padding: '1rem', color: '#666' }}>No claims yet.</p> : (
-              <div style={{ padding: '1rem' }}>
-                {shiftClaims.map(cl => (
-                  <div key={cl.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', borderBottom: '1px solid #eee' }}>
-                    <div><strong>{cl.caregiver_first} {cl.caregiver_last}</strong>{cl.notes && <div style={{ fontSize: '0.82rem', color: '#666' }}>{cl.notes}</div>}</div>
-                    {cl.status === 'pending' && <button className='btn btn-sm btn-success' onClick={() => approveShiftClaim(currentShift.id, cl.id)}>✓ Approve</button>}
-                    {cl.status === 'approved' && <span style={bge('#D1FAE5', '#059669')}>APPROVED</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className='modal-actions' style={{ padding: '1rem' }}><button className='btn btn-secondary' onClick={() => setCurrentShift(null)}>Close</button></div>
           </div>
         </div>
       )}

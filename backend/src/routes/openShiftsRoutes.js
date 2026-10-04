@@ -206,12 +206,15 @@ router.get('/available', auth, async (req, res) => {
 router.get('/', auth, requireAdmin, async (req, res) => {
   const { status, startDate, endDate, urgency } = req.query;
   try {
+    await ensureColumns();
     let query = `
-      SELECT os.*, 
+      SELECT os.*,
         c.first_name as client_first_name, c.last_name as client_last_name,
         c.address as client_address, c.city as client_city,
         ct.name as care_type_name,
-        u.first_name as claimed_by_first, u.last_name as claimed_by_last
+        u.first_name as claimed_by_first, u.last_name as claimed_by_last,
+        (SELECT string_agg(v.first_name || ' ' || v.last_name, ', ' ORDER BY v.first_name)
+           FROM users v WHERE v.id = ANY(os.visible_to)) AS offered_to
       FROM open_shifts os
       JOIN clients c ON os.client_id = c.id
       LEFT JOIN care_types ct ON os.care_type_id = ct.id
@@ -220,7 +223,13 @@ router.get('/', auth, requireAdmin, async (req, res) => {
     `;
     const params = [];
 
-    if (status) {
+    // 'active' = still needs the office (open, or accepted and waiting for approval);
+    // 'all' = no filter. Asking for nothing at all still means open, as before.
+    if (status === 'active') {
+      query += ` AND os.status IN ('open', 'claimed')`;
+    } else if (status === 'all') {
+      // no filter
+    } else if (status) {
       params.push(status);
       query += ` AND os.status = $${params.length}`;
     } else {
