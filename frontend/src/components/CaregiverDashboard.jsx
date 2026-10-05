@@ -69,6 +69,17 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [sandataPrompt, setSandataPrompt] = useState(null); // { kind: 'in' | 'out', clientName }
   const [showSandataHelp, setShowSandataHelp] = useState(false);
 
+  // One-time notice: Sandata EVV is now required (Oct 2026 manual-entry flag).
+  // Shown once per caregiver per device until they tap "I understand".
+  const SANDATA_NOTICE_KEY = `cvhc_sandata_notice_v1_${user?.id || ''}`;
+  const [showSandataNotice, setShowSandataNotice] = useState(() => {
+    try { return !!user?.id && !localStorage.getItem(SANDATA_NOTICE_KEY); } catch { return false; }
+  });
+  const dismissSandataNotice = () => {
+    try { localStorage.setItem(SANDATA_NOTICE_KEY, new Date().toISOString()); } catch { /* private mode — shows again next time, harmless */ }
+    setShowSandataNotice(false);
+  };
+
   // First-time Sandata Mobile Connect login, per DHS P-02751. There is no separate
   // code: Sandata emails each registered worker a welcome email with a temporary
   // password; the username is that email address; Company ID is picked from a list.
@@ -2673,6 +2684,38 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           {currentPage === 'settings' && renderSettingsPage()}
         </div>
       </div>
+
+      {showSandataNotice && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="sandata-notice-title"
+            style={{ background: '#fff', borderRadius: 14, maxWidth: 460, width: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem 1.25rem 1rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <h2 id="sandata-notice-title" style={{ margin: '0 0 0.6rem', fontSize: '1.2rem', color: '#1E3A8A' }}>📲 Important: Sandata EVV is now required</h2>
+            <p style={{ margin: '0 0 0.6rem', fontSize: '0.95rem', color: '#111827', lineHeight: 1.45 }}>
+              The State of Wisconsin, through <strong>Sandata</strong>, requires every <strong>My Choice / Medicaid</strong> visit to be
+              <strong> checked in and checked out on the Sandata Mobile Connect app</strong>, at the client's home, at the time of the visit.
+            </p>
+            <p style={{ margin: '0 0 0.6rem', fontSize: '0.95rem', color: '#111827', lineHeight: 1.45 }}>
+              We were flagged for too many visits being entered by hand afterward. <strong>We need everyone to follow this for every visit</strong> — keep clocking in and out in our app as usual, and also check in and out on Sandata.
+            </p>
+            <ol style={{ margin: '0 0 0.75rem', paddingLeft: '1.2rem', fontSize: '0.9rem', color: '#1F2937', lineHeight: 1.5 }}>
+              <li>Install <strong>Sandata Mobile Connect</strong> (dark blue logo).</li>
+              <li>Log in with the <strong>welcome email from Sandata</strong> (username = your email, temporary password from that email, Company ID <strong>{SANDATA_AGENCY_ID}</strong>).</li>
+              <li>At each My Choice visit: <strong>check in when you arrive, check out when you leave.</strong> This app will remind you.</li>
+            </ol>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.95rem', color: '#111827' }}>
+              Please reach out to me at <a href="tel:17158645052" style={{ fontWeight: 700 }}>715-864-5052</a> with any questions.
+            </p>
+            <button type="button" onClick={() => { dismissSandataNotice(); setShowSandataHelp(true); }}
+              style={{ width: '100%', padding: '0.85rem', background: '#1D4ED8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
+              I understand — show me how to set it up
+            </button>
+            <button type="button" onClick={dismissSandataNotice}
+              style={{ width: '100%', marginTop: '0.5rem', padding: '0.6rem', background: 'none', border: '1px solid #D1D5DB', borderRadius: 10, color: '#374151', fontWeight: 600, cursor: 'pointer' }}>
+              I understand
+            </button>
+          </div>
+        </div>
+      )}
 
       {showNoteModal && (
         <div className="modal active">
