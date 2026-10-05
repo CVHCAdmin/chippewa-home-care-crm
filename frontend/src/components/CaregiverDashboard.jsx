@@ -11,6 +11,7 @@ import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { savePunch, newLocalId, offlineSession, flushPunches, isUnreachable, pendingPunches } from '../offlinePunches';
+import { needsSandata, openSandata, SANDATA_AGENCY_ID } from '../utils/sandata';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { isBiweeklyOn, toYMD } from '../utils/biweekly';
@@ -64,6 +65,28 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [schedules, setSchedules] = useState([]);
   const [clients, setClients] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
+  // "Now check in/out on Sandata too" — shown after a punch for Medicaid / My Choice clients.
+  const [sandataPrompt, setSandataPrompt] = useState(null); // { kind: 'in' | 'out', clientName }
+  const [showSandataHelp, setShowSandataHelp] = useState(false);
+
+  // First-time Sandata Mobile Connect login, per DHS P-02751. There is no separate
+  // code: Sandata emails each registered worker a welcome email with a temporary
+  // password; the username is that email address; Company ID is picked from a list.
+  const sandataHelp = (
+    <div style={{ textAlign: 'left', fontSize: '0.85rem', color: '#1F2937', background: '#fff', border: '1px solid #BFDBFE', borderRadius: 10, padding: '0.75rem 0.9rem', marginTop: '0.5rem' }}>
+      <div style={{ fontWeight: 800, marginBottom: '0.4rem' }}>Logging in to Sandata the first time</div>
+      <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.5 }}>
+        <li>Find the <strong>welcome email from Sandata</strong> — it has your temporary password. Not in your inbox? Check spam, or search your email for "Sandata".</li>
+        <li><strong>Username:</strong> the email address that welcome email was sent to{user?.email ? <> — the email we have for you is <strong style={{ wordBreak: 'break-all' }}>{user.email}</strong></> : ''}.</li>
+        <li><strong>Password:</strong> the temporary password from that email. It works once — the app then asks you to make your own.</li>
+        <li><strong>Company ID:</strong> pick <strong>{SANDATA_AGENCY_ID}</strong> from the list.</li>
+        <li>Do this first login <strong>on Wi-Fi</strong>, and tap <strong>Allow While Using App</strong> for location.</li>
+      </ol>
+      <div style={{ marginTop: '0.5rem', color: '#475569' }}>
+        No welcome email from Sandata at all? You haven't been added yet — tell the office. Login trouble: Wisconsin EVV Customer Care, <a href="tel:18339312035">833-931-2035</a> (weekdays 7–6).
+      </div>
+    </div>
+  );
   const [loading, setLoading] = useState(true);
   const [selectedClient, setSelectedClient] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -463,7 +486,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           // clock in, and the offline queue syncs the punch when it comes back.
           try {
             localStorage.setItem(CLIENT_CACHE_KEY, JSON.stringify(
-              clientData.map(c => ({ id: c.id, first_name: c.first_name, last_name: c.last_name, is_private_pay: c.is_private_pay }))
+              clientData.map(c => ({ id: c.id, first_name: c.first_name, last_name: c.last_name, is_private_pay: c.is_private_pay, referral_payer_type: c.referral_payer_type }))
             ));
           } catch { /* private mode / quota — cache is a bonus, not a requirement */ }
         }
@@ -739,6 +762,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             toast(`📍 You've arrived at ${data.clientName} — clocked in automatically`, 'success');
             setActiveSession(clockData);
             setSelectedClient(clientId);
+            // Interval callback: read the live client list, not this render's copy.
+            const autoCl = (clientsRef.current || []).find(c => c.id === clientId);
+            if (needsSandata(autoCl)) setSandataPrompt({ kind: 'in', clientName: data.clientName || `${autoCl.first_name || ''} ${autoCl.last_name || ''}`.trim() });
             gpsIntervalRef.current = startGPSBreadcrumbs(clockData.id);
           } else {
             // Clock-in failed — remove from triggered set so it can retry
@@ -928,6 +954,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return `📍 GPS unavailable — can't ${action}. Make sure phone Location is ON and Chrome has Location permission, then try again.`;
   };
 
+  // Medicaid / My Choice visits must also be checked in and out on Sandata Mobile
+  // Connect (state EVV) until the CRM is a certified alternate EVV system.
+  const promptSandata = (kind, clientId) => {
+    const cl = clients.find(c => c.id === clientId);
+    if (needsSandata(cl)) setSandataPrompt({ kind, clientName: `${cl.first_name || ''} ${cl.last_name || ''}`.trim() });
+  };
+
   const handleClockIn = async ({ skipGps = false } = {}) => {
     if (!selectedClient) return toast('Please select a client.');
     if (clockingIn) return;
@@ -983,6 +1016,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         hapticNotify('warning');
         toast(`No signal — clock-in saved on your phone at ${new Date(tapAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. It will send by itself when you have signal.`, 'warning');
         setActiveSession({ id: `offline-${localId}`, offline: true, client_id: selectedClient, start_time: tapAt });
+        promptSandata('in', selectedClient);
         return;
       }
 
@@ -1001,6 +1035,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       const clockInData = await res.json();
       hapticNotify('success'); // success haptic
       setActiveSession(clockInData);
+      promptSandata('in', selectedClient);
       gpsIntervalRef.current = startGPSBreadcrumbs(clockInData.id);
       if (!lat) {
         toast('Clocked in (location unavailable)', 'warning');
@@ -1057,8 +1092,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     setClockingOut(true);
     cancelLateFixRetries(); // shift is ending — stop any pending late-fix attempts
     const tapAt = new Date().toISOString(); // the real clock-out time, even if the send fails
+    const outClientId = activeSession.client_id || selectedClient;
     // Reset the screen after a clock-out that was saved on the phone.
     const finishSavedOffline = () => {
+      promptSandata('out', outClientId);
       hapticNotify('warning');
       toast(`No signal — clock-out saved on your phone at ${new Date(tapAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. It will send by itself when you have signal.${pendingPhotos.length ? ' Photos could not be saved offline.' : ''}`, 'warning');
       clockOutFixRef.current = null;
@@ -1161,6 +1198,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       }
 
       hapticNotify('success');
+      promptSandata('out', outClientId);
       clockOutFixRef.current = null; // used (or stale) — never carry into a later clock-out
       setActiveSession(null);
       setSelectedClient('');
@@ -1764,6 +1802,31 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </div>
       )}
 
+      {/* SANDATA EVV — Medicaid / My Choice visits must also be checked in/out on SMC */}
+      {sandataPrompt && (
+        <div className="card" style={{ background: '#EFF6FF', border: '2px solid #1D4ED8', padding: '1rem 1.25rem' }}>
+          <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#1E3A8A', marginBottom: '0.35rem' }}>
+            📲 Now check {sandataPrompt.kind === 'in' ? 'IN' : 'OUT'} on Sandata
+          </div>
+          <div style={{ fontSize: '0.88rem', color: '#1E40AF', marginBottom: '0.75rem' }}>
+            {sandataPrompt.clientName ? `${sandataPrompt.clientName} is` : 'This client is'} a Medicaid / My Choice client. The state requires the visit to be {sandataPrompt.kind === 'in' ? 'checked in' : 'checked out'} on the Sandata Mobile Connect app too — do it now, while you're at the home.
+          </div>
+          <button type="button" onClick={() => { openSandata(); setSandataPrompt(null); }}
+            style={{ width: '100%', padding: '0.9rem', background: '#1D4ED8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '1.05rem', cursor: 'pointer' }}>
+            Open Sandata EVV
+          </button>
+          <button type="button" onClick={() => setSandataPrompt(null)}
+            style={{ width: '100%', marginTop: '0.5rem', padding: '0.5rem', background: 'none', border: 'none', color: '#1E40AF', fontWeight: 600, cursor: 'pointer' }}>
+            I already did it
+          </button>
+          <button type="button" onClick={() => setShowSandataHelp(v => !v)}
+            style={{ width: '100%', padding: '0.4rem', background: 'none', border: 'none', color: '#475569', fontSize: '0.82rem', textDecoration: 'underline', cursor: 'pointer' }}>
+            {showSandataHelp ? 'Hide login help' : 'How do I log in to Sandata?'}
+          </button>
+          {showSandataHelp && sandataHelp}
+        </div>
+      )}
+
       {/* MOBILE-FIRST CLOCK-IN — Full prominent card */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {activeSession ? (
@@ -1796,6 +1859,21 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             >
               🛑 Clock Out
             </button>
+            {needsSandata(clients.find(c => c.id === activeSession.client_id)) && (
+              <button type="button" onClick={openSandata}
+                style={{ width: '100%', marginTop: '0.75rem', padding: '0.75rem', background: '#fff', color: '#1D4ED8', border: '2px solid #1D4ED8', borderRadius: '12px', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer' }}>
+                📲 Open Sandata EVV (check in / check out)
+              </button>
+            )}
+            {needsSandata(clients.find(c => c.id === activeSession.client_id)) && (
+              <>
+                <button type="button" onClick={() => setShowSandataHelp(v => !v)}
+                  style={{ marginTop: '0.35rem', background: 'none', border: 'none', color: '#1D4ED8', fontSize: '0.82rem', textDecoration: 'underline', cursor: 'pointer' }}>
+                  {showSandataHelp ? 'Hide login help' : 'How do I log in to Sandata?'}
+                </button>
+                {showSandataHelp && sandataHelp}
+              </>
+            )}
             {activeSession.id && !String(activeSession.id).startsWith('offline-') && (
               <div style={{ marginTop: '1.25rem', background: '#fff', borderRadius: 12, padding: '0.25rem', textAlign: 'left' }}>
                 <CareTaskChecklist token={token} timeEntryId={activeSession.id} />
@@ -1808,6 +1886,15 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             <div style={{ fontSize: '1.1rem', fontWeight: '800', color: '#111827', marginBottom: '1rem', textAlign: 'center' }}>
               ⏰ Ready to Start a Shift?
             </div>
+            {clients.some(needsSandata) && (
+              <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+                <button type="button" onClick={() => setShowSandataHelp(v => !v)}
+                  style={{ background: 'none', border: 'none', color: '#1D4ED8', fontSize: '0.85rem', textDecoration: 'underline', cursor: 'pointer' }}>
+                  📲 {showSandataHelp ? 'Hide Sandata login help' : 'Set up Sandata (needed for My Choice / Medicaid visits)'}
+                </button>
+                {showSandataHelp && sandataHelp}
+              </div>
+            )}
             {gpsPermission === 'denied' && clients.some(c => c.is_private_pay !== true) && (
               <div style={{ padding: '0.75rem 1rem', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, marginBottom: '1rem' }}>
                 <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#B91C1C', marginBottom: 4 }}>

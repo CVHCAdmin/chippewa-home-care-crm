@@ -52,7 +52,7 @@ router.get('/', verifyToken, async (req, res) => {
   try {
     const isAdmin = req.user?.role === 'admin';
     const result = await db.query(
-      `SELECT c.*, rs.name as referral_source_name, ct.name as care_type_name,
+      `SELECT c.*, rs.name as referral_source_name, rs.payer_type as referral_payer_type, ct.name as care_type_name,
               (SELECT MIN(s.suspended_from) FROM schedules s
                  WHERE s.client_id = c.id AND s.is_active = true AND s.suspended_from IS NOT NULL)
                 AS service_suspended_from
