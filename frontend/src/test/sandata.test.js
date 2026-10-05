@@ -3,9 +3,10 @@ import { describe, test, expect } from 'vitest';
 import { needsSandata, smcLink, SMC_APP_STORE_URL, SMC_PLAY_URL } from '../utils/sandata';
 
 describe('Sandata reminder', () => {
-  test('My Choice / Family Care and payer-unknown clients need Sandata; private pay and VA do not', () => {
+  test('only My Choice (Family Care) clients need Sandata', () => {
     expect(needsSandata({ referral_payer_type: 'mco_family_care' })).toBe(true);
-    expect(needsSandata({})).toBe(true);                                   // no payer on file — remind anyway
+    expect(needsSandata({ referral_payer_type: 'mco_family_care', is_private_pay: true })).toBe(false);
+    expect(needsSandata({})).toBe(false);                                  // no payer on file — nothing shown
     expect(needsSandata({ is_private_pay: true })).toBe(false);
     expect(needsSandata({ referral_payer_type: 'private_pay' })).toBe(false);
     expect(needsSandata({ referral_payer_type: 'va' })).toBe(false);       // VA is not a WI DMS payer

@@ -70,7 +70,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [showSandataHelp, setShowSandataHelp] = useState(false);
 
   // One-time notice: Sandata EVV is now required (Oct 2026 manual-entry flag).
-  // Shown once per caregiver per device until they tap "I understand".
+  // Shown once per caregiver per device until they tap "I understand" — and only to
+  // caregivers assigned a My Choice client (the render checks clients.some(needsSandata),
+  // so someone given a My Choice client later still sees it then).
   const SANDATA_NOTICE_KEY = `cvhc_sandata_notice_v1_${user?.id || ''}`;
   const [showSandataNotice, setShowSandataNotice] = useState(() => {
     try { return !!user?.id && !localStorage.getItem(SANDATA_NOTICE_KEY); } catch { return false; }
@@ -2685,7 +2687,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </div>
       </div>
 
-      {showSandataNotice && (
+      {showSandataNotice && clients.some(needsSandata) && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
           <div role="dialog" aria-modal="true" aria-labelledby="sandata-notice-title"
             style={{ background: '#fff', borderRadius: 14, maxWidth: 460, width: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem 1.25rem 1rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>

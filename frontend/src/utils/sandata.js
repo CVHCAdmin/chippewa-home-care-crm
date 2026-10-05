@@ -17,14 +17,12 @@ export const SMC_ANDROID_PACKAGE = 'com.sandata.smc.prod';
 export const SMC_PLAY_URL = `https://play.google.com/store/apps/details?id=${SMC_ANDROID_PACKAGE}`;
 export const SMC_APP_STORE_URL = 'https://apps.apple.com/us/app/sandata-mobile-connect/id6451209985';
 
-// Private pay and VA visits are not reported to Sandata (VA is not a Wisconsin DMS
-// payer). Everyone else — My Choice / Family Care and any client with no payer set —
-// gets the reminder: an extra prompt costs nothing, a missed check-in gets flagged.
+// Only My Choice (Family Care MCO) clients — owner's rule: a caregiver with no My
+// Choice client should not see anything about Sandata. Private pay, VA, and clients
+// with no payer set get nothing; set the payer on the client record to turn it on.
 export function needsSandata(client) {
-  if (!client) return false;
-  if (client.is_private_pay === true) return false;
-  const t = client.referral_payer_type;
-  return t !== 'va' && t !== 'private_pay';
+  if (!client || client.is_private_pay === true) return false;
+  return client.referral_payer_type === 'mco_family_care';
 }
 
 export function smcLink(ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '')) {
