@@ -89,6 +89,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     <div style={{ textAlign: 'left', fontSize: '0.85rem', color: '#1F2937', background: '#fff', border: '1px solid #BFDBFE', borderRadius: 10, padding: '0.75rem 0.9rem', marginTop: '0.5rem' }}>
       <div style={{ fontWeight: 800, marginBottom: '0.4rem' }}>Logging in to Sandata the first time</div>
       <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.5 }}>
+        <li><strong>Download the free Sandata Mobile Connect app</strong> (dark blue logo) from the Play Store / App Store. You need the app — there's no website login for caregivers.</li>
         <li>Find the <strong>welcome email from Sandata</strong> — it has your temporary password. Not in your inbox? Check spam, or search your email for "Sandata".</li>
         <li><strong>Username:</strong> the email address that welcome email was sent to{user?.email ? <> — the email we have for you is <strong style={{ wordBreak: 'break-all' }}>{user.email}</strong></> : ''}.</li>
         <li><strong>Password:</strong> the temporary password from that email. It works once — the app then asks you to make your own.</li>
@@ -1826,8 +1827,11 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           </div>
           <button type="button" onClick={() => { openSandata(); setSandataPrompt(null); }}
             style={{ width: '100%', padding: '0.9rem', background: '#1D4ED8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '1.05rem', cursor: 'pointer' }}>
-            Open Sandata EVV
+            Open the Sandata app
           </button>
+          <div style={{ fontSize: '0.78rem', color: '#475569', textAlign: 'center', marginTop: '0.35rem' }}>
+            You need the free <strong>Sandata Mobile Connect</strong> app on your phone. Don't have it yet? This button takes you to the store to download it (one time).
+          </div>
           <button type="button" onClick={() => setSandataPrompt(null)}
             style={{ width: '100%', marginTop: '0.5rem', padding: '0.5rem', background: 'none', border: 'none', color: '#1E40AF', fontWeight: 600, cursor: 'pointer' }}>
             I already did it
@@ -1875,7 +1879,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             {needsSandata(clients.find(c => c.id === activeSession.client_id)) && (
               <button type="button" onClick={openSandata}
                 style={{ width: '100%', marginTop: '0.75rem', padding: '0.75rem', background: '#fff', color: '#1D4ED8', border: '2px solid #1D4ED8', borderRadius: '12px', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer' }}>
-                📲 Open Sandata EVV (check in / check out)
+                📲 Open the Sandata app (check in / check out)
+                <div style={{ fontSize: '0.72rem', fontWeight: 500, color: '#475569', marginTop: 2 }}>Not installed yet? This takes you to the store to download it.</div>
               </button>
             )}
             {needsSandata(clients.find(c => c.id === activeSession.client_id)) && (
@@ -2700,7 +2705,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               We were flagged for too many visits being entered by hand afterward. <strong>We need everyone to follow this for every visit</strong> — keep clocking in and out in our app as usual, and also check in and out on Sandata.
             </p>
             <ol style={{ margin: '0 0 0.75rem', paddingLeft: '1.2rem', fontSize: '0.9rem', color: '#1F2937', lineHeight: 1.5 }}>
-              <li>Install <strong>Sandata Mobile Connect</strong> (dark blue logo).</li>
+              <li><strong>Download the free Sandata Mobile Connect app</strong> (dark blue logo) from the Play Store or App Store — yes, you need the app; there is no website login for caregivers.</li>
               <li>Log in with the <strong>welcome email from Sandata</strong> (username = your email, temporary password from that email, Company ID <strong>{SANDATA_AGENCY_ID}</strong>).</li>
               <li>At each My Choice visit: <strong>check in when you arrive, check out when you leave.</strong> This app will remind you.</li>
             </ol>

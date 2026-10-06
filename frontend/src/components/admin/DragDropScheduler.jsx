@@ -496,9 +496,11 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
   function openEditShift(s, cellDate) {
     setEditShift(s);
     setEditDate(cellDate || '');
-    // Default to the narrowest, safest scope. This used to open on 'all', so the quickest
-    // path through the modal rewrote every week the shift had ever run.
-    setEditScope('this');
+    // Default to "this & following": it never touches past weeks (payroll/billing history
+    // stays put), and it's what the office means far more often than a one-day change —
+    // the old 'this' default left a Tue edit applied to one day when every week was meant.
+    // (It once opened on 'all', which rewrote every week the shift had ever run.)
+    setEditScope('following');
     // Clear any date typed for a previously-opened shift so it can't leak into this one.
     setSuspendFrom('');
     setEditShiftForm({
@@ -1422,7 +1424,12 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
               <div style={{ display:'flex', gap:8 }}>
                 <button onClick={() => setEditShift(null)} style={cancelBtn}>Cancel</button>
                 <button onClick={handleSaveShift} disabled={saving} style={primaryBtn}>
-                  {saving ? 'Saving...' : 'Save Changes'}
+                  {/* Say exactly what will change, so a scope left on the wrong option is visible before saving. */}
+                  {saving ? 'Saving...'
+                    : !isRecurring ? 'Save Changes'
+                    : editScope === 'this' ? `Save — ${dateLabel || 'this date'} only`
+                    : editScope === 'following' ? `Save — ${dateLabel || 'this date'} & every week after`
+                    : 'Save — every week (past too)'}
                 </button>
               </div>
             </div>
