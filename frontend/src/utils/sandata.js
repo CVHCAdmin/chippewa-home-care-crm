@@ -17,12 +17,17 @@ export const SMC_ANDROID_PACKAGE = 'com.sandata.smc.prod';
 export const SMC_PLAY_URL = `https://play.google.com/store/apps/details?id=${SMC_ANDROID_PACKAGE}`;
 export const SMC_APP_STORE_URL = 'https://apps.apple.com/us/app/sandata-mobile-connect/id6451209985';
 
-// Only My Choice (Family Care MCO) clients — owner's rule: a caregiver with no My
-// Choice client should not see anything about Sandata. Private pay, VA, and clients
-// with no payer set get nothing; set the payer on the client record to turn it on.
+// Only My Choice (Family Care MCO) clients who are IN Sandata — i.e. have a Medicaid ID
+// on file (loaded from Sandata's client export). Owner's rules: a caregiver with no My
+// Choice client sees nothing about Sandata, and My Choice clients whose hours aren't
+// EVV hours (not in Sandata — e.g. Trina Klukas, Denise Woods) get no Sandata either.
+// Entering a client's Medicaid ID is what turns the reminder on for a new EVV client.
+export function hasMedicaidId(client) {
+  return !!client && (client.in_sandata === true || /^\d{10,12}$/.test(String(client.medicaid_id || '').trim()));
+}
 export function needsSandata(client) {
   if (!client || client.is_private_pay === true) return false;
-  return client.referral_payer_type === 'mco_family_care';
+  return client.referral_payer_type === 'mco_family_care' && hasMedicaidId(client);
 }
 
 export function smcLink(ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '')) {

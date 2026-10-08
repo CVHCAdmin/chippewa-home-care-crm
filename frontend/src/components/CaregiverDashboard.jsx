@@ -11,7 +11,7 @@ import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { savePunch, newLocalId, offlineSession, flushPunches, isUnreachable, pendingPunches } from '../offlinePunches';
-import { needsSandata, openSandata, SANDATA_AGENCY_ID } from '../utils/sandata';
+import { needsSandata, hasMedicaidId, openSandata, SANDATA_AGENCY_ID } from '../utils/sandata';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { isBiweeklyOn, toYMD } from '../utils/biweekly';
@@ -500,7 +500,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           // clock in, and the offline queue syncs the punch when it comes back.
           try {
             localStorage.setItem(CLIENT_CACHE_KEY, JSON.stringify(
-              clientData.map(c => ({ id: c.id, first_name: c.first_name, last_name: c.last_name, is_private_pay: c.is_private_pay, referral_payer_type: c.referral_payer_type }))
+              // in_sandata: a yes/no only — the Medicaid ID itself is not kept on the phone.
+              clientData.map(c => ({ id: c.id, first_name: c.first_name, last_name: c.last_name, is_private_pay: c.is_private_pay, referral_payer_type: c.referral_payer_type, in_sandata: hasMedicaidId(c) }))
             ));
           } catch { /* private mode / quota — cache is a bonus, not a requirement */ }
         }
