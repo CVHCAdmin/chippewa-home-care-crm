@@ -1,5 +1,5 @@
 // Who gets the "check in on Sandata too" reminder, and which link each phone gets.
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { needsSandata, smcLink, SMC_APP_STORE_URL, SMC_PLAY_URL } from '../utils/sandata';
 
 describe('Sandata reminder', () => {
@@ -22,5 +22,25 @@ describe('Sandata reminder', () => {
     expect(android).toContain(encodeURIComponent(SMC_PLAY_URL));
     expect(smcLink('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)')).toBe(SMC_APP_STORE_URL);
     expect(smcLink('Mozilla/5.0 (Windows NT 10.0)')).toBe(SMC_PLAY_URL);
+  });
+});
+
+import { medicaidIdOf, copyText } from '../utils/sandata';
+describe('Sandata client ID copy', () => {
+  test('only a real 10-12 digit Medicaid ID is offered for copying', () => {
+    expect(medicaidIdOf({ medicaid_id: ' 1421146410 ' })).toBe('1421146410');
+    expect(medicaidIdOf({ medicaid_id: '1197148' })).toBeNull();
+    expect(medicaidIdOf({ in_sandata: true })).toBeNull(); // offline cache never holds the ID
+  });
+  test('copies with the clipboard API, or falls back to select-and-copy', async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    expect(await copyText('1421146410')).toBe(true);
+    expect(writeText).toHaveBeenCalledWith('1421146410');
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    document.execCommand = vi.fn().mockReturnValue(true);
+    expect(await copyText('1421146410')).toBe(true);
+    expect(document.execCommand).toHaveBeenCalledWith('copy');
   });
 });

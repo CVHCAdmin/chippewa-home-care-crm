@@ -11,7 +11,7 @@ import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { savePunch, newLocalId, offlineSession, flushPunches, isUnreachable, pendingPunches } from '../offlinePunches';
-import { needsSandata, hasMedicaidId, openSandata, SANDATA_AGENCY_ID } from '../utils/sandata';
+import { needsSandata, hasMedicaidId, openSandata, SANDATA_AGENCY_ID, medicaidIdOf, copyText } from '../utils/sandata';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { isBiweeklyOn, toYMD } from '../utils/biweekly';
@@ -68,6 +68,44 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // "Now check in/out on Sandata too" — shown after a punch for Medicaid / My Choice clients.
   const [sandataPrompt, setSandataPrompt] = useState(null); // { kind: 'in' | 'out', clientName }
   const [showSandataHelp, setShowSandataHelp] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
+
+  // The client's Medicaid ID with a Copy button, so the caregiver can paste it into
+  // Sandata when starting the visit. `withOpen` adds one tap that copies AND opens Sandata.
+  // Only for clients in Sandata (needsSandata) and only when the ID came from the server
+  // (the offline cache deliberately doesn't keep Medicaid IDs on the phone).
+  const sandataIdBox = (clientId, { withOpen = false } = {}) => {
+    const cl = clients.find(c => c.id === clientId);
+    if (!needsSandata(cl)) return null;
+    const ma = medicaidIdOf(cl);
+    if (!ma) return null;
+    const copy = async (andOpen) => {
+      const ok = await copyText(ma);
+      setCopiedId(ok ? ma : null);
+      if (ok) setTimeout(() => setCopiedId(c => (c === ma ? null : c)), 4000);
+      else toast(`Couldn't copy — the client ID is ${ma}`, 'warning');
+      if (andOpen) openSandata();
+    };
+    return (
+      <div style={{ background: '#fff', border: '1px solid #BFDBFE', borderRadius: 10, padding: '0.6rem 0.75rem', marginTop: '0.6rem', textAlign: 'left' }}>
+        <div style={{ fontSize: '0.78rem', color: '#475569', fontWeight: 600 }}>Client ID for Sandata (Medicaid ID)</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
+          <span style={{ fontFamily: 'monospace', fontSize: '1.25rem', fontWeight: 800, letterSpacing: '0.05em', color: '#111827', flex: 1, userSelect: 'all' }}>{ma}</span>
+          <button type="button" onClick={() => copy(false)}
+            style={{ padding: '0.45rem 0.8rem', borderRadius: 8, border: '1px solid #1D4ED8', background: copiedId === ma ? '#DCFCE7' : '#fff', color: copiedId === ma ? '#166534' : '#1D4ED8', fontWeight: 700, cursor: 'pointer' }}>
+            {copiedId === ma ? '✓ Copied' : 'Copy'}
+          </button>
+        </div>
+        {withOpen && (
+          <button type="button" onClick={() => copy(true)}
+            style={{ width: '100%', marginTop: '0.5rem', padding: '0.7rem', background: '#1D4ED8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
+            📋 Copy ID &amp; open Sandata
+          </button>
+        )}
+        <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: '0.35rem' }}>In Sandata, paste this when it asks for the client.</div>
+      </div>
+    );
+  };
 
   // One-time notice: Sandata EVV is now required (Oct 2026 manual-entry flag).
   // Shown once per caregiver per device until they tap "I understand" — and only to
@@ -779,7 +817,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             setSelectedClient(clientId);
             // Interval callback: read the live client list, not this render's copy.
             const autoCl = (clientsRef.current || []).find(c => c.id === clientId);
-            if (needsSandata(autoCl)) setSandataPrompt({ kind: 'in', clientName: data.clientName || `${autoCl.first_name || ''} ${autoCl.last_name || ''}`.trim() });
+            if (needsSandata(autoCl)) setSandataPrompt({ kind: 'in', clientId, clientName: data.clientName || `${autoCl.first_name || ''} ${autoCl.last_name || ''}`.trim() });
             gpsIntervalRef.current = startGPSBreadcrumbs(clockData.id);
           } else {
             // Clock-in failed — remove from triggered set so it can retry
@@ -973,7 +1011,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   // Connect (state EVV) until the CRM is a certified alternate EVV system.
   const promptSandata = (kind, clientId) => {
     const cl = clients.find(c => c.id === clientId);
-    if (needsSandata(cl)) setSandataPrompt({ kind, clientName: `${cl.first_name || ''} ${cl.last_name || ''}`.trim() });
+    if (needsSandata(cl)) setSandataPrompt({ kind, clientId, clientName: `${cl.first_name || ''} ${cl.last_name || ''}`.trim() });
   };
 
   const handleClockIn = async ({ skipGps = false } = {}) => {
@@ -1826,10 +1864,13 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
           <div style={{ fontSize: '0.88rem', color: '#1E40AF', marginBottom: '0.75rem' }}>
             {sandataPrompt.clientName ? `${sandataPrompt.clientName} is` : 'This client is'} a Medicaid / My Choice client. The state requires the visit to be {sandataPrompt.kind === 'in' ? 'checked in' : 'checked out'} on the Sandata Mobile Connect app too — do it now, while you're at the home.
           </div>
-          <button type="button" onClick={() => { openSandata(); setSandataPrompt(null); }}
-            style={{ width: '100%', padding: '0.9rem', background: '#1D4ED8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '1.05rem', cursor: 'pointer' }}>
-            Open the Sandata app
-          </button>
+          {sandataIdBox(sandataPrompt.clientId, { withOpen: true })}
+          {!medicaidIdOf(clients.find(c => c.id === sandataPrompt.clientId)) && (
+            <button type="button" onClick={() => { openSandata(); setSandataPrompt(null); }}
+              style={{ width: '100%', padding: '0.9rem', background: '#1D4ED8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '1.05rem', cursor: 'pointer' }}>
+              Open the Sandata app
+            </button>
+          )}
           <div style={{ fontSize: '0.78rem', color: '#475569', textAlign: 'center', marginTop: '0.35rem' }}>
             You need the free <strong>Sandata Mobile Connect</strong> app on your phone. Don't have it yet? This button takes you to the store to download it (one time).
           </div>
@@ -1886,6 +1927,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             )}
             {needsSandata(clients.find(c => c.id === activeSession.client_id)) && (
               <>
+                {sandataIdBox(activeSession.client_id)}
                 <button type="button" onClick={() => setShowSandataHelp(v => !v)}
                   style={{ marginTop: '0.35rem', background: 'none', border: 'none', color: '#1D4ED8', fontSize: '0.82rem', textDecoration: 'underline', cursor: 'pointer' }}>
                   {showSandataHelp ? 'Hide login help' : 'How do I log in to Sandata?'}
@@ -1940,6 +1982,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
                   return displayClients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>);
                 })()}
               </select>
+              {/* Sandata client: the ID to paste into Sandata, ready before they even clock in. */}
+              {selectedClient && sandataIdBox(selectedClient)}
               {/* An empty list is the dead end that strands people: the dropdown told
                   them to "try refreshing" inside an app with nothing to refresh with.
                   Give them the actual button. */}
