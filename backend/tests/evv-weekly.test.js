@@ -94,3 +94,42 @@ describe('withTimeout', () => {
     expect(await withTimeout(Promise.resolve({ required: true }), 1000)).toEqual({ required: true });
   });
 });
+
+// MIDAS claim days: S5125 from Sandata visits (capped at the weekly allowance), the rest S5130.
+const { allocateEvvWeek } = require('../src/helpers/evvWeekly');
+const v = (date, hhmm, minutes, sentToSandata) => ({ date, start: `${date}T${hhmm}`, minutes, sentToSandata });
+
+describe('allocateEvvWeek (MIDAS claim days)', () => {
+  test('Sandata visits are EVV until the allowance; the overshoot and later visits are homemaker', () => {
+    // 8 EVV units (120 min). Mon 90 Sandata, Wed 90 Sandata (only 30 left), Fri 90 not sent.
+    const r = allocateEvvWeek(8, [v('2026-10-16', '09:00', 90, false), v('2026-10-12', '09:00', 90, true), v('2026-10-14', '09:00', 90, true)]);
+    expect(r.days.map(d => [d.date, d.evvUnits, d.homemakerUnits])).toEqual([
+      ['2026-10-12', 6, 0], ['2026-10-14', 2, 4], ['2026-10-16', 0, 6],
+    ]);
+    expect(r.totals).toEqual({ evvUnits: 8, homemakerUnits: 10, evvAuthorizedUnits: 8 });
+  });
+
+  test('homemaker-only client (0 EVV units): everything is S5130', () => {
+    const r = allocateEvvWeek(0, [v('2026-10-12', '09:00', 60, false)]);
+    expect(r.totals).toEqual({ evvUnits: 0, homemakerUnits: 4, evvAuthorizedUnits: 0 });
+  });
+
+  test('no allowance entered: every Sandata minute is EVV', () => {
+    const r = allocateEvvWeek(null, [v('2026-10-12', '09:00', 120, true), v('2026-10-13', '09:00', 120, true)]);
+    expect(r.totals.evvUnits).toBe(16);
+    expect(r.totals.homemakerUnits).toBe(0);
+  });
+
+  test('rounding never claims more EVV than authorized', () => {
+    // 3 units (45 min) spread 22 + 23 → rounds 1 + 2? per-day rounding could exceed; trimmed to 3.
+    const r = allocateEvvWeek(3, [v('2026-10-12', '09:00', 23, true), v('2026-10-13', '09:00', 23, true)]);
+    expect(r.totals.evvUnits).toBeLessThanOrEqual(3);
+    expect(r.totals.evvUnits + r.totals.homemakerUnits).toBe(3); // 46 min ≈ 3 units total
+  });
+
+  test('two visits on one day add up before rounding', () => {
+    const r = allocateEvvWeek(null, [v('2026-10-12', '09:00', 52, true), v('2026-10-12', '14:00', 53, true)]);
+    expect(r.days).toHaveLength(1);
+    expect(r.days[0].evvUnits).toBe(7); // 105 min
+  });
+});

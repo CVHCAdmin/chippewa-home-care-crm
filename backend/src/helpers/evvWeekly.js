@@ -84,4 +84,49 @@ function withTimeout(promise, ms) {
   return Promise.race([promise.finally(() => clearTimeout(timer)), timeout]);
 }
 
-module.exports = { UNIT_MINUTES, VISIT_MINUTES_SQL, clientInSandata, evvWeekUsage, decideSandataRequired, withTimeout };
+// MIDAS claim days for one client's Sun–Sat week. Pure (no DB) so it can be tested.
+// `visits` = that week's finished visits, any order: { date:'YYYY-MM-DD', start, minutes,
+// sentToSandata:boolean, ... }. EVV (S5125) minutes come from the visits that went
+// through Sandata, in time order, never more than the weekly allowance (null = no
+// allowance entered → all Sandata minutes are EVV). Everything else is homemaker (S5130).
+// Units are rounded per day (minutes / 15, nearest whole unit), and the week's EVV units
+// are trimmed (latest day first) so rounding can never claim more than the allowance.
+function allocateEvvWeek(evvWeeklyUnits, visits) {
+  const allowanceMin = evvWeeklyUnits == null ? Infinity : Number(evvWeeklyUnits) * UNIT_MINUTES;
+  let evvLeft = allowanceMin;
+  const sorted = [...visits].sort((a, b) => String(a.start).localeCompare(String(b.start)));
+  const byDay = new Map();
+  const out = sorted.map(v => {
+    const minutes = Math.max(0, Math.round(Number(v.minutes) || 0));
+    const evvMin = v.sentToSandata ? Math.min(minutes, Math.max(0, evvLeft)) : 0;
+    if (v.sentToSandata) evvLeft -= evvMin;
+    const row = { ...v, minutes, evvMinutes: evvMin, homemakerMinutes: minutes - evvMin };
+    const d = byDay.get(v.date) || { date: v.date, evvMinutes: 0, homemakerMinutes: 0, visits: [] };
+    d.evvMinutes += row.evvMinutes; d.homemakerMinutes += row.homemakerMinutes; d.visits.push(row);
+    byDay.set(v.date, d);
+    return row;
+  });
+  const days = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date)).map(d => ({
+    ...d,
+    evvUnits: Math.round(d.evvMinutes / UNIT_MINUTES),
+    homemakerUnits: Math.round(d.homemakerMinutes / UNIT_MINUTES),
+  }));
+  if (Number.isFinite(allowanceMin)) {
+    let over = days.reduce((s, d) => s + d.evvUnits, 0) - Number(evvWeeklyUnits);
+    for (let i = days.length - 1; i >= 0 && over > 0; i--) {
+      const cut = Math.min(over, days[i].evvUnits);
+      days[i].evvUnits -= cut; days[i].homemakerUnits += cut; over -= cut;
+    }
+  }
+  return {
+    days,
+    visits: out,
+    totals: {
+      evvUnits: days.reduce((s, d) => s + d.evvUnits, 0),
+      homemakerUnits: days.reduce((s, d) => s + d.homemakerUnits, 0),
+      evvAuthorizedUnits: evvWeeklyUnits == null ? null : Number(evvWeeklyUnits),
+    },
+  };
+}
+
+module.exports = { UNIT_MINUTES, VISIT_MINUTES_SQL, allocateEvvWeek, clientInSandata, evvWeekUsage, decideSandataRequired, withTimeout };

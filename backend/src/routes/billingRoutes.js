@@ -2323,6 +2323,78 @@ router.get('/export/evv', auth, async (req, res) => {
 
 // ==================== BILLING SUMMARY ====================
 
+// GET /api/billing/evv-claim-week?weekStart=YYYY-MM-DD   (admin)
+// MIDAS claim days for one Sun–Sat week, per My Choice client: for each day, the S5125
+// attendant-care (EVV) units — from the visits that went through Sandata, capped at the
+// client's weekly EVV allowance — and the S5130 homemaker units (everything else).
+// The Sandata visits themselves are already in Sandata (caregivers check in on the
+// app); this is what the office needs to key the MIDAS claim, plus the visit times
+// as documentation. weekStart is snapped back to its Sunday; default = last full week.
+router.get('/evv-claim-week', auth, requireAdmin, async (req, res) => {
+  try {
+    const { allocateEvvWeek, clientInSandata } = require('../helpers/evvWeekly');
+    const wk = await db.query(
+      `WITH d AS (SELECT COALESCE($1::date, (NOW() AT TIME ZONE 'America/Chicago')::date - 7) AS day)
+       SELECT to_char(day - EXTRACT(DOW FROM day)::int, 'YYYY-MM-DD') AS ws,
+              to_char(day - EXTRACT(DOW FROM day)::int + 6, 'YYYY-MM-DD') AS we FROM d`,
+      [/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.weekStart || '')) ? req.query.weekStart : null]
+    );
+    const { ws, we } = wk.rows[0];
+    const r = await db.query(
+      `SELECT te.id, te.client_id, te.sandata_required, te.needs_approval, te.approval_reason,
+              COALESCE(te.billable_minutes, te.duration_minutes) AS minutes,
+              to_char(te.start_time AT TIME ZONE 'America/Chicago', 'YYYY-MM-DD') AS date,
+              to_char(te.start_time AT TIME ZONE 'America/Chicago', 'YYYY-MM-DD"T"HH24:MI') AS start,
+              to_char(te.start_time AT TIME ZONE 'America/Chicago', 'FMHH12:MI AM') AS clock_in,
+              to_char(te.end_time AT TIME ZONE 'America/Chicago', 'FMHH12:MI AM') AS clock_out,
+              COALESCE(s.is_training, false) AS is_training,
+              u.first_name || ' ' || u.last_name AS caregiver,
+              c.first_name, c.last_name, c.medicaid_id, c.mco_member_id, c.evv_weekly_units,
+              c.is_private_pay, rs.payer_type
+         FROM time_entries te
+         JOIN clients c ON c.id = te.client_id
+         JOIN referral_sources rs ON rs.id = c.referral_source_id
+         JOIN users u ON u.id = te.caregiver_id
+         LEFT JOIN schedules s ON s.id = te.schedule_id
+        WHERE te.end_time IS NOT NULL
+          AND rs.payer_type = 'mco_family_care'
+          AND COALESCE(c.is_private_pay, false) = false
+          AND (te.start_time AT TIME ZONE 'America/Chicago')::date BETWEEN $1::date AND $2::date
+        ORDER BY c.last_name, c.first_name, te.start_time`,
+      [ws, we]
+    );
+    const byClient = new Map();
+    for (const v of r.rows) {
+      if (v.is_training) continue; // training shadow shifts never bill
+      if (!byClient.has(v.client_id)) {
+        byClient.set(v.client_id, {
+          client_id: v.client_id, client_name: `${v.first_name} ${v.last_name}`.trim(),
+          medicaid_id: v.medicaid_id || null, mco_member_id: v.mco_member_id || null,
+          evv_weekly_units: v.evv_weekly_units, in_sandata: clientInSandata(v), visits: [],
+        });
+      }
+      const cl = byClient.get(v.client_id);
+      cl.visits.push({
+        id: v.id, date: v.date, start: v.start, clock_in: v.clock_in, clock_out: v.clock_out,
+        caregiver: v.caregiver, minutes: Number(v.minutes) || 0,
+        // Visits from before v72 have no stored decision: they were all sent to Sandata
+        // if the client is a Sandata client.
+        sentToSandata: v.sandata_required == null ? cl.in_sandata : v.sandata_required === true,
+        needs_approval: v.needs_approval === true, approval_reason: v.approval_reason || null,
+      });
+    }
+    const clients = [...byClient.values()].map(cl => {
+      const alloc = allocateEvvWeek(cl.in_sandata ? cl.evv_weekly_units : 0, cl.visits);
+      const { visits, ...rest } = cl;
+      return { ...rest, ...alloc, pending_approval: visits.filter(v => v.needs_approval).length };
+    });
+    res.json({ week_start: ws, week_end: we, clients });
+  } catch (error) {
+    console.error('[evv-claim-week]', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/billing-summary', auth, async (req, res) => {
   const { startDate, endDate } = req.query;
   

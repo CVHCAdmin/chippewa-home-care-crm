@@ -16,6 +16,7 @@ const ReferralSources = React.lazy(() => import('./admin/ReferralSources'));
 const ClientsManagement = React.lazy(() => import('./admin/ClientsManagement'));
 const CaregiverManagement = React.lazy(() => import('./admin/CaregiverManagement'));
 const BillingDashboard = React.lazy(() => import('./admin/BillingDashboard'));
+const EvvClaimWeek = React.lazy(() => import('./admin/EvvClaimWeek'));
 const ClientOnboarding = React.lazy(() => import('./admin/ClientOnboarding'));
 const PerformanceRatings = React.lazy(() => import('./admin/PerformanceRatings'));
 const ExpenseManagement = React.lazy(() => import('./admin/ExpenseManagement'));
@@ -120,6 +121,7 @@ const NAV_SECTIONS = [
       { id: 'billing', label: 'Invoices', icon: '🧾' },
       { id: 'billing-import', label: 'Invoice Import', icon: '📥' },
       { id: 'visit-docs', label: 'Visit Notes → Invoice', icon: '📝' },
+      { id: 'evv-claim-week', label: 'MIDAS Claim Days', icon: '📆' },
       { id: 'claims', label: 'Claims', icon: '📑' },
       { id: 'billing-engine', label: 'Claims & EVV Engine', icon: '⚡' },
       { id: 'client-week', label: 'Client Hours by Week', icon: '🗓️' },
@@ -307,6 +309,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
         <CaregiverHistory caregiverId={selectedCaregiverId} caregiverName={selectedCaregiverName}
           token={token} onBack={() => { setSelectedCaregiverId(null); setCurrentPage('caregivers'); }} />
       ) : null;
+      case 'evv-claim-week': return <EvvClaimWeek token={token} />;
       case 'claims': return <ClaimsManagement token={token} />;
       case 'billing-engine': return <BillingEngine token={token} />;
       case 'medications': return <MedicationsManagement token={token} />;
