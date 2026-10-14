@@ -783,6 +783,10 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
                 </small>
               </div>
 
+              {client?.id && (
+                <EvvWeeklyUnits clientId={client.id} initialUnits={client.evv_weekly_units} token={token} />
+              )}
+
               <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>Billing Notes</h4>
               <div className="form-group">
                 <textarea
@@ -1168,6 +1172,77 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
 // Lazy-loads existing images on mount. Compresses uploads to JPEG ≤1600px to
 // keep them under the 5MB server cap. Photos sent via dedicated PUT so we
 // don't bloat the main client edit payload.
+// EVV (Sandata) units per week — the client's S5125 attendant-care allowance from MIDAS.
+// Once this Sun–Sat week's Sandata minutes reach it, the caregiver app stops sending
+// caregivers to Sandata for this client until Sunday (the rest is homemaker time).
+// Saved on its own (PATCH /api/clients/:id/evv-units), not with the main client PUT.
+const EvvWeeklyUnits = ({ clientId, initialUnits, token }) => {
+  const [units, setUnits] = useState(initialUnits == null ? '' : String(initialUnits));
+  const [week, setWeek] = useState(null);       // this week's usage, or null if not a Sandata client
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState({ text: '', type: '' });
+
+  const loadWeek = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/clients/evv-week?clientId=${clientId}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) return;
+      const rows = await r.json();
+      setWeek(Array.isArray(rows) && rows[0] ? rows[0] : null);
+    } catch { /* usage line is informational */ }
+  };
+  useEffect(() => { setUnits(initialUnits == null ? '' : String(initialUnits)); loadWeek(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [clientId]);
+
+  const save = async () => {
+    setSaving(true); setMsg({ text: '', type: '' });
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/clients/${clientId}/evv-units`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ units: units === '' ? null : Number(units) }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `Save failed (${r.status})`);
+      setMsg({ text: 'Saved.', type: 'success' });
+      loadWeek();
+    } catch (e) {
+      setMsg({ text: e.message, type: 'error' });
+    } finally { setSaving(false); }
+  };
+
+  const fmtH = (min) => `${(min / 60).toFixed(2).replace(/\.?0+$/, '')}h`;
+  return (
+    <>
+      <h4 style={{ borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' }}>EVV (Sandata) Units Per Week</h4>
+      <div className="form-group">
+        <label>S5125 attendant-care units per week (Sun–Sat)</label>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <input type="number" step="1" min="0" max="672" value={units}
+            onChange={(e) => setUnits(e.target.value)} placeholder="from MIDAS, e.g. 12" style={{ flex: 1 }} />
+          <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save EVV units'}</button>
+        </div>
+        {units !== '' && Number(units) >= 0 && (
+          <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: '#E0F2FE', borderRadius: 4, fontSize: '0.9rem', color: '#0369A1' }}>
+            = <strong>{fmtH(Number(units) * 15)}</strong> of Sandata visits per week
+          </div>
+        )}
+        {week && (
+          <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: week.next_visit_to_sandata ? '#FEF3C7' : '#ECFDF5', borderRadius: 4, fontSize: '0.9rem', color: '#374151' }}>
+            This week ({week.week_start} – {week.week_end}): <strong>{fmtH(week.used_minutes)}</strong> sent to Sandata
+            {week.allowance_minutes != null && <> of {fmtH(week.allowance_minutes)}</>} across {week.sandata_visits} visit{week.sandata_visits === 1 ? '' : 's'}.
+            {' '}{week.allowance_minutes == null
+              ? 'No allowance entered — every visit is sent to Sandata.'
+              : week.next_visit_to_sandata ? 'The next visit goes to Sandata.' : 'EVV hours met — no more Sandata until Sunday.'}
+          </div>
+        )}
+        {msg.text && <div style={{ marginTop: '0.4rem', fontSize: '0.85rem', color: msg.type === 'error' ? '#B91C1C' : '#047857' }}>{msg.text}</div>}
+        <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>
+          From the MIDAS "Attendant care svcs (EVV Required)" line. Blank = not entered (caregivers are sent to Sandata every visit). 0 = no EVV hours (never sent).
+        </small>
+      </div>
+    </>
+  );
+};
+
 const InsuranceCardUploader = ({ clientId, token }) => {
   const [front, setFront] = useState(null);
   const [back,  setBack]  = useState(null);

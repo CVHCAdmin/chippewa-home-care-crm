@@ -44,3 +44,28 @@ describe('Sandata client ID copy', () => {
     expect(document.execCommand).toHaveBeenCalledWith('copy');
   });
 });
+
+// Weekly EVV allowance: the server answers per visit (sandata_required). Once a client's
+// S5125 EVV hours for the Sun–Sat week are met, the rest of the week is homemaker time.
+import { visitNeedsSandata, evvWeekMet } from '../utils/sandata';
+
+describe('Sandata prompt follows the weekly EVV allowance', () => {
+  const evvClient = { referral_payer_type: 'mco_family_care', medicaid_id: '1421146410' };
+  test('server says the week is met → no Sandata, and the "done" notice shows', () => {
+    expect(visitNeedsSandata(evvClient, false)).toBe(false);
+    expect(evvWeekMet(evvClient, false)).toBe(true);
+  });
+  test('server says send it → prompt', () => {
+    expect(visitNeedsSandata(evvClient, true)).toBe(true);
+    expect(evvWeekMet(evvClient, true)).toBe(false);
+  });
+  test('no answer (offline clock-in / timeout) → prompt as before, the safe side', () => {
+    expect(visitNeedsSandata(evvClient, null)).toBe(true);
+    expect(visitNeedsSandata(evvClient, undefined)).toBe(true);
+    expect(evvWeekMet(evvClient, undefined)).toBe(false);
+  });
+  test('non-Sandata clients never prompt, whatever the server says', () => {
+    expect(visitNeedsSandata({ referral_payer_type: 'va', medicaid_id: '1421146410' }, true)).toBe(false);
+    expect(evvWeekMet({ is_private_pay: true }, false)).toBe(false);
+  });
+});

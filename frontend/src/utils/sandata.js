@@ -30,6 +30,22 @@ export function needsSandata(client) {
   return client.referral_payer_type === 'mco_family_care' && hasMedicaidId(client);
 }
 
+// Does THIS visit go to Sandata? The server decides at clock-in from the client's weekly
+// EVV (S5125 attendant care) allowance and returns `sandata_required` on the visit:
+//   false → this week's EVV hours are already met, the rest is homemaker time: no Sandata
+//   true  → send it
+//   null/undefined → no answer (offline clock-in, older server, timeout): fall back to
+//                    needsSandata(), i.e. prompt as before — the safe side.
+export function visitNeedsSandata(client, sandataRequired) {
+  if (sandataRequired === false) return false;
+  return needsSandata(client);
+}
+
+// For the "no Sandata this visit" notice: a Sandata client whose weekly EVV hours are done.
+export function evvWeekMet(client, sandataRequired) {
+  return sandataRequired === false && needsSandata(client);
+}
+
 export function smcLink(ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '')) {
   if (/iPhone|iPad|iPod/i.test(ua)) return SMC_APP_STORE_URL; // the App Store page shows "Open" when installed
   if (/Android/i.test(ua)) {

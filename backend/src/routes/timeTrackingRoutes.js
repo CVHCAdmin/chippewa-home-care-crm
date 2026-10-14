@@ -5,6 +5,25 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 const { SCHEDULE_OCCURRENCES_CTE } = require('../helpers/scheduleOccurrences');
+const { decideSandataRequired, withTimeout } = require('../helpers/evvWeekly');
+
+// Decide whether this visit goes to Sandata (weekly EVV allowance, see helpers/evvWeekly)
+// and store it on the entry. Runs AFTER the punch is saved and is capped, so it can never
+// block or slow a clock-in: on a timeout or error it returns null and the app falls back
+// to prompting as before.
+const SANDATA_DECISION_MS = 2500;
+async function recordSandataDecision(entryId, clientId, atIso) {
+  try {
+    const decision = await withTimeout(
+      decideSandataRequired(clientId, atIso, { excludeEntryId: entryId }), SANDATA_DECISION_MS);
+    if (!decision) return null;
+    await db.query(`UPDATE time_entries SET sandata_required = $1 WHERE id = $2`, [decision.required, entryId]);
+    return decision.required;
+  } catch (e) {
+    console.error('[clock-in] sandata decision:', e.message);
+    return null;
+  }
+}
 
 // A single shift longer than this is almost certainly a missed clock-out, not
 // real worked time. Past this ceiling we refuse to silently auto-bill the full
@@ -96,7 +115,8 @@ router.get('/active', verifyToken, async (req, res) => {
     );
     if (result.rows.length === 0) return res.json(null);
     const entry = result.rows[0];
-    res.json({ id: entry.id, client_id: entry.client_id, start_time: entry.start_time, client_name: `${entry.client_first_name} ${entry.client_last_name}` });
+    res.json({ id: entry.id, client_id: entry.client_id, start_time: entry.start_time, client_name: `${entry.client_first_name} ${entry.client_last_name}`,
+      sandata_required: entry.sandata_required ?? null });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -306,12 +326,14 @@ router.post('/clock-in', verifyToken, async (req, res) => {
                          ELSE clock_in_location || jsonb_build_object('source', 'later_punch', 'captured_at', start_time) END),
                   needs_approval = true, approval_reason = $3, updated_at = NOW()
             WHERE id = $4 AND end_time IS NULL
-            RETURNING id, client_id, start_time`,
+            RETURNING *`,
           [punchAtIso, loc, flag.approvalReason, later[0].id]
         );
         if (merged.rows[0]) {
           await auditLog(req.user.id, 'UPDATE', 'time_entries', later[0].id, { start_time: later[0].start_time }, { start_time: punchAtIso, reason: 'offline_punch_merged' });
-          return res.status(200).json({ ...merged.rows[0], merged: true });
+          const m = merged.rows[0];
+          return res.status(200).json({ id: m.id, client_id: m.client_id, start_time: m.start_time,
+            sandata_required: m.sandata_required ?? null, merged: true });
         }
       }
       // Anything else overlaps recorded time in a way the server shouldn't guess
@@ -354,9 +376,11 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     );
     if (dupe) {
       const existing = await db.query(
-        `SELECT id, client_id, start_time FROM time_entries WHERE id = $1`, [dupe.id]
+        `SELECT * FROM time_entries WHERE id = $1`, [dupe.id]
       );
-      return res.status(200).json({ ...existing.rows[0], duplicate: true });
+      const ex = existing.rows[0] || {};
+      return res.status(200).json({ id: ex.id, client_id: ex.client_id, start_time: ex.start_time,
+        sandata_required: ex.sandata_required ?? null, duplicate: true });
     }
 
     for (const openEntry of openEntries.rows) {
@@ -503,17 +527,20 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       // exactly like the 30-second duplicate path above.
       if (insertErr.code === '23505') {
         const winner = await db.query(
-          `SELECT id, client_id, start_time FROM time_entries
+          `SELECT * FROM time_entries
             WHERE caregiver_id = $1 AND end_time IS NULL`,
           [req.user.id]
         );
         if (winner.rows[0]) {
-          return res.status(200).json({ ...winner.rows[0], duplicate: true });
+          const w = winner.rows[0];
+          return res.status(200).json({ id: w.id, client_id: w.client_id, start_time: w.start_time,
+            sandata_required: w.sandata_required ?? null, duplicate: true });
         }
       }
       throw insertErr;
     }
     await auditLog(req.user.id, 'CREATE', 'time_entries', entryId, null, result.rows[0]);
+    const sandataRequired = await recordSandataDecision(entryId, clientId, punchAtIso);
     try {
       const { sendPushToUser } = require('./pushNotificationRoutes');
       let clientName = null;
@@ -521,7 +548,8 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       const startTimeFormatted = new Date(result.rows[0].start_time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       sendPushToUser(req.user.id, { title: '✅ Clocked In', body: `You are clocked in${clientName ? ` for ${clientName}` : ''}. Started at ${startTimeFormatted}.`, icon: '/icon-192.png', tag: `clock-in-${entryId}`, data: { type: 'clock_in', timeEntryId: entryId } }).catch(e => console.error('[Push clock-in]', e.message));
     } catch(e) { console.error('[Push setup]', e.message); }
-    res.status(201).json({ id: result.rows[0].id, client_id: result.rows[0].client_id, start_time: result.rows[0].start_time });
+    res.status(201).json({ id: result.rows[0].id, client_id: result.rows[0].client_id, start_time: result.rows[0].start_time,
+      sandata_required: sandataRequired });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

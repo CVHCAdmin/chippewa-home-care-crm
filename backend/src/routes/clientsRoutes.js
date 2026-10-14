@@ -4,6 +4,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
+const { VISIT_MINUTES_SQL } = require('../helpers/evvWeekly');
 
 // POST /api/clients
 router.post('/', verifyToken, async (req, res) => {
@@ -75,6 +76,77 @@ router.get('/', verifyToken, async (req, res) => {
       [isAdmin, req.user.id]
     );
     res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// GET /api/clients/evv-week[?clientId=]
+// This Sun–Sat week's Sandata (S5125 attendant care) minutes per My Choice client in
+// Sandata: the weekly allowance, minutes already sent to Sandata, and what's left. Once
+// `remaining_minutes` hits 0 the caregiver app stops sending caregivers to Sandata for
+// that client until Sunday. Same counting rule as helpers/evvWeekly.evvWeekUsage.
+// Must stay above GET '/:id'.
+router.get('/evv-week', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const clientId = req.query.clientId || null;
+    const r = await db.query(
+      `WITH d AS (SELECT (NOW() AT TIME ZONE 'America/Chicago')::date AS day),
+            w AS (SELECT day - EXTRACT(DOW FROM day)::int AS ws FROM d),
+            used AS (
+              SELECT te.client_id,
+                     SUM(${VISIT_MINUTES_SQL('NOW()')}) AS minutes,
+                     COUNT(*) AS visits
+                FROM time_entries te, w
+               WHERE (te.start_time AT TIME ZONE 'America/Chicago')::date BETWEEN w.ws AND w.ws + 6
+                 AND COALESCE(te.sandata_required, true) = true
+               GROUP BY te.client_id)
+       SELECT c.id AS client_id, c.first_name, c.last_name, c.evv_weekly_units,
+              to_char(w.ws, 'YYYY-MM-DD') AS week_start, to_char(w.ws + 6, 'YYYY-MM-DD') AS week_end,
+              ROUND(COALESCE(used.minutes, 0))::int AS used_minutes,
+              COALESCE(used.visits, 0)::int AS sandata_visits
+         FROM clients c
+         CROSS JOIN w
+         LEFT JOIN referral_sources rs ON rs.id = c.referral_source_id
+         LEFT JOIN used ON used.client_id = c.id
+        WHERE c.is_active = true AND COALESCE(c.is_private_pay, false) = false
+          AND rs.payer_type = 'mco_family_care'
+          AND TRIM(COALESCE(c.medicaid_id, '')) ~ '^[0-9]{10,12}$'
+          AND ($1::uuid IS NULL OR c.id = $1::uuid)
+        ORDER BY c.last_name, c.first_name`,
+      [clientId]
+    );
+    res.json(r.rows.map(row => {
+      const allowance = row.evv_weekly_units == null ? null : row.evv_weekly_units * 15;
+      return {
+        ...row,
+        allowance_minutes: allowance,
+        remaining_minutes: allowance == null ? null : Math.max(0, allowance - row.used_minutes),
+        // What the caregiver app does at the NEXT clock-in for this client.
+        next_visit_to_sandata: allowance == null ? true : row.used_minutes < allowance,
+      };
+    }));
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// PATCH /api/clients/:id/evv-units  { units: integer 0–672 | null }
+// The client's S5125 attendant-care (EVV) units per Sun–Sat week, from MIDAS.
+// null = not entered (app prompts every visit, the old behavior); 0 = no EVV hours.
+// Scoped single-column update — never the full-row client PUT.
+router.patch('/:id/evv-units', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const raw = req.body.units;
+    const units = raw === null || raw === '' || raw === undefined ? null : Number(raw);
+    if (units !== null && (!Number.isInteger(units) || units < 0 || units > 672)) {
+      return res.status(400).json({ error: 'EVV units per week must be a whole number from 0 to 672, or blank.' });
+    }
+    const before = await db.query(`SELECT evv_weekly_units FROM clients WHERE id = $1`, [req.params.id]);
+    if (!before.rows[0]) return res.status(404).json({ error: 'Client not found' });
+    const r = await db.query(
+      `UPDATE clients SET evv_weekly_units = $1, updated_at = NOW() WHERE id = $2 RETURNING id, evv_weekly_units`,
+      [units, req.params.id]
+    );
+    await auditLog(req.user.id, 'UPDATE', 'clients', req.params.id,
+      { evv_weekly_units: before.rows[0].evv_weekly_units }, { evv_weekly_units: units });
+    res.json(r.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 

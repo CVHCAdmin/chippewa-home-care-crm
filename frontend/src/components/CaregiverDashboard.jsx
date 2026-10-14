@@ -11,7 +11,7 @@ import CaregiverHelp from './caregiver/CaregiverHelp';
 import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { savePunch, newLocalId, offlineSession, flushPunches, isUnreachable, pendingPunches } from '../offlinePunches';
-import { needsSandata, hasMedicaidId, openSandata, SANDATA_AGENCY_ID, medicaidIdOf, copyText } from '../utils/sandata';
+import { needsSandata, visitNeedsSandata, evvWeekMet, hasMedicaidId, openSandata, SANDATA_AGENCY_ID, medicaidIdOf, copyText } from '../utils/sandata';
 import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { isBiweeklyOn, toYMD } from '../utils/biweekly';
@@ -817,7 +817,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             setSelectedClient(clientId);
             // Interval callback: read the live client list, not this render's copy.
             const autoCl = (clientsRef.current || []).find(c => c.id === clientId);
-            if (needsSandata(autoCl)) setSandataPrompt({ kind: 'in', clientId, clientName: data.clientName || `${autoCl.first_name || ''} ${autoCl.last_name || ''}`.trim() });
+            if (visitNeedsSandata(autoCl, clockData.sandata_required)) setSandataPrompt({ kind: 'in', clientId, clientName: data.clientName || `${autoCl.first_name || ''} ${autoCl.last_name || ''}`.trim() });
             gpsIntervalRef.current = startGPSBreadcrumbs(clockData.id);
           } else {
             // Clock-in failed — remove from triggered set so it can retry
@@ -1009,9 +1009,16 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
 
   // Medicaid / My Choice visits must also be checked in and out on Sandata Mobile
   // Connect (state EVV) until the CRM is a certified alternate EVV system.
-  const promptSandata = (kind, clientId) => {
+  // `sandataRequired` is the server's per-visit answer (weekly EVV allowance): false =
+  // this week's EVV hours for the client are already met, so this visit is homemaker
+  // time and does NOT go to Sandata. Unknown (offline) → prompt as before.
+  const promptSandata = (kind, clientId, sandataRequired) => {
     const cl = clients.find(c => c.id === clientId);
-    if (needsSandata(cl)) setSandataPrompt({ kind, clientId, clientName: `${cl.first_name || ''} ${cl.last_name || ''}`.trim() });
+    if (visitNeedsSandata(cl, sandataRequired)) {
+      setSandataPrompt({ kind, clientId, clientName: `${cl.first_name || ''} ${cl.last_name || ''}`.trim() });
+    } else if (kind === 'in' && evvWeekMet(cl, sandataRequired)) {
+      toast(`EVV hours for ${cl.first_name || 'this client'} are already done this week — no Sandata check-in needed for this visit.`, 'success');
+    }
   };
 
   const handleClockIn = async ({ skipGps = false } = {}) => {
@@ -1088,7 +1095,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       const clockInData = await res.json();
       hapticNotify('success'); // success haptic
       setActiveSession(clockInData);
-      promptSandata('in', selectedClient);
+      promptSandata('in', selectedClient, clockInData.sandata_required);
       gpsIntervalRef.current = startGPSBreadcrumbs(clockInData.id);
       if (!lat) {
         toast('Clocked in (location unavailable)', 'warning');
@@ -1148,7 +1155,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     const outClientId = activeSession.client_id || selectedClient;
     // Reset the screen after a clock-out that was saved on the phone.
     const finishSavedOffline = () => {
-      promptSandata('out', outClientId);
+      promptSandata('out', outClientId, activeSession.sandata_required);
       hapticNotify('warning');
       toast(`No signal — clock-out saved on your phone at ${new Date(tapAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. It will send by itself when you have signal.${pendingPhotos.length ? ' Photos could not be saved offline.' : ''}`, 'warning');
       clockOutFixRef.current = null;
@@ -1227,6 +1234,10 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         throw new Error(data.error || 'Failed');
       }
 
+      // The visit's Sandata decision was made at clock-in; the clock-out prompt follows it.
+      const outData = await res.json().catch(() => null);
+      const outSandataRequired = outData && outData.sandata_required != null ? outData.sandata_required : activeSession.sandata_required;
+
       // Clock-out succeeded — chase a missing location in the background
       if (!lat && activeSession?.id && String(activeSession.id).indexOf('offline-') !== 0) {
         startLateFixRetries(activeSession.id, 'clock_out');
@@ -1251,7 +1262,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       }
 
       hapticNotify('success');
-      promptSandata('out', outClientId);
+      promptSandata('out', outClientId, outSandataRequired);
       clockOutFixRef.current = null; // used (or stale) — never carry into a later clock-out
       setActiveSession(null);
       setSelectedClient('');
@@ -1918,14 +1929,19 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
             >
               🛑 Clock Out
             </button>
-            {needsSandata(clients.find(c => c.id === activeSession.client_id)) && (
+            {evvWeekMet(clients.find(c => c.id === activeSession.client_id), activeSession.sandata_required) && (
+              <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.75rem', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 10, color: '#065F46', fontSize: '0.85rem', fontWeight: 600 }}>
+                ✅ This week's EVV hours are done — no Sandata for this visit.
+              </div>
+            )}
+            {visitNeedsSandata(clients.find(c => c.id === activeSession.client_id), activeSession.sandata_required) && (
               <button type="button" onClick={openSandata}
                 style={{ width: '100%', marginTop: '0.75rem', padding: '0.75rem', background: '#fff', color: '#1D4ED8', border: '2px solid #1D4ED8', borderRadius: '12px', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer' }}>
                 📲 Open the Sandata app (check in / check out)
                 <div style={{ fontSize: '0.72rem', fontWeight: 500, color: '#475569', marginTop: 2 }}>Not installed yet? This takes you to the store to download it.</div>
               </button>
             )}
-            {needsSandata(clients.find(c => c.id === activeSession.client_id)) && (
+            {visitNeedsSandata(clients.find(c => c.id === activeSession.client_id), activeSession.sandata_required) && (
               <>
                 {sandataIdBox(activeSession.client_id)}
                 <button type="button" onClick={() => setShowSandataHelp(v => !v)}
