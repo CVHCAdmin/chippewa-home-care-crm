@@ -477,6 +477,35 @@ const sendOnboardingPacketInvite = async ({ to, firstName, packetUrl, expiresAt 
   });
 };
 
+// ── Document to sign (BID form / policy acknowledgement) ─────────────
+// throwOnError so the office sees why an email didn't go (and can copy the link instead).
+const sendSignRequest = async ({ to, firstName, title, kind, url, expiresAt }) => {
+  const expiresStr = expiresAt
+    ? new Date(expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : '30 days from now';
+  const what = kind === 'bid'
+    ? 'the Wisconsin Background Information Disclosure (BID) form. The state requires it for everyone who works with our clients. It takes about 5 minutes.'
+    : 'a company document. Please read it and sign to confirm you received it.';
+  return sendEmail({
+    to,
+    subject: `Please sign: ${title}`,
+    html: wrap(`
+      <h3 style="color: #1D4ED8;">Hi ${firstName || 'there'},</h3>
+      <p>${AGENCY_NAME} needs you to complete and sign ${what}</p>
+      <p><strong>${title}</strong></p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${url}" style="background: #1D4ED8; color: #fff; padding: 14px 40px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 1.05rem; display: inline-block;">
+          Open and Sign
+        </a>
+      </div>
+      <p>You can do it on your phone. You'll sign with your finger at the end. No login needed —
+         this link is just for you, so please don't forward it.</p>
+      <p style="color: #888; font-size: 0.85rem;">This link works until <strong>${expiresStr}</strong>.
+         Questions? Call the office.</p>
+    `),
+  }, { throwOnError: true });
+};
+
 // ── Background Check Status (admin notification) ──────────────────────
 const sendAdminBgcResult = async ({ to, caregiverName, status, summary, matches }) => {
   const matchList = (matches || []).length === 0
@@ -526,6 +555,7 @@ module.exports = {
   sendInvoiceReminder,
   sendCaregiverWelcome,
   sendOnboardingPacketInvite,
+  sendSignRequest,
   sendAdminBgcResult,
   isConfigured,
 };

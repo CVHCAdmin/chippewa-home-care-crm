@@ -206,6 +206,9 @@ app.use('/api/adl',               verifyToken, require('./routes/adlRoutes'));
 app.use('/api/performance-reviews', verifyToken, require('./routes/performanceReviewsRoutes'));
 app.use('/api/background-checks', verifyToken, require('./routes/backgroundChecksRoutes'));
 app.use('/api/job-postings',      verifyToken, require('./routes/jobPostingsRoutes'));
+// E-signature requests: /public/* is the signer's private emailed link (token, rate-limited);
+// everything else is admin — the router applies verifyToken + requireAdmin itself.
+app.use('/api/sign-requests', require('./routes/signRequestsRoutes'));
 app.use('/api/onboarding-packets', (req, res, next) => {
   // Public tokenized routes bypass auth; everything else is admin.
   if (req.path.startsWith('/public')) return next();

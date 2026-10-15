@@ -17,6 +17,7 @@ const ClientsManagement = React.lazy(() => import('./admin/ClientsManagement'));
 const CaregiverManagement = React.lazy(() => import('./admin/CaregiverManagement'));
 const BillingDashboard = React.lazy(() => import('./admin/BillingDashboard'));
 const EvvClaimWeek = React.lazy(() => import('./admin/EvvClaimWeek'));
+const ESignatures = React.lazy(() => import('./admin/ESignatures'));
 const ClientOnboarding = React.lazy(() => import('./admin/ClientOnboarding'));
 const PerformanceRatings = React.lazy(() => import('./admin/PerformanceRatings'));
 const ExpenseManagement = React.lazy(() => import('./admin/ExpenseManagement'));
@@ -137,6 +138,7 @@ const NAV_SECTIONS = [
     items: [
       { id: 'compliance', label: 'Compliance', icon: '🛡️' },
       { id: 'background-checks', label: 'Background Checks', icon: '🔍' },
+      { id: 'e-signatures', label: 'E-Signatures (BID, policies)', icon: '✍️' },
       { id: 'documents', label: 'Documents', icon: '📁' },
       { id: 'audit-logs', label: 'Audit Logs', icon: '📜' },
       { id: 'login-activity', label: 'Login Activity', icon: '🔑' },
@@ -316,6 +318,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'documents': return <DocumentsManagement token={token} />;
       case 'adl': return <ADLTracking token={token} />;
       case 'background-checks': return <BackgroundChecks token={token} />;
+      case 'e-signatures': return <ESignatures token={token} />;
       case 'sms': return <SMSManagement token={token} />;
       case 'family-portal': return <FamilyPortalAdmin token={token} />;
       case 'alerts': return <AlertsManagement token={token} />;

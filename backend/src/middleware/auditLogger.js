@@ -44,7 +44,10 @@ const redactSensitiveValues = (value) => {
       const key = k.toLowerCase();
       const isSecret =
         key.includes('password') || key.includes('secret') ||
-        key === 'ssn' || key === 'token' || key.includes('signature');
+        key === 'ssn' || key === 'token' || key.includes('signature') ||
+        // BID form answers (DOB, criminal-history disclosures) and uploaded files
+        // (a whole PDF as a data URI) don't belong in the audit trail.
+        key === 'answers' || key === 'dob' || key.includes('datauri') || key.includes('base64');
       out[k] = isSecret && v != null ? '[REDACTED]' : redactSensitiveValues(v);
     }
     return out;
