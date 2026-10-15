@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { verifyToken, requireAdmin, auditLog } = require('../middleware/shared');
 const { VISIT_MINUTES_SQL } = require('../helpers/evvWeekly');
+const { geocodeClientInBackground } = require('../helpers/geocode');
 
 // POST /api/clients
 router.post('/', verifyToken, async (req, res) => {
@@ -33,6 +34,7 @@ router.post('/', verifyToken, async (req, res) => {
     );
     await db.query(`INSERT INTO client_onboarding (client_id) VALUES ($1)`, [clientId]);
     await auditLog(req.user.id, 'CREATE', 'clients', clientId, null, result.rows[0]);
+    if (address) geocodeClientInBackground(clientId); // save map coordinates for GPS checks
     res.status(201).json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -173,6 +175,7 @@ router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
       referralSourceId, careTypeId, isPrivatePay, privatePayRate, privatePayRateType, billingNotes,
       weeklyAuthorizedUnits, serviceDaysPerWeek, serviceAllowedDays,
       medicaidId, mcoMemberId } = req.body;
+    const before = await db.query(`SELECT address, city, state, zip, latitude FROM clients WHERE id = $1`, [req.params.id]);
     const result = await db.query(
       `UPDATE clients SET
         first_name=COALESCE($1,first_name), last_name=COALESCE($2,last_name), date_of_birth=$3,
@@ -202,6 +205,10 @@ router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
     await auditLog(req.user.id, 'UPDATE', 'clients', req.params.id, null, result.rows[0]);
+    // Address changed (or never geocoded) → refresh the map coordinates the GPS checks use.
+    const b = before.rows[0] || {}, a = result.rows[0];
+    const addrKey = (r) => ['address', 'city', 'state', 'zip'].map(k => String(r[k] || '').trim().toLowerCase()).join('|');
+    if (a.address && (addrKey(a) !== addrKey(b) || a.latitude == null)) geocodeClientInBackground(req.params.id);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });

@@ -209,6 +209,8 @@ app.use('/api/job-postings',      verifyToken, require('./routes/jobPostingsRout
 // E-signature requests: /public/* is the signer's private emailed link (token, rate-limited);
 // everything else is admin — the router applies verifyToken + requireAdmin itself.
 app.use('/api/sign-requests', require('./routes/signRequestsRoutes'));
+// Caregiver time corrections (verifyToken / requireAdmin applied per route inside).
+app.use('/api/time-corrections', require('./routes/timeCorrectionsRoutes'));
 app.use('/api/onboarding-packets', (req, res, next) => {
   // Public tokenized routes bypass auth; everything else is admin.
   if (req.path.startsWith('/public')) return next();

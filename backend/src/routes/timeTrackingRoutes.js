@@ -25,29 +25,10 @@ async function recordSandataDecision(entryId, clientId, atIso) {
   }
 }
 
-// A single shift longer than this is almost certainly a missed clock-out, not
-// real worked time. Past this ceiling we refuse to silently auto-bill the full
-// duration: the entry is flagged for admin review and its billable time is
-// capped (to the scheduled allotment when known, otherwise to the ceiling).
-// This matters most for private-pay clients, which otherwise bill actual
-// duration with no cap and no approval gate — the failure mode that let one
-// caregiver's forgotten clock-outs accrue 200+ phantom billable hours.
-const MAX_SHIFT_MINUTES = 16 * 60; // 16h
-
-// Apply the excessive-duration guard to a computed billing decision. Mutates
-// nothing; returns the (possibly adjusted) values. `base` is whatever the
-// payer-specific rules already decided.
-function applyExcessiveDurationGuard({ durationMinutes, allottedMinutes, billableMinutes, needsApproval, approvalReason }) {
-  if (durationMinutes <= MAX_SHIFT_MINUTES) {
-    return { billableMinutes, needsApproval, approvalReason };
-  }
-  const cap = allottedMinutes != null ? allottedMinutes : MAX_SHIFT_MINUTES;
-  return {
-    billableMinutes: Math.min(billableMinutes, cap),
-    needsApproval: true,
-    approvalReason: approvalReason ? `${approvalReason},excessive_duration` : 'excessive_duration',
-  };
-}
+// The billing rule for a finished visit (zero-duration, private pay, unscheduled,
+// scheduled + 7-min variance, 16h guard) lives in helpers/visitBilling so approved time
+// corrections price a visit exactly like a clock-out.
+const { MAX_SHIFT_MINUTES, applyExcessiveDurationGuard, computeVisitBilling } = require('../helpers/visitBilling');
 
 // OFFLINE PUNCHES — when a tap can't reach the server (no signal at the client's
 // house), the app saves it on the phone with the tap time and replays it later with
@@ -564,7 +545,6 @@ router.post('/clock-in', verifyToken, async (req, res) => {
 //       b) |actual - allotted| > 7 minutes (Medicaid grace window)
 router.post('/:id/clock-out', verifyToken, async (req, res) => {
   try {
-    const VARIANCE_GRACE_MINUTES = 7;
     const { latitude, longitude, notes } = req.body;
     const timeEntry = await db.query(
       `SELECT te.*,
@@ -609,49 +589,13 @@ router.post('/:id/clock-out', verifyToken, async (req, res) => {
     if (endAt && endAt < new Date(entry.start_time)) endAt = new Date(entry.start_time);
 
     const durationSeconds = ((endAt || new Date()) - new Date(entry.start_time)) / 1000;
-    const durationMinutes = Math.round(durationSeconds / 60);
     const allottedMinutes = entry.allotted_minutes;
     const isPrivatePay = entry.is_private_pay === true || entry.referral_payer_type === 'private_pay';
-
-    let billableMinutes;
-    let needsApproval = false;
-    let approvalReason = null;
-
-    // Zero-duration guard: clock-in then immediately clock-out (< 60s) is
-    // almost always an accidental double-tap or wrong-client tap. Mark for
-    // admin review and pay 0 until reviewed — never silently complete a
-    // 0-hour shift as if it counted.
-    if (durationSeconds < 60) {
-      billableMinutes = 0;
-      needsApproval = true;
-      approvalReason = 'zero_duration';
-    } else if (isPrivatePay) {
-      // Private pay: caregiver is paid for actual time, no schedule constraint
-      billableMinutes = durationMinutes;
-    } else if (allottedMinutes == null) {
-      // Non-private, no schedule linked: park billable at actual duration but
-      // flag for admin review — payroll should not auto-process until approved
-      billableMinutes = durationMinutes;
-      needsApproval = true;
-      approvalReason = 'unscheduled';
-    } else {
-      // Non-private with a schedule: pay the scheduled amount, no more, no less
-      billableMinutes = allottedMinutes;
-      const variance = Math.abs(durationMinutes - allottedMinutes);
-      if (variance > VARIANCE_GRACE_MINUTES) {
-        needsApproval = true;
-        approvalReason = 'time_variance';
-      }
-    }
-
-    // Backstop: an implausibly long shift (missed clock-out) must not silently
-    // auto-bill its full duration — flag it and cap the billable time.
-    ({ billableMinutes, needsApproval, approvalReason } = applyExcessiveDurationGuard({
-      durationMinutes, allottedMinutes, billableMinutes, needsApproval, approvalReason,
-    }));
+    // Shared rule (helpers/visitBilling): zero-duration → 0; private pay → actual;
+    // unscheduled → actual + flag; scheduled → allotted (+ flag past 7 min); 16h guard.
+    let { durationMinutes, billableMinutes, needsApproval, approvalReason, discrepancyMinutes } =
+      computeVisitBilling({ durationSeconds, allottedMinutes, isPrivatePay });
     ({ needsApproval, approvalReason } = withOfflineFlag({ needsApproval, approvalReason }, !!endAt || hasOfflineFlag(entry.approval_reason)));
-
-    const discrepancyMinutes = allottedMinutes != null ? durationMinutes - allottedMinutes : null;
 
     const outLoc = latitude && longitude
       ? JSON.stringify(endAt ? { lat: latitude, lng: longitude, source: 'offline', captured_at: endAt.toISOString() } : { lat: latitude, lng: longitude })

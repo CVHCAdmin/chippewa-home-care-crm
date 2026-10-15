@@ -11,6 +11,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import CareTaskChecklist from '../CareTaskChecklist';
 import VisitGpsMap from './VisitGpsMap';
+import TimeCorrectionsAdmin from './TimeCorrectionsAdmin';
 
 const fmtHrs = (h) => (h == null || h === '' ? '—' : `${parseFloat(h).toFixed(2)}h`);
 const fmt$ = (n) => (n == null || n === '' ? '—' : `$${parseFloat(n).toFixed(2)}`);
@@ -25,7 +26,37 @@ const REASON_LABEL = {
   time_variance: 'Clock time outside 7-min grace',
 };
 
+// Two tabs: entries the time system flagged, and corrections caregivers sent in.
 export default function ShiftApprovals({ token }) {
+  const [tab, setTab] = useState('flagged');
+  const [pendingCorrections, setPendingCorrections] = useState(0);
+  useEffect(() => { (async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/time-corrections?status=pending`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setPendingCorrections((await r.json()).length);
+    } catch { /* badge only */ }
+  })(); }, [token, tab]);
+  const tabBtn = (id, label) => (
+    <button onClick={() => setTab(id)} style={{ padding: '0.5rem 1rem', border: 'none', borderBottom: `3px solid ${tab === id ? '#3B82F6' : 'transparent'}`, background: 'none', cursor: 'pointer', fontWeight: tab === id ? 700 : 500, color: tab === id ? '#1D4ED8' : '#6B7280' }}>{label}</button>
+  );
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid #E5E7EB', padding: '0 1rem', maxWidth: '1400px', margin: '0 auto' }}>
+        {tabBtn('flagged', 'Flagged shifts')}
+        {tabBtn('corrections', `Time corrections${pendingCorrections ? ` (${pendingCorrections})` : ''}`)}
+      </div>
+      {tab === 'flagged' ? <FlaggedShifts token={token} /> : (
+        <div style={{ padding: '1rem', maxWidth: '1400px', margin: '0 auto' }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0 0 0.25rem' }}>🕐 Time Corrections</h1>
+          <p style={{ color: '#6B7280', fontSize: '0.88rem', margin: '0 0 1rem' }}>Caregivers' requests to fix a visit's times or add a visit they never clocked into (this week and last week). Approving changes the visit; billing and payroll follow the normal rules.</p>
+          <TimeCorrectionsAdmin token={token} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FlaggedShifts({ token }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);

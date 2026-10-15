@@ -20,6 +20,7 @@ import { CLIENT_UNAVAILABLE_REASONS } from '../utils/cancelReasons';
 import CareTaskChecklist from './CareTaskChecklist';
 import OfflineBanner from './OfflineBanner';
 import SignaturePad from './SignaturePad';
+import TimeCorrections from './caregiver/TimeCorrections';
 
 // fetch that always settles — aborts after `ms` so a stalled request (TCP open
 // but no response, common on flaky mobile data / captive WiFi) can never leave a
@@ -2422,6 +2423,8 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   };
 
   const renderHistoryPage = () => (
+    <>
+    <TimeCorrections token={token} clients={clients} />
     <div className="card">
       <div className="card-title">Recent Visits</div>
       {recentVisits.length === 0 ? <p className="text-muted text-center">None</p> : (
@@ -2441,6 +2444,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
         </div>
       )}
     </div>
+    </>
   );
 
   const renderClientsPage = () => {
