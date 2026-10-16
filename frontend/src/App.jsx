@@ -12,6 +12,7 @@ import FamilyPortalLogin from './components/portal/FamilyPortalLogin';
 import FamilyPortal from './components/portal/FamilyPortal';
 import OnboardingPacketPage from './components/OnboardingPacketPage';
 import SignRequestPage from './components/SignRequestPage';
+import SurveyPage from './components/SurveyPage';
 import { ToastContainer, toast } from './components/Toast';
 import { ConfirmModal } from './components/ConfirmModal';
 import { API_BASE_URL, setSessionExpiredCallback } from './config'; // also installs global 401 fetch interceptor
@@ -37,6 +38,8 @@ const App = () => {
         <Route path="/onboarding/:token" element={<OnboardingPacketPage />} />
         {/* Emailed e-signature link (BID form / policy acknowledgement) — no login */}
         <Route path="/sign/:token" element={<SignRequestPage />} />
+        {/* Emailed anonymous staff survey link — no login */}
+        <Route path="/survey/:token" element={<SurveyPage />} />
 
         {/* Client portal */}
         <Route path="/portal/*"          element={<PortalApp />} />

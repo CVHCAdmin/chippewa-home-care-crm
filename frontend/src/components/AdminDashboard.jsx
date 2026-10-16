@@ -18,6 +18,7 @@ const CaregiverManagement = React.lazy(() => import('./admin/CaregiverManagement
 const BillingDashboard = React.lazy(() => import('./admin/BillingDashboard'));
 const EvvClaimWeek = React.lazy(() => import('./admin/EvvClaimWeek'));
 const ESignatures = React.lazy(() => import('./admin/ESignatures'));
+const StaffSurveys = React.lazy(() => import('./admin/StaffSurveys'));
 const ClientOnboarding = React.lazy(() => import('./admin/ClientOnboarding'));
 const PerformanceRatings = React.lazy(() => import('./admin/PerformanceRatings'));
 const ExpenseManagement = React.lazy(() => import('./admin/ExpenseManagement'));
@@ -114,6 +115,7 @@ const NAV_SECTIONS = [
       { id: 'applications', label: 'Job Applications', icon: '📝' },
       { id: 'onboarding-packets', label: 'Onboarding Queue', icon: '📬' },
       { id: 'time-off', label: 'Time Off Requests', icon: '🏖️' },
+      { id: 'staff-survey', label: 'Staff Survey', icon: '📝' },
     ]
   },
   {
@@ -328,6 +330,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
       case 'form-builder': return <FormBuilder token={token} />;
       case 'revenue-forecast': return <RevenueForecast token={token} />;
       case 'time-off': return <TimeOffManagement token={token} />;
+      case 'staff-survey': return <StaffSurveys token={token} />;
       default: return <DashboardOverview summary={summary} token={token} onNavigate={handlePageClick} />;
     }
   };

@@ -211,6 +211,8 @@ app.use('/api/job-postings',      verifyToken, require('./routes/jobPostingsRout
 app.use('/api/sign-requests', require('./routes/signRequestsRoutes'));
 // Caregiver time corrections (verifyToken / requireAdmin applied per route inside).
 app.use('/api/time-corrections', require('./routes/timeCorrectionsRoutes'));
+// Anonymous staff surveys: /public/* = the respondent's emailed link; the rest is admin.
+app.use('/api/surveys', require('./routes/surveysRoutes'));
 app.use('/api/onboarding-packets', (req, res, next) => {
   // Public tokenized routes bypass auth; everything else is admin.
   if (req.path.startsWith('/public')) return next();

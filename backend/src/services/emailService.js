@@ -506,6 +506,27 @@ const sendSignRequest = async ({ to, firstName, title, kind, url, expiresAt }) =
   }, { throwOnError: true });
 };
 
+// ── Anonymous staff survey ────────────────────────────────────────────
+const sendSurveyInvite = async ({ to, firstName, title, url, isReminder }) => {
+  return sendEmail({
+    to,
+    subject: isReminder ? `Reminder: ${title}` : title,
+    html: wrap(`
+      <h3 style="color: #1D4ED8;">Hi ${firstName || 'there'},</h3>
+      <p>${isReminder ? 'A quick reminder — we would really like to hear from you.' : `We want to know how we are doing as owners, and what we can do better.`}</p>
+      <p><strong>Your answers are anonymous.</strong> They are stored separately from your name, and nobody —
+         including the owners — can see who said what. There is an optional box at the end if you
+         <em>want</em> us to follow up with you.</p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${url}" style="background: #1D4ED8; color: #fff; padding: 14px 40px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 1.05rem; display: inline-block;">
+          Take the 5-minute survey
+        </a>
+      </div>
+      <p style="color: #888; font-size: 0.85rem;">This link is just for you, so each person answers once. Please don't forward it.</p>
+    `),
+  }, { throwOnError: true });
+};
+
 // ── Background Check Status (admin notification) ──────────────────────
 const sendAdminBgcResult = async ({ to, caregiverName, status, summary, matches }) => {
   const matchList = (matches || []).length === 0
@@ -556,6 +577,7 @@ module.exports = {
   sendCaregiverWelcome,
   sendOnboardingPacketInvite,
   sendSignRequest,
+  sendSurveyInvite,
   sendAdminBgcResult,
   isConfigured,
 };
