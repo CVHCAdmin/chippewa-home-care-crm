@@ -238,6 +238,16 @@ workflows:
           BUILD_NUMBER=$((LATEST + 1))
           echo "Using build number $BUILD_NUMBER"
           agvtool new-version -all $BUILD_NUMBER
+          # The project is regenerated every build, so its version would always be
+          # the template's 1.0 — and the App Store needs a higher version for each
+          # release. Use Android's versionName so both stores ship the same number.
+          MARKETING_VERSION=$(sed -n 's/^ *versionName "\(.*\)".*/\1/p' ../../android/app/build.gradle | head -1)
+          if [ -z "$MARKETING_VERSION" ]; then
+            echo "ERROR: could not read versionName from android/app/build.gradle" >&2
+            exit 1
+          fi
+          echo "Using version $MARKETING_VERSION"
+          agvtool new-marketing-version "$MARKETING_VERSION"
       - name: Build iOS app
         script: |
           xcode-project build-ipa \
