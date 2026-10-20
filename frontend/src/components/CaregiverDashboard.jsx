@@ -12,7 +12,7 @@ import CaregiverMessages from './caregiver/CaregiverMessages';
 import PaydayVerificationModal from './caregiver/PaydayVerificationModal';
 import { savePunch, newLocalId, offlineSession, flushPunches, isUnreachable, pendingPunches } from '../offlinePunches';
 import { needsSandata, visitNeedsSandata, evvWeekMet, hasMedicaidId, openSandata, SANDATA_AGENCY_ID, medicaidIdOf, copyText } from '../utils/sandata';
-import { useGeolocation, useHaptics, useOfflineSync, useBackgroundGeolocation, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
+import { useGeolocation, useHaptics, useOfflineSync, getCurrentPositionOnce, warmLocation, getWarmFix, getLocationPermissionState, isNative, platform } from '../hooks/useNative';
 import { formatDate as fmtCalDate, formatDateTZ } from '../utils/datetime';
 import { isBiweeklyOn, toYMD } from '../utils/biweekly';
 import { setShiftBusy } from '../shiftGuard';
@@ -327,7 +327,6 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   useEffect(() => { if (selectedClient) warmLocation(); }, [selectedClient]);
   const { impact, notification: hapticNotify } = useHaptics();
   const { online, queueCount } = useOfflineSync();
-  const { start: startBgGeo } = useBackgroundGeolocation();
 
   // Self-service state
   const [openShifts, setOpenShifts] = useState([]);
@@ -359,30 +358,14 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
   const [changeRequests, setChangeRequests] = useState([]);
   const [crResolving, setCrResolving]       = useState(null);
 
-  // Ref to hold a setter so background geo can push updates into geofence check
-  const bgLocationRef = React.useRef(null);
-
   useEffect(() => {
     loadData();
     // GPS tracking handled by useGeolocation hook (watch: true)
     subscribeToPush(token);
-    // Start background geolocation on Android so geofence works when screen is off
-    startBgGeo({
-      notificationTitle: 'CVHC HomeCare',
-      notificationText: 'Monitoring location for auto clock-in',
-      onLocation: (loc) => {
-        // Background location updates trigger a geofence check using latest refs
-        if (loc && (loc.latitude || loc.lat)) {
-          bgLocationRef.current = loc;
-          runGeofenceCheck(
-            loc,
-            activeSessionRef.current,
-            clientsRef.current,
-            schedulesRef.current
-          );
-        }
-      }
-    });
+    // No automatic clock-in/out (removed Oct 2026, owner decision): caregivers
+    // clock in and out themselves, nothing else does. Proximity auto clock-in
+    // re-opened a visit one second after the caregiver clocked out while still
+    // at the house. The server also refuses autoClockIn from older app builds.
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -724,168 +707,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     return interval;
   };
   const gpsIntervalRef = React.useRef(null);
-  const geofenceIntervalRef = React.useRef(null);
-  const geofenceTriggeredRef = React.useRef(new Set()); // track which clients we've already auto-clocked for
-  const geofenceOutsideCountRef = React.useRef(new Map()); // debounce: consecutive outside-geofence checks per client
 
   // Refs to hold latest state for use inside intervals (avoids stale closures)
-  const locationRef = React.useRef(null);
   const activeSessionRef = React.useRef(null);
   const clientsRef = React.useRef([]);
-  const schedulesRef = React.useRef([]);
-  useEffect(() => { locationRef.current = location; }, [location]);
   useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
   useEffect(() => { clientsRef.current = clients; }, [clients]);
-  useEffect(() => { schedulesRef.current = schedules; }, [schedules]);
-
-
-  // ── GEOFENCE AUTO CLOCK-IN/OUT ────────────────────────────────────────────
-  const runGeofenceCheck = async (currentLocation, currentSession, currentClients, currentSchedules) => {
-    if (!currentLocation?.lat && !currentLocation?.latitude) return;
-    const lat = currentLocation.lat || currentLocation.latitude;
-    const lng = currentLocation.lng || currentLocation.longitude;
-
-    const now = new Date();
-    const todayDay = new Date().getDay();
-
-    // Prefer clients scheduled for today; fall back to ALL assigned clients
-    // so geofence works even when no schedule entry exists yet
-    const todayDate = new Date(now); todayDate.setHours(0,0,0,0);
-    const scheduledToday = (currentSchedules || [])
-      .filter(s => {
-        if (s.date) return new Date(s.date).toDateString() === now.toDateString() && !isSuspendedOn(s, toYMD(now));
-        if (s.day_of_week === todayDay) return isScheduleActiveForDate(s, todayDate);
-        return false;
-      })
-      .map(s => s.client_id)
-      .filter(Boolean);
-
-    const allClientIds = (currentClients || []).map(c => c.id).filter(Boolean);
-    const clientsToCheck = scheduledToday.length ? scheduledToday : allClientIds;
-
-    if (!clientsToCheck.length) return;
-
-    for (const clientId of clientsToCheck) {
-      const alreadyTriggered = geofenceTriggeredRef.current.has(clientId);
-
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/route-optimizer/geofence/check`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ clientId, latitude: lat, longitude: lng })
-        });
-        if (!res.ok) continue;
-        const data = await res.json();
-
-        // AUTO CLOCK-IN: within geofence, not clocked in, not already triggered
-        if (data.withinGeofence) {
-          // Reset outside-geofence counter whenever we're inside
-          geofenceOutsideCountRef.current.delete(clientId);
-        }
-        // Proximity alone must NOT auto-clock-in: a caregiver near a client's home
-        // when they aren't scheduled (driving by, working a different job nearby,
-        // off the clock) was getting clocked in falsely. Require a real shift for
-        // THIS client to be active now (15 min before start through end_time).
-        const nowMin = now.getHours() * 60 + now.getMinutes();
-        const hasScheduledShiftNow = (currentSchedules || []).some(s => {
-          if (s.client_id !== clientId || !s.start_time) return false;
-          const onToday = s.date
-            ? (new Date(s.date).toDateString() === now.toDateString() && !isSuspendedOn(s, toYMD(now)))
-            : (s.day_of_week === todayDay && isScheduleActiveForDate(s, todayDate));
-          if (!onToday) return false;
-          const [sh, sm] = s.start_time.split(':').map(Number);
-          const startMin = sh * 60 + sm;
-          let endMin = startMin + 8 * 60; // fallback when no end_time recorded
-          if (s.end_time) {
-            const [eh, em] = s.end_time.split(':').map(Number);
-            endMin = eh * 60 + em;
-            if (endMin <= startMin) endMin += 24 * 60; // overnight shift
-          }
-          return nowMin >= startMin - 15 && nowMin <= endMin;
-        });
-        if (data.withinGeofence && data.autoClockIn && !currentSession && !alreadyTriggered && hasScheduledShiftNow) {
-          geofenceTriggeredRef.current.add(clientId);
-          // Auto clock in
-          const clockRes = await fetch(`${API_BASE_URL}/api/time-entries/clock-in`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ clientId, latitude: lat, longitude: lng, autoClockIn: true })
-          });
-          if (clockRes.ok) {
-            const clockData = await clockRes.json();
-            toast(`📍 You've arrived at ${data.clientName} — clocked in automatically`, 'success');
-            setActiveSession(clockData);
-            setSelectedClient(clientId);
-            // Interval callback: read the live client list, not this render's copy.
-            const autoCl = (clientsRef.current || []).find(c => c.id === clientId);
-            if (visitNeedsSandata(autoCl, clockData.sandata_required)) setSandataPrompt({ kind: 'in', clientId, clientName: data.clientName || `${autoCl.first_name || ''} ${autoCl.last_name || ''}`.trim() });
-            gpsIntervalRef.current = startGPSBreadcrumbs(clockData.id);
-          } else {
-            // Clock-in failed — remove from triggered set so it can retry
-            geofenceTriggeredRef.current.delete(clientId);
-          }
-          break; // only clock into one client at a time
-        }
-
-        // AUTO SCHEDULE TRANSITION removed (July 2026): it fired purely on the clock,
-        // without checking the caregiver was anywhere near the next client, so it
-        // switched the active session while the caregiver was still at the previous
-        // client — their clock-out note then landed on the wrong client's record,
-        // which the client portal shows to that client's family. The backend now
-        // refuses autoTransition clock-ins (409 auto_transition_disabled), which also
-        // covers the frozen APK. Caregivers clock out and clock in manually on arrival.
-
-        // AUTO CLOCK-OUT: was within geofence but now left, currently clocked into this client
-        // Require 3 consecutive outside-geofence checks (~90s) to prevent GPS jitter false clock-outs
-        if (!data.withinGeofence && data.autoClockOut && currentSession?.client_id === clientId && alreadyTriggered) {
-          const outsideCount = (geofenceOutsideCountRef.current.get(clientId) || 0) + 1;
-          geofenceOutsideCountRef.current.set(clientId, outsideCount);
-          if (outsideCount >= 3) {
-            // Only auto clock-out if they've been there at least 10 minutes
-            const sessionStart = new Date(currentSession.start_time);
-            const minsElapsed = (now - sessionStart) / 60000;
-            if (minsElapsed >= 10) {
-              toast(`📍 You've left ${data.clientName}'s location — clocking you out automatically`, 'success');
-              geofenceTriggeredRef.current.delete(clientId);
-              geofenceOutsideCountRef.current.delete(clientId);
-              setShowNoteModal(true); // prompt for visit note before clocking out
-            }
-          }
-        }
-      } catch(e) {
-        // Silently fail — don't interrupt the caregiver
-      }
-    }
-  };
-
-  // Start geofence polling when location is available
-  useEffect(() => {
-    if (!location) return;
-    // Run immediately on location change — use refs to avoid stale closures
-    runGeofenceCheck(
-      locationRef.current,
-      activeSessionRef.current,
-      clientsRef.current,
-      schedulesRef.current
-    );
-    // Set up interval using refs so it always reads the latest state (no stale closure)
-    if (!geofenceIntervalRef.current) {
-      geofenceIntervalRef.current = setInterval(() => {
-        runGeofenceCheck(
-          locationRef.current,
-          activeSessionRef.current,
-          clientsRef.current,
-          schedulesRef.current
-        );
-      }, 30000);
-    }
-    return () => {
-      if (geofenceIntervalRef.current) {
-        clearInterval(geofenceIntervalRef.current);
-        geofenceIntervalRef.current = null;
-      }
-    };
-  }, [location]); // only restart interval when location first becomes available
 
   const [clockingIn, setClockingIn] = useState(false);
   // What the punch is doing right now, so the button visibly moves instead of

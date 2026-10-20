@@ -1184,8 +1184,6 @@ const RouteOptimizer = ({ token }) => {
                   <label style={s.label}>Options</label>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {[
-                      { key: 'autoClockIn', label: 'Auto clock-in when entering geofence' },
-                      { key: 'autoClockOut', label: 'Auto clock-out when leaving geofence' },
                       { key: 'requireGps', label: 'Require GPS (block clock-in without location)' },
                       { key: 'notifyAdminOnOverride', label: 'Notify admin on manual override' }
                     ].map(opt => (

@@ -864,9 +864,11 @@ router.post('/geofence/check', verifyToken, async (req, res) => {
     if (!cl.latitude || !cl.longitude) return res.json({ withinGeofence: false, error: 'Client has no geocoded address' });
     const feet = distanceFeet(latitude, longitude, parseFloat(cl.latitude), parseFloat(cl.longitude));
     const withinGeofence = feet !== null && feet <= cl.radius_feet;
+    // Automatic clock-in/out is disabled (Oct 2026): always answer false so installed
+    // app builds from before the removal never attempt it.
     res.json({
       withinGeofence, distanceFeet: feet ? Math.round(feet) : null, radiusFeet: cl.radius_feet,
-      autoClockIn: cl.auto_clock_in, autoClockOut: cl.auto_clock_out,
+      autoClockIn: false, autoClockOut: false,
       clientName: `${cl.first_name} ${cl.last_name}`
     });
   } catch (error) { res.status(500).json({ error: error.message }); }

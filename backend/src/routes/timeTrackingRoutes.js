@@ -267,6 +267,18 @@ router.post('/clock-in', verifyToken, async (req, res) => {
         code: 'auto_transition_disabled',
       });
     }
+    // Automatic (geofence) clock-in is gone too (Oct 2026, owner decision): caregivers
+    // clock in and out themselves, nothing else does. It only remembered clock-ins it
+    // made itself, so a caregiver who clocked out by hand while still at the house, with
+    // the shift still running, was clocked right back in a second later (11 times
+    // 9/18–10/19, some billing the visit twice). Installed app builds from before the
+    // removal still post autoClockIn, so refuse it here, before anything is written.
+    if (req.body.autoClockIn) {
+      return res.status(409).json({
+        error: 'Automatic clock-in is disabled — tap Clock In when you arrive.',
+        code: 'auto_clock_in_disabled',
+      });
+    }
     // Offline replay: `punchAt` is the saved tap time. null = a normal live tap, and
     // every query below then falls back to NOW() exactly as before.
     const offline = parseOfflineAt(req.body.offlineAt);
@@ -330,7 +342,6 @@ router.post('/clock-in', verifyToken, async (req, res) => {
 
     const entryId = uuidv4();
     let allottedMinutes = null, linkedScheduleId = scheduleId || null;
-    let hasLiveOccurrenceNow = false;
 
     // Fetch existing open entries (if any) for this caregiver, joined with
     // client/referral-source so we can apply the correct billing rule when
@@ -469,27 +480,9 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       if (sched.rows[0]) {
         linkedScheduleId = linkedScheduleId || sched.rows[0].id;
         if (sched.rows[0].minutes != null) allottedMinutes = sched.rows[0].minutes;
-        hasLiveOccurrenceNow = sched.rows[0].active_now === true;
       }
     } catch(e) { console.error('[clock-in] schedule match failed:', e.message); }
 
-    // The caregiver app auto-clocks people in when they arrive at a client's address. It
-    // decides "is there a shift right now?" on the phone — from data that never included
-    // cancellations, because /api/schedules/:id didn't return them. So a visit the office
-    // had CANCELLED could still auto-clock a caregiver in, creating a real time entry that
-    // flowed into payroll and billing.
-    //
-    // The app ships as a frozen APK, so that check cannot be fixed on the phone. Refuse the
-    // automatic clock-in here instead, where it takes effect immediately.
-    //
-    // A MANUAL clock-in is never blocked: the caregiver may have gone to the visit anyway,
-    // and that entry correctly surfaces as unscheduled for admin review.
-    if (req.body.autoClockIn && !hasLiveOccurrenceNow) {
-      return res.status(409).json({
-        error: 'No active scheduled visit right now — automatic clock-in skipped. Clock in manually if you are on site.',
-        code: 'no_active_occurrence',
-      });
-    }
     let result;
     try {
       result = await db.query(
