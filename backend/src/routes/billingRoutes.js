@@ -1958,7 +1958,7 @@ router.post('/invoices/:id/send-reminder', auth, async (req, res) => {
 router.get('/invoice-payments', auth, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT ip.*, i.invoice_number,
+      SELECT ip.*, i.invoice_number, i.seq_number, i.client_id,
         CONCAT(c.first_name, ' ', c.last_name) as client_name
       FROM invoice_payments ip
       JOIN invoices i ON ip.invoice_id = i.id
@@ -1968,6 +1968,82 @@ router.get('/invoice-payments', auth, async (req, res) => {
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching payments:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// One client's billing statement: every invoice, every payment, adjustments,
+// and totals. invoices.amount_paid is the truth for what's been paid — Stripe
+// (card/ACH) and "mark paid" raise it without writing an invoice_payments row,
+// so any amount_paid not covered by recorded payments is returned as its own
+// line instead of silently vanishing from the history.
+router.get('/clients/:clientId/statement', auth, async (req, res) => {
+  const { clientId } = req.params;
+  try {
+    const invRes = await db.query(`
+      SELECT i.id, i.invoice_number, i.seq_number, i.billing_period_start, i.billing_period_end,
+        i.total, COALESCE(i.amount_paid, 0) AS amount_paid, COALESCE(i.amount_adjusted, 0) AS amount_adjusted,
+        i.payment_status, i.payment_due_date, i.sent_at, i.paid_at, i.stripe_payment_id, i.created_at,
+        rs.name AS referral_source_name,
+        COALESCE((SELECT SUM(amount) FROM invoice_payments WHERE invoice_id = i.id), 0) AS recorded_payments
+      FROM invoices i
+      LEFT JOIN referral_sources rs ON i.referral_source_id = rs.id
+      WHERE i.client_id = $1
+      ORDER BY i.billing_period_start DESC, i.created_at DESC
+    `, [clientId]);
+
+    const payRes = await db.query(`
+      SELECT ip.id, ip.invoice_id, ip.amount, ip.payment_date, ip.payment_method, ip.reference_number, ip.notes,
+        i.invoice_number, i.seq_number
+      FROM invoice_payments ip
+      JOIN invoices i ON ip.invoice_id = i.id
+      WHERE i.client_id = $1
+      ORDER BY ip.payment_date DESC
+    `, [clientId]);
+
+    const adjRes = await db.query(`
+      SELECT ia.id, ia.invoice_id, ia.amount, ia.adjustment_type, ia.reason, ia.notes, ia.created_at,
+        i.invoice_number, i.seq_number
+      FROM invoice_adjustments ia
+      JOIN invoices i ON ia.invoice_id = i.id
+      WHERE i.client_id = $1
+      ORDER BY ia.created_at DESC
+    `, [clientId]);
+
+    const payments = payRes.rows.map(p => ({ ...p, source: 'recorded' }));
+    for (const inv of invRes.rows) {
+      const unrecorded = +(parseFloat(inv.amount_paid) - parseFloat(inv.recorded_payments)).toFixed(2);
+      if (unrecorded > 0.005) {
+        payments.push({
+          id: `unrecorded-${inv.id}`,
+          invoice_id: inv.id,
+          amount: unrecorded,
+          payment_date: inv.paid_at,
+          payment_method: inv.stripe_payment_id ? 'online' : null,
+          reference_number: inv.stripe_payment_id || null,
+          notes: inv.stripe_payment_id ? 'Paid online (card/ACH)' : 'Marked paid — no payment details recorded',
+          invoice_number: inv.invoice_number,
+          seq_number: inv.seq_number,
+          source: inv.stripe_payment_id ? 'stripe' : 'marked_paid',
+        });
+      }
+    }
+    payments.sort((a, b) => new Date(b.payment_date || 0) - new Date(a.payment_date || 0));
+
+    const sum = (rows, f) => +rows.reduce((s, r) => s + parseFloat(r[f] || 0), 0).toFixed(2);
+    const billed = sum(invRes.rows, 'total');
+    const paid = sum(invRes.rows, 'amount_paid');
+    const adjusted = sum(invRes.rows, 'amount_adjusted');
+    const unsent = invRes.rows.filter(i => !i.sent_at).length;
+
+    res.json({
+      invoices: invRes.rows,
+      payments,
+      adjustments: adjRes.rows,
+      totals: { billed, paid, adjusted, balance: +(billed - paid - adjusted).toFixed(2), invoiceCount: invRes.rows.length, unsent },
+    });
+  } catch (error) {
+    console.error('Error fetching client statement:', error);
     res.status(500).json({ error: error.message });
   }
 });

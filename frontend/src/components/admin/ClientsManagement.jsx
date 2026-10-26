@@ -98,7 +98,7 @@ const ClientCard = ({ client, getReferralSourceName, getCareTypeName, onEdit, on
   </div>
 );
 
-const ClientsManagement = ({ token }) => {
+const ClientsManagement = ({ token, onOpenBilling }) => {
   const [clients, setClients] = useState([]);
   const [referralSources, setReferralSources] = useState([]);
   const [careTypes, setCareTypes] = useState([]);
@@ -857,7 +857,7 @@ const ClientsManagement = ({ token }) => {
         );
       })()}
 
-      <EditClientModal client={selectedClient} referralSources={referralSources} careTypes={careTypes} isOpen={showEditModal} onClose={() => { setShowEditModal(false); setSelectedClient(null); }} onSuccess={loadData} token={token} />
+      <EditClientModal client={selectedClient} referralSources={referralSources} careTypes={careTypes} isOpen={showEditModal} onClose={() => { setShowEditModal(false); setSelectedClient(null); }} onSuccess={loadData} token={token} onOpenBilling={onOpenBilling} />
 
       <ClientReportModal client={reportClient} isOpen={!!reportClient} onClose={() => setReportClient(null)} token={token} />
 

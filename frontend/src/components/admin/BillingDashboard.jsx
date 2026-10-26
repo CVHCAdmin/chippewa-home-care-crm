@@ -56,8 +56,10 @@ const visitNoteKey = (item) =>
     ? `${String(item.service_date).slice(0, 10)}|${item.start_time}|${item.caregiver_id}`
     : null;
 
-const BillingDashboard = ({ token }) => {
+const BillingDashboard = ({ token, initialClientId }) => {
   const [activeTab, setActiveTab] = useState('invoices');
+  // Narrows the Invoices / A/R Aging / Payments tabs to one client ('' = all).
+  const [clientFilterId, setClientFilterId] = useState(initialClientId || '');
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
   const [caregivers, setCaregivers] = useState([]);
@@ -927,10 +929,10 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
     }
   };
 
-  const calculateAgingBuckets = () => {
+  const calculateAgingBuckets = (list = invoices) => {
     const today = new Date();
     const buckets = { current: 0, thirtyDays: 0, sixtyDays: 0, ninetyDays: 0, over90: 0 };
-    invoices.filter(inv => inv.payment_status !== 'paid').forEach(inv => {
+    list.filter(inv => inv.payment_status !== 'paid').forEach(inv => {
       const dueDate = parseDate(inv.payment_due_date);
       const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
       const amount = parseFloat(inv.total || 0) - parseFloat(inv.amount_paid || 0);
@@ -952,6 +954,16 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
   const pendingTotal = invoices.filter(inv => inv.payment_status === 'pending').reduce((sum, inv) => sum + parseFloat(inv.total || 0), 0);
   const paidTotal = invoices.filter(inv => inv.payment_status === 'paid').reduce((sum, inv) => sum + parseFloat(inv.total || 0), 0);
   const agingBuckets = calculateAgingBuckets();
+
+  const shownInvoices = clientFilterId ? invoices.filter(inv => inv.client_id === clientFilterId) : invoices;
+  const shownPayments = clientFilterId ? payments.filter(p => p.client_id === clientFilterId) : payments;
+  const shownAgingBuckets = clientFilterId ? calculateAgingBuckets(shownInvoices) : agingBuckets;
+  const filteredClientTotals = clientFilterId ? shownInvoices.reduce((t, inv) => {
+    t.billed += parseFloat(inv.total || 0);
+    t.paid += parseFloat(inv.amount_paid || 0);
+    t.adjusted += parseFloat(inv.amount_adjusted || 0);
+    return t;
+  }, { billed: 0, paid: 0, adjusted: 0 }) : null;
 
   const formatCurrency = (amount) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
   const getClientName = (clientId) => { const c = clients.find(c => c.id === clientId); return c ? `${c.first_name} ${c.last_name}` : 'Unknown'; };
@@ -1085,6 +1097,34 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <button key={tab.id} className={`btn ${activeTab === tab.id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>
           ))}
         </div>
+        {['invoices', 'aging', 'payments'].includes(activeTab) && (
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ fontWeight: 600, margin: 0 }}>Client:</label>
+            <select value={clientFilterId} onChange={(e) => setClientFilterId(e.target.value)} style={{ maxWidth: 280 }}>
+              <option value="">All clients</option>
+              {[...clients].sort((a, b) => `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`)).map(c => (
+                <option key={c.id} value={c.id}>{c.last_name}, {c.first_name}</option>
+              ))}
+            </select>
+            {clientFilterId && (
+              <>
+                <button className="btn btn-sm btn-secondary" onClick={() => setClientFilterId('')}>Clear</button>
+                <span style={{ fontSize: '0.9rem' }}>
+                  {shownInvoices.length} invoice{shownInvoices.length === 1 ? '' : 's'} · Billed <strong>{formatCurrency(filteredClientTotals.billed)}</strong>
+                  {' '}· Paid <strong style={{ color: '#28a745' }}>{formatCurrency(filteredClientTotals.paid)}</strong>
+                  {filteredClientTotals.adjusted > 0 && <> · Adjusted <strong>{formatCurrency(filteredClientTotals.adjusted)}</strong></>}
+                  {' '}· Owes <strong style={{ color: '#dc3545' }}>{formatCurrency(filteredClientTotals.billed - filteredClientTotals.paid - filteredClientTotals.adjusted)}</strong>
+                </span>
+              </>
+            )}
+          </div>
+        )}
+        {activeTab === 'payments' && (
+          <p style={{ fontSize: '0.8rem', color: '#6B7280', margin: '0.5rem 0 0' }}>
+            Lists payments recorded here. Online (card/ACH) payments update the invoice's Paid amount but aren't listed —
+            a client's full payment history is under Clients → Edit → 📄 Invoices &amp; Payments.
+          </p>
+        )}
       </div>
 
       {/* Generate Invoice Form */}
@@ -1620,8 +1660,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
 
       {/* INVOICES TAB */}
       {activeTab === 'invoices' && (
-        invoices.length === 0 ? (
-          <div className="card card-centered"><p>No invoices yet. Generate your first invoice above.</p></div>
+        shownInvoices.length === 0 ? (
+          <div className="card card-centered"><p>{clientFilterId ? 'No invoices for this client yet.' : 'No invoices yet. Generate your first invoice above.'}</p></div>
         ) : (
           <table className="table">
             <thead>
@@ -1638,7 +1678,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               </tr>
             </thead>
             <tbody>
-              {invoices.map(invoice => {
+              {shownInvoices.map(invoice => {
                 const paid = parseFloat(invoice.amount_paid || 0);
                 const total = parseFloat(invoice.total || 0);
                 const balance = total - paid;
@@ -1691,11 +1731,11 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       {activeTab === 'aging' && (
         <>
           <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-            <div className="stat-card" style={{ borderLeftColor: '#28a745' }}><h3>Current</h3><div className="value">{formatCurrency(agingBuckets.current)}</div></div>
-            <div className="stat-card" style={{ borderLeftColor: '#ffc107' }}><h3>1-30 Days</h3><div className="value">{formatCurrency(agingBuckets.thirtyDays)}</div></div>
-            <div className="stat-card" style={{ borderLeftColor: '#fd7e14' }}><h3>31-60 Days</h3><div className="value">{formatCurrency(agingBuckets.sixtyDays)}</div></div>
-            <div className="stat-card" style={{ borderLeftColor: '#dc3545' }}><h3>61-90 Days</h3><div className="value">{formatCurrency(agingBuckets.ninetyDays)}</div></div>
-            <div className="stat-card" style={{ borderLeftColor: '#721c24', background: agingBuckets.over90 > 0 ? '#f8d7da' : undefined }}><h3>Over 90</h3><div className="value">{formatCurrency(agingBuckets.over90)}</div></div>
+            <div className="stat-card" style={{ borderLeftColor: '#28a745' }}><h3>Current</h3><div className="value">{formatCurrency(shownAgingBuckets.current)}</div></div>
+            <div className="stat-card" style={{ borderLeftColor: '#ffc107' }}><h3>1-30 Days</h3><div className="value">{formatCurrency(shownAgingBuckets.thirtyDays)}</div></div>
+            <div className="stat-card" style={{ borderLeftColor: '#fd7e14' }}><h3>31-60 Days</h3><div className="value">{formatCurrency(shownAgingBuckets.sixtyDays)}</div></div>
+            <div className="stat-card" style={{ borderLeftColor: '#dc3545' }}><h3>61-90 Days</h3><div className="value">{formatCurrency(shownAgingBuckets.ninetyDays)}</div></div>
+            <div className="stat-card" style={{ borderLeftColor: '#721c24', background: shownAgingBuckets.over90 > 0 ? '#f8d7da' : undefined }}><h3>Over 90</h3><div className="value">{formatCurrency(shownAgingBuckets.over90)}</div></div>
           </div>
           <div className="card">
             <h3>Outstanding Invoices</h3>
@@ -1704,7 +1744,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <tr><th>Invoice #</th><th>Client</th><th>Payer</th><th>Due Date</th><th>Days Overdue</th><th>Balance</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                {invoices.filter(inv => inv.payment_status !== 'paid').sort((a, b) => parseDate(a.payment_due_date) - parseDate(b.payment_due_date)).map(invoice => {
+                {shownInvoices.filter(inv => inv.payment_status !== 'paid').sort((a, b) => parseDate(a.payment_due_date) - parseDate(b.payment_due_date)).map(invoice => {
                   const daysOverdue = Math.floor((new Date() - parseDate(invoice.payment_due_date)) / (1000 * 60 * 60 * 24));
                   const balance = parseFloat(invoice.total || 0) - parseFloat(invoice.amount_paid || 0);
                   return (
@@ -1777,7 +1817,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
             <h3 style={{ margin: 0 }}>Payment History</h3>
             <button className="btn btn-primary" onClick={() => setShowPaymentModal(true)}>+ Record Payment</button>
           </div>
-          {payments.length === 0 ? (
+          {shownPayments.length === 0 ? (
             <p className="text-muted text-center">No payments recorded.</p>
           ) : (
             <table className="table">
@@ -1785,7 +1825,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                 <tr><th>Date</th><th>Invoice #</th><th>Client</th><th>Amount</th><th>Method</th><th>Reference #</th><th>Notes</th></tr>
               </thead>
               <tbody>
-                {payments.map(payment => (
+                {shownPayments.map(payment => (
                   <tr key={payment.id}>
                     <td>{formatDate(payment.payment_date)}</td>
                     <td><strong>{payment.invoice_number}</strong></td>

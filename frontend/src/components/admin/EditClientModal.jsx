@@ -14,7 +14,7 @@ const formatDate = (ymd) => {
   return new Date(ymd.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
-const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen, onClose, onSuccess, token }) => {
+const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen, onClose, onSuccess, token, onOpenBilling }) => {
   const [activeTab, setActiveTab] = useState('basic');
   const [formData, setFormData] = useState({});
   const [loading, setLoading] = useState(false);
@@ -230,6 +230,7 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
   const tabs = [
     { id: 'basic',     label: '📋 Basic Info' },
     { id: 'billing',   label: '💰 Billing'    },
+    { id: 'statement', label: '📄 Invoices & Payments' },
     { id: 'medical',   label: '🏥 Medical'    },
     { id: 'caregivers',label: '👤 Caregivers' },
     { id: 'visitnotes',label: `📝 Visit Notes${visitNotes.length ? ` (${visitNotes.length})` : ''}` },
@@ -799,6 +800,12 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
             </div>
           )}
 
+          {/* Invoices & Payments Tab */}
+          {activeTab === 'statement' && (
+            <ClientStatement clientId={client.id} token={token}
+              onOpenBilling={onOpenBilling ? () => { onClose(); onOpenBilling(client.id); } : null} />
+          )}
+
           {/* Medical Tab */}
           {activeTab === 'medical' && (
             <div>
@@ -1164,6 +1171,150 @@ const EditClientModal = ({ client, referralSources = [], careTypes = [], isOpen,
           </div>
         </form>
       </div>
+    </div>
+  );
+};
+
+// ── Invoices & Payments (one client's statement) ───────────────────────────
+// Read-only view; paying/adjusting happens in Billing (the button opens it
+// filtered to this client). Payments include Stripe and "marked paid" amounts,
+// which never get an invoice_payments row — the server returns them as lines.
+const money = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(parseFloat(n || 0));
+const formatStamp = (ts) => ts
+  ? new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' })
+  : '—';
+
+const ClientStatement = ({ clientId, token, onOpenBilling }) => {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setData(null); setError('');
+    fetch(`${API_BASE_URL}/api/billing/clients/${clientId}/statement`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(async r => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+        return body;
+      })
+      .then(body => { if (!cancelled) setData(body); })
+      .catch(err => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, [clientId, token]);
+
+  if (error) return <div className="alert alert-error">Couldn't load invoices: {error}</div>;
+  if (!data) return <div style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>Loading invoices...</div>;
+
+  const { invoices, payments, adjustments, totals } = data;
+  const invLabel = (row) => row.seq_number != null ? `#${row.seq_number}` : row.invoice_number;
+  const h4 = { borderBottom: '2px solid #007bff', paddingBottom: '0.5rem', marginTop: '1rem', marginBottom: '1rem' };
+  const stat = (label, value, color) => (
+    <div style={{ flex: '1 1 120px', background: '#f8f9fa', border: '1px solid #e9ecef', borderRadius: 8, padding: '0.6rem 0.8rem' }}>
+      <div style={{ fontSize: '0.75rem', color: '#666' }}>{label}</div>
+      <div style={{ fontSize: '1.15rem', fontWeight: 700, color }}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1rem' }}>
+        {stat('Billed', money(totals.billed))}
+        {stat('Paid', money(totals.paid), '#28a745')}
+        {totals.adjusted > 0 && stat('Adjusted', money(totals.adjusted))}
+        {stat('Balance owed', money(totals.balance), totals.balance > 0.005 ? '#dc3545' : '#28a745')}
+      </div>
+      {onOpenBilling && (
+        <div style={{ marginTop: '0.75rem' }}>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={onOpenBilling}>
+            Open in Billing (record a payment, view or send an invoice) →
+          </button>
+        </div>
+      )}
+
+      <h4 style={h4}>Invoices ({totals.invoiceCount})</h4>
+      {invoices.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '1.5rem', color: '#999', background: '#f9f9f9', borderRadius: 8 }}>
+          No invoices for this client yet.
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table">
+            <thead>
+              <tr><th>Invoice</th><th>Period</th><th>Payer</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {invoices.map(inv => {
+                const balance = parseFloat(inv.total || 0) - parseFloat(inv.amount_paid || 0) - parseFloat(inv.amount_adjusted || 0);
+                return (
+                  <tr key={inv.id}>
+                    <td><strong>{invLabel(inv)}</strong></td>
+                    <td>{formatDate(inv.billing_period_start)} – {formatDate(inv.billing_period_end)}</td>
+                    <td>{inv.referral_source_name || 'Private Pay'}</td>
+                    <td>{money(inv.total)}</td>
+                    <td style={{ color: '#28a745' }}>{money(inv.amount_paid)}</td>
+                    <td style={{ color: balance > 0.005 ? '#dc3545' : '#28a745' }}>{money(balance)}</td>
+                    <td>
+                      <span className={`badge ${inv.payment_status === 'paid' ? 'badge-success' : inv.payment_status === 'partial' ? 'badge-warning' : 'badge-danger'}`}>
+                        {inv.payment_status?.toUpperCase()}
+                      </span>
+                      {!inv.sent_at && (
+                        <span className="badge badge-secondary" style={{ marginLeft: 4 }}
+                              title="Not visible in the family portal until you send or release it">🔒 DRAFT</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h4 style={h4}>Payments ({payments.length})</h4>
+      {payments.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '1.5rem', color: '#999', background: '#f9f9f9', borderRadius: 8 }}>
+          No payments yet.
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table">
+            <thead>
+              <tr><th>Date</th><th>Invoice</th><th>Amount</th><th>Method</th><th>Reference / Notes</th></tr>
+            </thead>
+            <tbody>
+              {payments.map(p => (
+                <tr key={p.id}>
+                  <td>{p.source === 'recorded' ? formatDate(p.payment_date) : formatStamp(p.payment_date)}</td>
+                  <td>{invLabel(p)}</td>
+                  <td style={{ color: '#28a745', fontWeight: 'bold' }}>{money(p.amount)}</td>
+                  <td>{p.payment_method ? <span className="badge badge-info">{p.payment_method.toUpperCase()}</span> : '—'}</td>
+                  <td style={{ fontSize: '0.85rem' }}>{[p.reference_number, p.notes].filter(Boolean).join(' · ') || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {adjustments.length > 0 && (
+        <>
+          <h4 style={h4}>Adjustments ({adjustments.length})</h4>
+          <table className="table">
+            <thead><tr><th>Date</th><th>Invoice</th><th>Amount</th><th>Type</th><th>Reason</th></tr></thead>
+            <tbody>
+              {adjustments.map(a => (
+                <tr key={a.id}>
+                  <td>{formatStamp(a.created_at)}</td>
+                  <td>{invLabel(a)}</td>
+                  <td>{money(a.amount)}</td>
+                  <td>{(a.adjustment_type || '').replace(/_/g, ' ')}</td>
+                  <td style={{ fontSize: '0.85rem' }}>{[a.reason, a.notes].filter(Boolean).join(' · ') || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
   );
 };

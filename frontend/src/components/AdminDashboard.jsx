@@ -170,6 +170,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
   const [showImpersonation, setShowImpersonation] = useState(false);
   const [selectedCaregiverId, setSelectedCaregiverId] = useState(null);
   const [selectedCaregiverName, setSelectedCaregiverName] = useState('');
+  const [billingClientId, setBillingClientId] = useState(null); // Billing opened from a client's record
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 768);
@@ -252,6 +253,7 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
   };
 
   const handlePageClick = (page) => {
+    setBillingClientId(null);
     setCurrentPage(page);
     setShowSearch(false);
     setSearchQuery('');
@@ -276,9 +278,10 @@ const AdminDashboard = ({ user, token, onLogout, onImpersonate }) => {
     switch (currentPage) {
       case 'dashboard': return <DashboardOverview summary={summary} token={token} onNavigate={handlePageClick} />;
       case 'referrals': return <ReferralSources token={token} />;
-      case 'clients': return <ClientsManagement token={token} />;
+      case 'clients': return <ClientsManagement token={token}
+        onOpenBilling={(clientId) => { setBillingClientId(clientId); setCurrentPage('billing'); }} />;
       case 'caregivers': return <CaregiverManagement token={token} onViewProfile={handleViewCaregiverProfile} onViewHistory={handleViewCaregiverHistory} />;
-      case 'billing': return <BillingDashboard token={token} />;
+      case 'billing': return <BillingDashboard token={token} initialClientId={billingClientId} />;
       case 'billing-import': return <BillingImport token={token} />;
       case 'scheduling': return <SchedulingHub token={token} />;
       case 'emergency-coverage': return <EmergencyCoverage token={token} />;
