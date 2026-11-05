@@ -442,38 +442,39 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       return;
     }
 
+    // Send the DELETE and fail loudly if the server refused it — this used to show
+    // the success toast no matter what came back.
+    const del = async (query) => {
+      const r = await fetch(`${API_BASE_URL}/api/schedules/${shift.id}?${query}`, {
+        method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `Delete failed (${r.status})`);
+      return body;
+    };
+    // A split shift's other half goes with it, and so do the weeks a past
+    // "this & following" edit moved onto a newer row (cascade) — otherwise the
+    // shift comes back on the date of that old edit.
+    const pair = isSplit ? '&deletePair=true' : '';
+
     setSaving(true);
     try {
       if (isRecurring && scope === 'this') {
         // Cancel just this occurrence via exception
-        await fetch(`${API_BASE_URL}/api/schedules/${shift.id}?scope=this&date=${date}`, {
-          method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
-        });
+        await del(`scope=this&date=${date}`);
         showToast('This occurrence cancelled');
       } else if (isRecurring && scope === 'following') {
         // End the recurring pattern from this date forward
-        await fetch(`${API_BASE_URL}/api/schedules/${shift.id}?scope=following&date=${date}`, {
-          method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
-        });
-        showToast('Future occurrences removed');
+        await del(`scope=following&date=${date}&cascade=true${pair}`);
+        showToast(isSplit ? 'Both halves removed from this date on' : 'Future occurrences removed');
       } else if (scope === 'purge') {
         // Explicit full erase — removes past + future. Deliberate, confirmed action.
-        const url = isSplit
-          ? `${API_BASE_URL}/api/schedules/${shift.id}?scope=purge&deletePair=true`
-          : `${API_BASE_URL}/api/schedules/${shift.id}?scope=purge`;
-        await fetch(url, {
-          method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
-        });
+        await del(`scope=purge${pair}`);
         showToast('Schedule and its history removed');
       } else {
         // scope=all — for a recurring pattern the backend ends it as of today
         // and KEEPS every past occurrence; for a one-time shift it just deletes.
-        const url = isSplit
-          ? `${API_BASE_URL}/api/schedules/${shift.id}?scope=all&deletePair=true`
-          : `${API_BASE_URL}/api/schedules/${shift.id}?scope=all`;
-        await fetch(url, {
-          method: 'DELETE', headers: { Authorization:`Bearer ${token}` },
-        });
+        await del(`scope=all${isRecurring ? '&cascade=true' : ''}${pair}`);
         showToast(isSplit ? 'Split shift pair deleted'
           : (isRecurring ? 'Ended going forward — past occurrences kept' : 'Shift deleted'));
       }
@@ -482,8 +483,68 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       setEditShift(null);
       await loadAll();
       onScheduleChange && onScheduleChange();
-    } catch {
-      showToast('Delete failed', 'error');
+    } catch (e) {
+      showToast(e.message || 'Delete failed', 'error');
+      await loadAll();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Take this caregiver off this client from the clicked date on — every weekday,
+  // both halves of split shifts, one-time visits — in one action. Asks the server
+  // what will change first (dryRun) and shows it before saving.
+  async function handleEndAssignment() {
+    if (!deleteConfirm) return;
+    const { shift, date } = deleteConfirm;
+    const todayCT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+    const fromDate = date || (shift.date ? String(shift.date).slice(0, 10) : todayCT);
+    const cg = caregivers.find(c => c.id === shift.caregiver_id);
+    const cl = clientMap[shift.client_id];
+    const cgName = cg ? `${cg.first_name} ${cg.last_name}` : 'this caregiver';
+    const clName = cl ? `${cl.first_name} ${cl.last_name}` : 'this client';
+    const fmt = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+    const t12 = (t) => { const [h, m] = String(t).split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2,'0')}${h < 12 ? 'am' : 'pm'}`; };
+
+    const post = async (dryRun) => {
+      const r = await fetch(`${API_BASE_URL}/api/schedules/end-assignment`, {
+        method: 'POST', headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+        body: JSON.stringify({ caregiverId: shift.caregiver_id, clientId: shift.client_id, fromDate, dryRun }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `Could not remove (${r.status})`);
+      return body;
+    };
+
+    setSaving(true);
+    try {
+      const plan = await post(true);
+      if (!plan.recurring.length && !plan.oneTime.length) {
+        showToast(`${cgName} has no shifts with ${clName} on or after ${fmt(fromDate)}`, 'error');
+        return;
+      }
+      const lines = [
+        `Remove ${cgName} from ${clName} starting ${fmt(fromDate)}?`,
+        '',
+        ...plan.recurring.map(r => `• Every ${r.frequency === 'biweekly' ? 'other ' : ''}${DAY_FULL[r.day_of_week]} ${t12(r.start_time)}–${t12(r.end_time)}`),
+        ...plan.oneTime.map(r => `• ${fmt(r.date)} ${t12(r.start_time)}–${t12(r.end_time)} (one-time)`),
+        '',
+        `Visits before ${fmt(fromDate)} are kept (payroll and billing history stay the same).`,
+      ];
+      if (fromDate < todayCT) lines.push('', `⚠ ${fmt(fromDate)} is in the PAST — visits from then until today come off the schedule too.`);
+      if (plan.handedOff.length) lines.push('', `⚠ These visits were moved to another caregiver and will also go away — re-add them if still needed:`,
+        ...plan.handedOff.map(h => `   ${fmt(h.date)} (${h.covering_caregiver || 'another caregiver'})`));
+      if (plan.movedIn.length) lines.push('', `Note: ${plan.movedIn.length} single visit(s) moved onto ${cgName} from someone else's schedule are NOT changed: ${plan.movedIn.map(m => fmt(m.date)).join(', ')}.`);
+      if (!window.confirm(lines.join('\n'))) return;
+
+      const done = await post(false);
+      showToast(`${cgName} removed from ${clName} from ${fmt(fromDate)} on (${done.endedCount + done.removedCount} schedule${done.endedCount + done.removedCount === 1 ? '' : 's'})`);
+      setDeleteConfirm(null);
+      setEditShift(null);
+      await loadAll();
+      onScheduleChange && onScheduleChange();
+    } catch (e) {
+      showToast(e.message, 'error');
     } finally {
       setSaving(false);
     }
@@ -1523,6 +1584,19 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
         const isSplit = shift.is_split_shift;
         const occDate = date || (shift.date ? String(shift.date).slice(0, 10) : null);
         const dateLabel = occDate ? new Date(occDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }) : '';
+        const delCg = caregivers.find(c => c.id === shift.caregiver_id);
+        const delCl = clientMap[shift.client_id];
+        const endAssignmentOption = shift.caregiver_id && shift.client_id ? (
+          <button onClick={handleEndAssignment} disabled={saving} style={{
+            padding:'12px 16px', borderRadius:8, border:'1px solid #D1D5DB', cursor:'pointer',
+            background:'#fff', textAlign:'left', fontSize:13,
+          }}>
+            <div style={{ fontWeight:700, color:'#374151' }}>
+              Remove {delCg ? delCg.first_name : 'this caregiver'} from {delCl ? delCl.first_name : 'this client'} — all days{dateLabel ? `, from ${dateLabel}` : ''}
+            </div>
+            <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Ends every one of their shifts with this client in one step (every weekday, both halves of split shifts). Shows you the list before saving. Past visits stay.</div>
+          </button>
+        ) : null;
 
         // Sub-step: the CLIENT is why the visit isn't happening. Records a reason
         // so the billing review lists the day as "not billed" instead of it vanishing.
@@ -1567,7 +1641,7 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
           // One-time shift — simple confirm
           return (
             <Modal title="Delete Shift" onClose={() => setDeleteConfirm(null)}>
-              <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:14 }}>{unavailOption}</div>
+              <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:14 }}>{unavailOption}{endAssignmentOption}</div>
               <p style={{ margin:'0 0 16px', fontSize:14, color:'#374151' }}>
                 {isSplit ? 'Or delete both segments of this split shift?' : 'Or delete this shift entirely?'}
               </p>
@@ -1602,8 +1676,9 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
                 background:'#fff', textAlign:'left', fontSize:13,
               }}>
                 <div style={{ fontWeight:700, color:'#374151' }}>This & all following</div>
-                <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>End the recurring pattern starting from {dateLabel}. Past occurrences stay.</div>
+                <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>End the recurring pattern starting from {dateLabel}{isSplit ? ' (both halves)' : ''}. Past occurrences stay. Only this weekday.</div>
               </button>
+              {endAssignmentOption}
               <button onClick={() => handleDeleteShift('all')} disabled={saving} style={{
                 padding:'12px 16px', borderRadius:8, border:'1px solid #D1D5DB', cursor:'pointer',
                 background:'#fff', textAlign:'left', fontSize:13,

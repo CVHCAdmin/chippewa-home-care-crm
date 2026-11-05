@@ -278,6 +278,73 @@ router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
 // directly in server.js — do not add them here (Express router path boundaries
 // prevent router.get('-all') from ever matching /api/schedules-all).
 
+// ── "Same shift" lookups used by delete ────────────────────────────────────
+// One shift on the grid can be several rows:
+//   * a SPLIT shift is two rows sharing split_shift_group_id;
+//   * a 'this & following' EDIT ends the row and starts a new one (audit_logs
+//     UPDATE new_data.replacedBy), and copies the split group id onto it — so a
+//     group can also hold older/other caregivers' ended patterns. Every lookup
+//     below therefore pins caregiver + client + weekday, never the group alone.
+
+const ymd = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : (d ? String(d).slice(0, 10) : null));
+
+// The live split partner(s) of each given row: same group, caregiver, client,
+// weekday/date, and a date range that overlaps the row's own.
+async function splitPartnersOf(rows) {
+  const out = [];
+  for (const r of rows) {
+    if (!r.is_split_shift || !r.split_shift_group_id) continue;
+    const p = await db.query(
+      `SELECT * FROM schedules p
+        WHERE p.split_shift_group_id = $1 AND p.id <> $2 AND p.is_active = true
+          AND p.caregiver_id IS NOT DISTINCT FROM $3 AND p.client_id = $4
+          AND p.day_of_week IS NOT DISTINCT FROM $5 AND p.date IS NOT DISTINCT FROM $6::date
+          AND COALESCE(p.effective_date, '0001-01-01') <= COALESCE($8::date, '9999-12-31')
+          AND COALESCE(p.end_date, '9999-12-31') >= COALESCE($7::date, '0001-01-01')`,
+      [r.split_shift_group_id, r.id, r.caregiver_id, r.client_id, r.day_of_week, ymd(r.date), ymd(r.effective_date), ymd(r.end_date)]
+    );
+    out.push(...p.rows);
+  }
+  return out;
+}
+
+// Rows a 'this & following' edit split off from this one (followed recursively),
+// same caregiver + client + weekday. These are the "following" weeks of the
+// same shift that a delete on the original row used to leave running.
+async function editSuccessorsOf(shift) {
+  const r = await db.query(
+    `WITH RECURSIVE chain(id) AS (
+       SELECT $1::uuid
+       UNION
+       SELECT (a.new_data->>'replacedBy')::uuid
+         FROM audit_logs a JOIN chain c ON a.record_id = c.id
+        WHERE a.table_name = 'schedules' AND a.action = 'UPDATE' AND a.new_data ? 'replacedBy'
+     )
+     SELECT s.* FROM schedules s
+      WHERE s.id IN (SELECT id FROM chain) AND s.id <> $1 AND s.is_active = true
+        AND s.caregiver_id IS NOT DISTINCT FROM $2 AND s.client_id = $3 AND s.day_of_week = $4`,
+    [shift.id, shift.caregiver_id, shift.client_id, shift.day_of_week]
+  );
+  return r.rows;
+}
+
+// End recurring rows so they generate nothing on/after fromDate. Only touches rows
+// still running on fromDate, so it can NEVER lengthen a row that already ended
+// (which would bring back weeks that were finished — double pay/bill).
+async function endRecurringFrom(ids, fromDate) {
+  if (!ids.length) return [];
+  const r = await db.query(
+    `UPDATE schedules SET end_date = ($2::date - 1), updated_at = NOW()
+      WHERE id = ANY($1::uuid[]) AND is_active = true AND day_of_week IS NOT NULL
+        AND (end_date IS NULL OR end_date >= $2::date)
+      RETURNING *`,
+    [ids, fromDate]
+  );
+  return r.rows;
+}
+
+const uniqIds = (rows) => [...new Set(rows.map(r => r.id))];
+
 // DELETE /api/schedules/:scheduleId - Delete a schedule
 // Query params:
 //   ?scope=this&date=YYYY-MM-DD  — cancel this single occurrence (creates exception)
@@ -286,11 +353,16 @@ router.put('/:id/reassign', verifyToken, requireAdmin, async (req, res) => {
 //        every past/worked occurrence); for a one-time shift, delete the row.
 //   ?scope=purge — EXPLICIT full erase incl. history (deactivate the whole
 //        pattern, hiding past + future). Only for patterns created by mistake.
-//   ?deletePair=true — also delete split shift partner
+//   ?deletePair=true — also delete split shift partner (the live other half only)
+//   ?cascade=true — following/all also end the rows a later 'this & following'
+//        EDIT split off from this one (same caregiver/client/weekday), so the
+//        shift doesn't come back on the date of that old edit. The grid's Delete
+//        box sends it; drag-to-move does not (it re-creates the pattern itself).
 router.delete('/:scheduleId', verifyToken, async (req, res) => {
   try {
     const { scheduleId } = req.params;
     const { scope = 'all', date, deletePair, reason } = req.query;
+    const cascade = req.query.cascade === 'true';
 
     const current = await db.query('SELECT * FROM schedules WHERE id = $1', [scheduleId]);
     if (current.rows.length === 0) {
@@ -346,40 +418,50 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
 
     // ── Scope: end pattern from this date forward ──
     if (scope === 'following' && date && isRecurring) {
-      // Set end_date on the recurring pattern to the day before
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+        return res.status(400).json({ error: 'date must be YYYY-MM-DD.' });
+      }
+      if (!shift.is_active) return res.status(404).json({ error: 'Schedule not found' });
+      // Day before `date` — the last day the pattern still runs.
       const endDate = new Date(date + 'T12:00:00');
       endDate.setDate(endDate.getDate() - 1);
       const endDateStr = endDate.toISOString().split('T')[0];
 
-      try {
-        const result = await db.query(
-          `UPDATE schedules SET end_date = $1, updated_at = NOW() WHERE id = $2 AND is_active = true RETURNING *`,
-          [endDateStr, scheduleId]
-        );
-        if (result.rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
-        await auditLog(req.user.id, 'END_PATTERN', 'schedules', scheduleId, shift, result.rows[0], reason || null);
-        return res.json({ message: 'Recurring pattern ended', endDate: endDateStr, schedule: result.rows[0] });
-      } catch (e) {
-        if (e.message.includes('end_date')) {
-          return res.status(500).json({ error: 'Please run migration_v20 first' });
-        }
-        throw e;
+      // The clicked row, plus (when asked) its split partner and the rows a later
+      // 'this & following' edit split off from it — and THEIR split partners.
+      let related = [];
+      if (cascade) related.push(...await editSuccessorsOf(shift));
+      if (deletePair === 'true') related.push(...await splitPartnersOf([shift, ...related]));
+      const ended = await endRecurringFrom(uniqIds([shift, ...related]), date);
+
+      for (const row of ended) {
+        await auditLog(req.user.id, 'END_PATTERN', 'schedules', row.id, row.id === shift.id ? shift : null, row, reason || null);
       }
+      const clicked = ended.find(r => r.id === shift.id) || shift;
+      return res.json({
+        message: ended.length ? 'Recurring pattern ended' : 'Already ended before that date',
+        endDate: endDateStr,
+        endedCount: ended.length,
+        schedule: clicked,
+      });
     }
 
-    // Which rows does this action target — just this shift, or the whole split
-    // pair when the caller asked to delete the partner too?
-    const isSplitPair = shift.is_split_shift && shift.split_shift_group_id && deletePair === 'true';
-    const targetClause = isSplitPair ? 'split_shift_group_id = $1 AND is_active = true' : 'id = $1';
-    const targetParam  = isSplitPair ? shift.split_shift_group_id : scheduleId;
+    // Which rows does this action target — just this shift, or the split pair when
+    // the caller asked to delete the partner too? The partner is looked up by
+    // group + caregiver + client + weekday + overlapping dates: a split group can
+    // also hold older patterns (an edit copies the group id), and those must never
+    // be ended, lengthened or erased by a delete aimed at this shift.
+    const isSplitPair = !!(shift.is_split_shift && shift.split_shift_group_id && deletePair === 'true');
+    const pairRows = isSplitPair ? await splitPartnersOf([shift]) : [];
+    const targetIds = uniqIds([shift, ...pairRows]);
 
     // ── Scope: purge — EXPLICIT full erase, history included ──
     // The ONLY path that deactivates a recurring pattern (hiding past + future).
     // Wired to a clearly-labeled destructive action in the UI; never the default.
     if (scope === 'purge') {
       const result = await db.query(
-        `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
-        [targetParam]
+        `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = ANY($1::uuid[]) AND is_active = true RETURNING *`,
+        [targetIds]
       );
       for (const row of result.rows) {
         await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
@@ -400,39 +482,51 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
       const end = new Date(todayStr + 'T12:00:00');
       end.setDate(end.getDate() - 1);
       const endStr = end.toISOString().split('T')[0];
-      const effStr = new Date(shift.effective_date).toISOString().split('T')[0];
 
-      // Pattern hadn't started yet → no past occurrences to protect → remove outright.
-      if (endStr < effStr) {
-        const result = await db.query(
-          `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
-          [targetParam]
-        );
-        for (const row of result.rows) {
-          await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
-        }
-        return res.json({ message: 'Recurring schedule removed (had not started; no past occurrences)', deletedCount: result.rows.length });
+      // The shift's rows: this one, its split partner (if asked), and (if asked) the
+      // rows later 'this & following' edits split off from it, plus their partners.
+      let ids = targetIds;
+      if (cascade) {
+        const succ = await editSuccessorsOf(shift);
+        const succPartners = deletePair === 'true' ? await splitPartnersOf(succ) : [];
+        ids = uniqIds([shift, ...pairRows, ...succ, ...succPartners]);
       }
 
-      const result = await db.query(
-        `UPDATE schedules SET end_date = $2, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
-        [targetParam, endStr]
-      );
-      for (const row of result.rows) {
-        await auditLog(req.user.id, 'END_PATTERN', 'schedules', row.id, shift, row, reason || null);
+      // Rows that haven't started yet have no past occurrences to protect → remove
+      // outright (as before). Only rows still running today are touched.
+      const removed = (await db.query(
+        `UPDATE schedules SET is_active = false, updated_at = NOW()
+          WHERE id = ANY($1::uuid[]) AND is_active = true AND day_of_week IS NOT NULL
+            AND effective_date >= $2::date AND (end_date IS NULL OR end_date >= $2::date)
+          RETURNING *`,
+        [ids, todayStr]
+      )).rows;
+      for (const row of removed) {
+        await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
       }
+
+      // Everything else still running today ends yesterday. Never lengthens a row
+      // that had already ended (that used to bring finished weeks back).
+      const ended = await endRecurringFrom(ids, todayStr);
+      for (const row of ended) {
+        await auditLog(req.user.id, 'END_PATTERN', 'schedules', row.id, row.id === shift.id ? shift : null, row, reason || null);
+      }
+
+      const clickedRemoved = removed.some(r => r.id === shift.id);
       return res.json({
-        message: 'Recurring pattern ended today; past occurrences kept',
+        message: clickedRemoved && !ended.length
+          ? 'Recurring schedule removed (had not started; no past occurrences)'
+          : (removed.length || ended.length ? 'Recurring pattern ended today; past occurrences kept' : 'Already ended before today'),
         endDate: endStr,
         pastKept: true,
-        deletedCount: result.rows.length,
+        deletedCount: removed.length + ended.length,
       });
     }
 
     // ── Scope: all on a one-time shift — delete the single row (or split pair) ──
     const result = await db.query(
-      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE ${targetClause} RETURNING *`,
-      [targetParam]
+      `UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = ANY($1::uuid[]) AND is_active = true RETURNING *`,
+      [targetIds]
     );
     for (const row of result.rows) {
       await auditLog(req.user.id, 'DELETE', 'schedules', row.id, null, row, reason || null);
@@ -444,6 +538,115 @@ router.delete('/:scheduleId', verifyToken, async (req, res) => {
       splitShiftGroupId: shift.split_shift_group_id || null,
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── END A CAREGIVER'S ASSIGNMENT TO A CLIENT ────────────────────────────────
+// POST /api/schedules/end-assignment
+//   body: { caregiverId, clientId, fromDate: 'YYYY-MM-DD', dryRun?: true, reason? }
+// "Take Zach off Marleen starting Nov 3": every one of THIS caregiver's schedules
+// with THIS client stops on/after fromDate, in one action — every weekday row,
+// both halves of split shifts, and rows left by earlier 'this & following' edits.
+//   * recurring rows still running on fromDate → end_date = fromDate - 1
+//     (history before fromDate stays exactly as worked/paid/billed; never lengthens
+//     a row that already ended);
+//   * one-time shifts dated on/after fromDate → removed (is_active = false).
+// Nothing else is touched: other caregivers' visits with the client, this caregiver's
+// other clients, and single visits moved ONTO this caregiver from someone else's
+// schedule (those are reported, not changed). dryRun returns the same summary
+// without saving, so the screen can show exactly what will change first.
+router.post('/end-assignment', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { caregiverId, clientId, fromDate, dryRun, reason } = req.body || {};
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID.test(String(caregiverId || '')) || !UUID.test(String(clientId || ''))) {
+      return res.status(400).json({ error: 'caregiverId and clientId are required.' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fromDate || ''))) {
+      return res.status(400).json({ error: 'fromDate must be YYYY-MM-DD.' });
+    }
+
+    const recurring = (await db.query(
+      `SELECT id, day_of_week, to_char(start_time,'HH24:MI') AS start_time, to_char(end_time,'HH24:MI') AS end_time,
+              frequency, is_split_shift, to_char(effective_date,'YYYY-MM-DD') AS effective_date,
+              to_char(end_date,'YYYY-MM-DD') AS end_date
+         FROM schedules
+        WHERE caregiver_id = $1 AND client_id = $2 AND is_active = true AND day_of_week IS NOT NULL
+          AND (end_date IS NULL OR end_date >= $3::date)
+        ORDER BY day_of_week, start_time`,
+      [caregiverId, clientId, fromDate]
+    )).rows;
+    const oneTime = (await db.query(
+      `SELECT id, to_char(date,'YYYY-MM-DD') AS date, to_char(start_time,'HH24:MI') AS start_time, to_char(end_time,'HH24:MI') AS end_time
+         FROM schedules
+        WHERE caregiver_id = $1 AND client_id = $2 AND is_active = true AND day_of_week IS NULL AND date >= $3::date
+        ORDER BY date, start_time`,
+      [caregiverId, clientId, fromDate]
+    )).rows;
+    const recIds = recurring.map(r => r.id);
+
+    // Heads-ups for the office (not changed by this action):
+    // visits on these schedules already handed to ANOTHER caregiver after fromDate —
+    // they go away with the pattern, so the cover has to be re-added if still wanted;
+    const handedOff = recIds.length ? (await db.query(
+      `SELECT e.schedule_id, to_char(e.exception_date,'YYYY-MM-DD') AS date,
+              u.first_name || ' ' || u.last_name AS covering_caregiver
+         FROM schedule_exceptions e LEFT JOIN users u ON u.id = e.override_caregiver_id
+        WHERE e.schedule_id = ANY($1::uuid[]) AND e.exception_date >= $2::date
+          AND e.exception_type = 'modified' AND e.override_caregiver_id IS NOT NULL AND e.override_caregiver_id <> $3
+        ORDER BY e.exception_date`,
+      [recIds, fromDate, caregiverId]
+    )).rows : [];
+    // single visits moved ONTO this caregiver for this client from someone else's schedule.
+    const movedIn = (await db.query(
+      `SELECT e.schedule_id, to_char(e.exception_date,'YYYY-MM-DD') AS date
+         FROM schedule_exceptions e JOIN schedules s ON s.id = e.schedule_id
+        WHERE e.override_caregiver_id = $1 AND COALESCE(e.override_client_id, s.client_id) = $2
+          AND s.caregiver_id IS DISTINCT FROM $1 AND s.is_active = true
+          AND e.exception_type = 'modified' AND e.exception_date >= $3::date
+        ORDER BY e.exception_date`,
+      [caregiverId, clientId, fromDate]
+    )).rows;
+
+    const summary = { fromDate, recurring, oneTime, handedOff, movedIn };
+    if (dryRun) return res.json({ dryRun: true, ...summary });
+
+    const tx = await db.pool.connect();
+    let ended = [], removed = [];
+    try {
+      await tx.query('BEGIN');
+      if (recIds.length) {
+        ended = (await tx.query(
+          `UPDATE schedules SET end_date = ($2::date - 1), updated_at = NOW()
+            WHERE id = ANY($1::uuid[]) AND is_active = true AND day_of_week IS NOT NULL
+              AND (end_date IS NULL OR end_date >= $2::date)
+            RETURNING *`,
+          [recIds, fromDate]
+        )).rows;
+      }
+      if (oneTime.length) {
+        removed = (await tx.query(
+          `UPDATE schedules SET is_active = false, updated_at = NOW()
+            WHERE id = ANY($1::uuid[]) AND is_active = true RETURNING *`,
+          [oneTime.map(r => r.id)]
+        )).rows;
+      }
+      await tx.query('COMMIT');
+    } catch (e) {
+      try { await tx.query('ROLLBACK'); } catch { /* ignore */ }
+      throw e;
+    } finally {
+      tx.release();
+    }
+
+    const why = { scope: 'end_assignment', caregiverId, clientId, fromDate, reason: reason || null };
+    for (const row of ended)   await auditLog(req.user.id, 'END_PATTERN', 'schedules', row.id, null, { ...row, _action: why });
+    for (const row of removed) await auditLog(req.user.id, 'DELETE',      'schedules', row.id, null, { ...row, _action: why });
+
+    res.json({ ...summary, endedCount: ended.length, removedCount: removed.length });
+  } catch (error) {
+    console.error('[end-assignment]', error);
     res.status(500).json({ error: error.message });
   }
 });
