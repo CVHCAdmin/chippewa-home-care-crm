@@ -6,11 +6,21 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 
 // ── Lazy plugin loaders (don't crash on web if plugin unavailable) ─────────────
-const getGeolocation = () => import('@capacitor/geolocation').then(m => m.Geolocation).catch(() => null);
-const getNetwork     = () => import('@capacitor/network').then(m => m.Network).catch(() => null);
-const getHaptics     = () => import('@capacitor/haptics').then(m => m.Haptics).catch(() => null);
-const getLocalNotif  = () => import('@capacitor/local-notifications').then(m => m.LocalNotifications).catch(() => null);
-const getBgGeo       = () => import('@capacitor-community/background-geolocation').then(m => m.BackgroundGeolocation).catch(() => null);
+// ⚠️ NEVER let a promise resolve TO a Capacitor plugin object. A plugin is a Proxy that
+// answers EVERY property — including `then` — with a plugin-method wrapper. A promise
+// that resolves to it (`.then(m => m.Geolocation)`, or an async function that
+// `return`s it) calls plugin.then(); Capacitor rejects that ("Geolocation.then() is not
+// implemented on web") and the outer promise NEVER settles. That silently hung every
+// location lookup from June to Nov 2026: caregivers' own clock-ins carried a GPS point
+// 5 times out of 803 (web and the Play app alike). So the loaders resolve to a plain
+// wrapper { plugin } and callers unwrap `.plugin` AFTER the await.
+const loadPlugin = (load, name) =>
+  load().then(m => ({ plugin: (m && m[name]) || null })).catch(() => ({ plugin: null }));
+const getGeolocation = () => loadPlugin(() => import('@capacitor/geolocation'), 'Geolocation');
+const getNetwork     = () => loadPlugin(() => import('@capacitor/network'), 'Network');
+const getHaptics     = () => loadPlugin(() => import('@capacitor/haptics'), 'Haptics');
+const getLocalNotif  = () => loadPlugin(() => import('@capacitor/local-notifications'), 'LocalNotifications');
+const getBgGeo       = () => loadPlugin(() => import('@capacitor-community/background-geolocation'), 'BackgroundGeolocation');
 
 export const isNative = Capacitor.isNativePlatform();
 export const platform = Capacitor.getPlatform(); // 'ios' | 'android' | 'web'
@@ -24,7 +34,7 @@ export const platform = Capacitor.getPlatform(); // 'ios' | 'android' | 'web'
 // Resolves { latitude, longitude, accuracy, timestamp }; rejects with an error whose
 // .code matches W3C PositionError codes (1=denied, 2=unavailable, 3=timeout).
 export async function getCurrentPositionOnce({ highAccuracy = false, timeout = 8000, maximumAge = 120000 } = {}) {
-  const Geolocation = await getGeolocation();
+  const Geolocation = (await getGeolocation()).plugin;
   if (Geolocation && isNative) {
     const perm = await Geolocation.checkPermissions().catch(() => null);
     const granted = (p) => p && (p.location === 'granted' || p.coarseLocation === 'granted');
@@ -79,7 +89,7 @@ export function getWarmFix() {
 // let the punch proceed.
 export async function getLocationPermissionState() {
   const lookup = (async () => {
-    const Geolocation = await getGeolocation();
+    const Geolocation = (await getGeolocation()).plugin;
     if (Geolocation && isNative) {
       const p = await Geolocation.checkPermissions().catch(() => null);
       if (!p) return null;
@@ -104,7 +114,7 @@ export async function getLocationPermissionState() {
 }
 
 async function locationPermissionGranted() {
-  const Geolocation = await getGeolocation();
+  const Geolocation = (await getGeolocation()).plugin;
   if (Geolocation && isNative) {
     const p = await Geolocation.checkPermissions().catch(() => null);
     return !!(p && (p.location === 'granted' || p.coarseLocation === 'granted'));
@@ -158,7 +168,7 @@ export function useNetwork() {
     let cleanup = () => {};
 
     async function init() {
-      const Network = await getNetwork();
+      const Network = (await getNetwork()).plugin;
 
       if (Network && isNative) {
         // Native: use Capacitor Network plugin
@@ -201,7 +211,7 @@ export function useGeolocation({ watch = false, highAccuracy = true } = {}) {
     setLoading(true);
     setError(null);
     try {
-      const Geolocation = await getGeolocation();
+      const Geolocation = (await getGeolocation()).plugin;
 
       if (Geolocation && isNative) {
         // Native: request permissions first
@@ -260,7 +270,7 @@ export function useGeolocation({ watch = false, highAccuracy = true } = {}) {
     let cancelled = false;
 
     async function startWatch() {
-      const Geolocation = await getGeolocation();
+      const Geolocation = (await getGeolocation()).plugin;
       if (Geolocation && isNative) {
         watchIdRef.current = await Geolocation.watchPosition(
           { enableHighAccuracy: true },
@@ -296,7 +306,7 @@ export function useGeolocation({ watch = false, highAccuracy = true } = {}) {
     return () => {
       cancelled = true;
       if (watchIdRef.current !== null) {
-        getGeolocation().then(G => {
+        getGeolocation().then(({ plugin: G }) => {
           if (G && isNative) G.clearWatch({ id: watchIdRef.current });
           else navigator.geolocation.clearWatch(watchIdRef.current);
         });
@@ -312,7 +322,7 @@ export function useGeolocation({ watch = false, highAccuracy = true } = {}) {
 export function useHaptics() {
   const impact = useCallback(async (style = 'medium') => {
     if (!isNative) return;
-    const Haptics = await getHaptics();
+    const Haptics = (await getHaptics()).plugin;
     if (!Haptics) return;
     const styleMap = { light: 'LIGHT', medium: 'MEDIUM', heavy: 'HEAVY' };
     await Haptics.impact({ style: styleMap[style] || 'MEDIUM' }).catch(() => {});
@@ -320,7 +330,7 @@ export function useHaptics() {
 
   const notification = useCallback(async (type = 'success') => {
     if (!isNative) return;
-    const Haptics = await getHaptics();
+    const Haptics = (await getHaptics()).plugin;
     if (!Haptics) return;
     const typeMap = { success: 'SUCCESS', warning: 'WARNING', error: 'ERROR' };
     await Haptics.notification({ type: typeMap[type] || 'SUCCESS' }).catch(() => {});
@@ -400,12 +410,12 @@ export function useBackgroundGeolocation() {
   const bgWatcherIdRef = useRef(null);
 
   const start = useCallback(async ({ onLocation, notificationTitle = 'CVHC HomeCare', notificationText = 'Monitoring your location for auto clock-in' } = {}) => {
-    const BgGeo = await getBgGeo();
+    const BgGeo = (await getBgGeo()).plugin;
 
     if (BgGeo && isNative && platform === 'android') {
       try {
         // Request permissions first
-        const Geo = await getGeolocation();
+        const Geo = (await getGeolocation()).plugin;
         if (Geo) {
           const perm = await Geo.requestPermissions({ permissions: ['location', 'coarseLocation'] });
           if (perm.location !== 'granted') throw new Error('Location permission denied');
@@ -460,7 +470,7 @@ export function useBackgroundGeolocation() {
   }, []);
 
   const stop = useCallback(async () => {
-    const BgGeo = await getBgGeo();
+    const BgGeo = (await getBgGeo()).plugin;
     if (BgGeo && isNative && platform === 'android' && bgWatcherIdRef.current !== null) {
       await BgGeo.removeWatcher({ id: bgWatcherIdRef.current }).catch(() => {});
       bgWatcherIdRef.current = null;
@@ -488,7 +498,7 @@ export function useBackgroundGeolocation() {
 // Schedule local notifications (shift reminders etc)
 export function useLocalNotifications() {
   const schedule = useCallback(async ({ title, body, id, at }) => {
-    const LN = await getLocalNotif();
+    const LN = (await getLocalNotif()).plugin;
     if (!LN || !isNative) return;
     const perm = await LN.requestPermissions();
     if (perm.display !== 'granted') return;
@@ -505,7 +515,7 @@ export function useLocalNotifications() {
   }, []);
 
   const cancel = useCallback(async (id) => {
-    const LN = await getLocalNotif();
+    const LN = (await getLocalNotif()).plugin;
     if (!LN || !isNative) return;
     await LN.cancel({ notifications: [{ id }] });
   }, []);
