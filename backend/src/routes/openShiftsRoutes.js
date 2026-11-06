@@ -184,11 +184,17 @@ router.post('/:id/smart-fill', auth, requireAdmin, async (req, res) => {
 
 // Get all open shifts
 // A shift the office offered to chosen caregivers is visible only to them.
+//
+// `date` (plain 'YYYY-MM-DD'): the caregiver app's Open Shifts card has always read
+// `shift.date`, but this table's column is `shift_date` — so every card showed a blank
+// day. Sending `date` fixes the card for every installed app, including the Android
+// build whose web bundle is frozen and can't pick up a frontend fix.
 router.get('/available', auth, async (req, res) => {
   try {
     await ensureColumns();
     const result = await db.query(`
-      SELECT os.*, c.first_name as client_first_name, c.last_name as client_last_name
+      SELECT os.*, to_char(os.shift_date, 'YYYY-MM-DD') AS date,
+             c.first_name as client_first_name, c.last_name as client_last_name
       FROM open_shifts os
       LEFT JOIN clients c ON os.client_id = c.id
       WHERE os.status = 'open'

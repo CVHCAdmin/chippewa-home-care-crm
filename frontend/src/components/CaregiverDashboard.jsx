@@ -1936,7 +1936,7 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontWeight: '600' }}>{shift.client_first_name} {shift.client_last_name}</div>
-                  <div style={{ fontSize: '0.9rem', color: '#666' }}>📅 {formatDate(shift.date)}</div>
+                  <div style={{ fontSize: '0.9rem', color: '#666' }}>📅 {formatDate(shift.date || shift.shift_date) || 'Date not set — ask the office'}</div>
                   <div style={{ fontSize: '0.9rem', color: '#666' }}>🕐 {formatTime(shift.start_time)} - {formatTime(shift.end_time)}</div>
                 </div>
                 <button className="btn btn-sm btn-primary" onClick={() => handlePickupShift(shift.id)}>Claim</button>

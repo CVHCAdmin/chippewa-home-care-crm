@@ -81,6 +81,8 @@ const usesAdminGate = (router, method, p) => layerFor(router, method, p).route.s
     // 4. Who sees it.
     const sees = async (u) => (await call('get', '/available', { user: u })).body.some(s => s.id === os.id);
     check('picked caregiver sees it', await sees(X));
+    const card = (await call('get', '/available', { user: X })).body.find(s => s.id === os.id);
+    check('caregiver card gets the day as plain YYYY-MM-DD in `date`', card && card.date === v.day, card && card.date);
     check('caregiver not picked does NOT see it', !(await sees(Z)));
     r = await call('post', '/:id/claim', { params: { id: os.id }, user: Z });
     check('caregiver not picked cannot accept → 403', r.code === 403);
