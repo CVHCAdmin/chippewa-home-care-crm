@@ -377,16 +377,25 @@ router.post('/:id/claim', auth, async (req, res) => {
     // were already working. Expanding through the shared engine checks the occurrences that
     // actually fall on that date, recurring ones included, and skips cancelled ones (which
     // must NOT block a legitimate claim).
-    const shiftDate = shift.rows[0].shift_date;
+    //
+    // OVERNIGHT: comparing bare times broke on a shift that crosses midnight — Postgres
+    // OVERLAPS swaps an end earlier than the start, so 12:00 PM→8:00 AM was checked as
+    // 8:00 AM→12:00 PM and the evening/night/next morning went unchecked. Compare real
+    // timestamps instead: an end earlier than the start is the next day (the engine's
+    // own OVERNIGHT_WRAP rule). Visits the day before and after are included so an
+    // overnight on either side of midnight is caught. Touching ends don't conflict.
+    const day = ymd(shift.rows[0].shift_date);
+    const dayShift = (n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
     const conflicts = await db.query(`
       WITH ${SCHEDULE_OCCURRENCES_CTE('occ')}
       SELECT occ.schedule_id
       FROM occ
       JOIN schedules s ON s.id = occ.schedule_id
       WHERE occ.caregiver_id = $3
-        AND (occ.start_time, occ.end_time) OVERLAPS ($4::time, $5::time)
+        AND (occ.occ_date + occ.start_time) < ($6::date + $5::time + CASE WHEN $5::time < $4::time THEN INTERVAL '1 day' ELSE INTERVAL '0' END)
+        AND ($6::date + $4::time) < (occ.occ_date + occ.end_time + CASE WHEN occ.end_time < occ.start_time THEN INTERVAL '1 day' ELSE INTERVAL '0' END)
         AND COALESCE(s.status, '') != 'cancelled'
-    `, [shiftDate, shiftDate, caregiverId, shift.rows[0].start_time, shift.rows[0].end_time]);
+    `, [dayShift(-1), dayShift(1), caregiverId, shift.rows[0].start_time, shift.rows[0].end_time, day]);
 
     if (conflicts.rows.length > 0) {
       return res.status(400).json({ error: 'You have a conflicting shift at this time' });
