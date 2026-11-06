@@ -133,7 +133,7 @@ router.get('/:id/summary', verifyToken, requireAdmin, async (req, res) => {
       try { return await db.query(q, params); } catch(e) { console.error('[summary query error]', e.message); return { rows: [] }; }
     };
     const [userRes, earningsRes, clientsRes, recentShiftsRes, scheduleRes, ratesRes] = await Promise.all([
-      safeQuery(`SELECT u.*, cp.notes, cp.capabilities, cp.limitations FROM users u LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id WHERE u.id = $1`, [caregiverId]),
+      safeQuery(`SELECT u.*, cp.notes, cp.capabilities, cp.limitations, cp.evv_worker_id, cp.npi_number FROM users u LEFT JOIN caregiver_profiles cp ON cp.caregiver_id = u.id WHERE u.id = $1`, [caregiverId]),
       safeQuery(`SELECT COUNT(*) as total_shifts, COUNT(*) FILTER (WHERE is_complete = true) as completed_shifts,
         ROUND(COALESCE(SUM(CASE WHEN te.is_complete THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 ELSE 0 END), 0)::numeric, 2) as total_hours,
         ROUND(COALESCE(SUM(CASE WHEN te.is_complete THEN EXTRACT(EPOCH FROM (te.end_time - te.start_time))/3600.0 * COALESCE(u.default_pay_rate,0) ELSE 0 END), 0)::numeric, 2) as total_earnings,

@@ -113,13 +113,19 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
           isActive: form.isActive,
         })
       });
-      // Also save profile notes
-      await fetch(`${API_BASE_URL}/api/caregiver-profile/${caregiverId}`, {
-        method: 'PATCH', headers: hdr,
-        body: JSON.stringify({ notes: form.notes, capabilities: form.capabilities, limitations: form.limitations })
+      // Profile fields (notes, EVV Worker ID, NPI) live in caregiver_profiles.
+      const pr = await fetch(`${API_BASE_URL}/api/caregiver-profile/${caregiverId}`, {
+        method: 'PUT', headers: hdr,
+        body: JSON.stringify({
+          notes: form.notes, capabilities: form.capabilities, limitations: form.limitations,
+          evvWorkerId: form.evvWorkerId, npiNumber: form.npiNumber,
+        })
       });
-      if (r.ok) { toast('Saved successfully', 'success'); setEditing(false); load(); }
-      else { const d = await r.json(); toast(d.error || 'Save failed', 'error'); }
+      if (r.ok && pr.ok) { toast('Saved successfully', 'success'); setEditing(false); load(); }
+      else {
+        const d = await (r.ok ? pr : r).json().catch(() => ({}));
+        toast(`${r.ok ? 'Profile (EVV ID / notes) not saved: ' : ''}${d.error || 'Save failed'}`, 'error');
+      }
     } catch (e) { toast('Save failed', 'error'); }
     setSaving(false);
   };

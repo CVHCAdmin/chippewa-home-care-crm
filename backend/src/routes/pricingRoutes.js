@@ -174,21 +174,41 @@ router.get('/caregiver-profile/:caregiverId', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-router.put('/caregiver-profile/:caregiverId', verifyToken, async (req, res) => {
+// Served on BOTH PUT and PATCH: both admin screens (CaregiverDetail, CaregiverProfile)
+// call PATCH, but only PUT existed — so every profile save 404'd silently and notes,
+// capabilities, limitations and the EVV Worker ID never saved (Nov 2026, Alycia White).
+const updateCaregiverProfile = async (req, res) => {
   try {
     const { notes, capabilities, limitations, preferredHours, availableMon, availableTue, availableWed, availableThu, availableFri, availableSat, availableSun } = req.body;
+    // EVV Worker ID / NPI: if the field is sent, store exactly that (blank clears it);
+    // if it isn't sent, leave the stored value alone.
+    const has = (k) => Object.prototype.hasOwnProperty.call(req.body, k);
+    const clean = (v) => { const s = v == null ? '' : String(v).trim(); return s === '' ? null : s; };
+    // Billing identifiers — admins only (this route is otherwise open to any logged-in user).
+    const isAdmin = req.user?.role === 'admin';
+    const setEvv = isAdmin && has('evvWorkerId');
+    const setNpi = isAdmin && has('npiNumber');
+    // Caregivers with no profile row yet (e.g. new hires) — make one so the save lands.
+    await db.query(`INSERT INTO caregiver_profiles (caregiver_id) VALUES ($1) ON CONFLICT (caregiver_id) DO NOTHING`, [req.params.caregiverId]);
     const result = await db.query(
       `UPDATE caregiver_profiles SET notes=COALESCE($1,notes), capabilities=COALESCE($2,capabilities), limitations=COALESCE($3,limitations),
         preferred_hours=COALESCE($4,preferred_hours), available_mon=COALESCE($5,available_mon), available_tue=COALESCE($6,available_tue),
         available_wed=COALESCE($7,available_wed), available_thu=COALESCE($8,available_thu), available_fri=COALESCE($9,available_fri),
-        available_sat=COALESCE($10,available_sat), available_sun=COALESCE($11,available_sun), updated_at=NOW()
+        available_sat=COALESCE($10,available_sat), available_sun=COALESCE($11,available_sun),
+        evv_worker_id=CASE WHEN $13 THEN $14 ELSE evv_worker_id END,
+        npi_number=CASE WHEN $15 THEN $16 ELSE npi_number END,
+        updated_at=NOW()
        WHERE caregiver_id=$12 RETURNING *`,
-      [notes, capabilities, limitations, preferredHours, availableMon, availableTue, availableWed, availableThu, availableFri, availableSat, availableSun, req.params.caregiverId]
+      [notes, capabilities, limitations, preferredHours, availableMon, availableTue, availableWed, availableThu, availableFri, availableSat, availableSun, req.params.caregiverId,
+       setEvv, setEvv ? clean(req.body.evvWorkerId) : null, setNpi, setNpi ? clean(req.body.npiNumber) : null]
     );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Caregiver profile not found' });
     await auditLog(req.user.id, 'UPDATE', 'caregiver_profiles', req.params.caregiverId, null, result.rows[0]);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: error.message }); }
-});
+};
+router.put('/caregiver-profile/:caregiverId', verifyToken, updateCaregiverProfile);
+router.patch('/caregiver-profile/:caregiverId', verifyToken, updateCaregiverProfile);
 
 // ─── USER ADMIN ───────────────────────────────────────────────────────────────
 
