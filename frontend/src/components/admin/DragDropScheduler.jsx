@@ -151,7 +151,6 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
 
   function getShiftsForCell(caregiverId, dayIndex) {
     const dateStr  = weekDateStrs[dayIndex];
-    const cellDate = new Date(dateStr + 'T00:00:00');
 
     const results = [];
 
@@ -174,13 +173,14 @@ export default function SchedulerGrid({ token, onScheduleChange }) {
       if (s.day_of_week !== null && s.day_of_week !== undefined) {
         if (Number(s.day_of_week) !== dayIndex) return;
 
-        // Respect effective_date / start boundary
+        // Respect effective_date / start boundary. Compare calendar-date STRINGS:
+        // the API sends DATE columns as UTC-midnight ISO ("2026-10-22T00:00:00Z"),
+        // and new Date(...).setHours(0) in a Chicago browser turned that into
+        // Oct 21 — painting every pattern one day before it starts. The engine
+        // (billing/payroll) correctly had no visit that day, so a real punch on it
+        // showed as "not on schedule" (Amanda → Linda Wright, Wed 10/21/2026).
         const effectiveFrom = s.effective_date || s.anchor_date || s.created_at;
-        if (effectiveFrom) {
-          const from = new Date(effectiveFrom);
-          from.setHours(0,0,0,0);
-          if (cellDate < from) return;
-        }
+        if (effectiveFrom && dateStr < String(effectiveFrom).slice(0, 10)) return;
 
         // Respect end_date. end_date arrives as a full ISO timestamp
         // (e.g. 2026-07-04T05:00:00Z), so the old `end_date + 'T23:59:59'`

@@ -1248,13 +1248,9 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
     !!(schedule.suspended_from && ymd && ymd >= String(schedule.suspended_from).slice(0, 10));
 
   const isScheduleActiveForDate = (schedule, targetDate) => {
-    if (schedule.effective_date) {
-      const effDate = new Date(schedule.effective_date);
-      effDate.setHours(0,0,0,0);
-      const target = new Date(targetDate);
-      target.setHours(0,0,0,0);
-      if (target < effDate) return false;
-    }
+    // Compare calendar-date strings: effective_date arrives as UTC-midnight ISO,
+    // and Date math here showed every pattern one day before it started.
+    if (schedule.effective_date && toYMD(new Date(targetDate)) < String(schedule.effective_date).slice(0, 10)) return false;
     if (schedule.end_date) {
       // Editing a recurring shift end-dates the old row and creates a
       // replacement, so an ended pattern must stop expanding — it otherwise
