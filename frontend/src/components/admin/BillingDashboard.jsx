@@ -3,6 +3,7 @@ import { toast } from '../Toast';
 // src/components/admin/BillingDashboard.jsx
 // Complete billing system: Invoicing, A/R Aging, Authorizations, Claims, Payments
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { API_BASE_URL } from '../../config';
 import { cancelReasonLabel } from '../../utils/cancelReasons';
 
@@ -2101,8 +2102,10 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
       )}
 
       {/* INVOICE DETAIL MODAL - Professional Print Layout */}
-      {showInvoiceModal && selectedInvoice && (
-        <div className="modal active">
+      {/* Portaled to <body> so print CSS can display:none the whole app behind it.
+          (visibility:hidden alone kept the billing page's layout → blank trailing pages.) */}
+      {showInvoiceModal && selectedInvoice && createPortal(
+        <div className="modal active invoice-print-portal">
           <div className="modal-content modal-large" style={{ maxWidth: '900px' }}>
             {/* Screen-only header */}
             <div className="modal-header no-print">
@@ -2124,6 +2127,7 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
                     margin: 10mm;
                     size: letter;
                   }
+                  body > *:not(.invoice-print-portal) { display: none !important; }
                   body * { visibility: hidden; }
                   #printable-invoice, #printable-invoice * { visibility: visible; }
                   html, body { height: auto !important; overflow: visible !important; }
@@ -2573,7 +2577,8 @@ const handleDeleteInvoice = async (invoiceId, invoiceNumber) => {
               <button className="btn btn-secondary" onClick={() => setShowInvoiceModal(false)}>Close</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
