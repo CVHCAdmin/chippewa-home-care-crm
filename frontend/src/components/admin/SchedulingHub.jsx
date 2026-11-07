@@ -820,6 +820,18 @@ const SchedulingHub = ({ token }) => {
       showMsg('Turned down — the shift is available again'); loadOpenShifts();
     } catch (e) { showMsg('Failed: ' + e.message, 'error'); }
   };
+  const unfillOpenShift = async (shift) => {
+    const who = shift.claimed_by_first || 'the caregiver';
+    const ok = await confirm(`Unfill this shift? It comes off ${who}'s schedule, goes back to who had the visit before, and shows as available again.`, { danger: true });
+    if (!ok) return;
+    try {
+      const r = await api(`/api/open-shifts/${shift.id}/unfill`, { method: 'POST' });
+      showMsg(r && r.reopened === false
+        ? `Unfilled — taken off ${who}'s schedule. The schedule behind it has ended, so it was removed instead of reopened.`
+        : `Unfilled — taken off ${who}'s schedule and available again`);
+      loadOpenShifts();
+    } catch (e) { showMsg('Failed: ' + e.message, 'error'); }
+  };
   const removeOpenShift = async (shift) => {
     const ok = await confirm('Remove this from Available Shifts? Caregivers will no longer see it. The visit stays with the caregiver it was scheduled for.', { danger: true });
     if (!ok) return;
@@ -1412,6 +1424,9 @@ const SchedulingHub = ({ token }) => {
                       </>}
                       {(shift.status === 'open' || shift.status === 'claimed') && (
                         <button className='btn btn-sm btn-danger' onClick={() => removeOpenShift(shift)}>🗑 Remove</button>
+                      )}
+                      {shift.status === 'filled' && (
+                        <button className='btn btn-sm btn-secondary' onClick={() => unfillOpenShift(shift)}>↩ Unfill</button>
                       )}
                     </div>
                   </div>

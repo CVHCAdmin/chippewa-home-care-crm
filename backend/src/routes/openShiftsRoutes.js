@@ -18,7 +18,8 @@ function ensureColumns() {
     columnsReady = db.query(`
       ALTER TABLE open_shifts
         ADD COLUMN IF NOT EXISTS visible_to UUID[],
-        ADD COLUMN IF NOT EXISTS auto_assign BOOLEAN NOT NULL DEFAULT false
+        ADD COLUMN IF NOT EXISTS auto_assign BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS fill_undo JSONB
     `).catch(e => { columnsReady = null; throw e; });
   }
   return columnsReady;
@@ -39,22 +40,31 @@ const ymd = (d) => (typeof d === 'string' ? d : d.toISOString()).slice(0, 10);
 // reached the substitute's schedule, payroll or the invoice. Any OTHER cancellation
 // (client refused, in hospital…) means there is no visit to fill — refuse instead of
 // reporting a fill that didn't happen.
+//
+// RETURNS the undo record (stored as open_shifts.fill_undo) — exactly what this fill
+// changed and what was there before, so Unfill can put the visit back as it was
+// instead of guessing (a fill overwrites the prior override caregiver / one-time
+// caregiver, which nothing else remembers).
 async function assignShift(s, caregiverId, actorId) {
   const day = ymd(s.shift_date);
   if (!s.schedule_id) {
     // No schedule behind it (e.g. coverage after a caregiver was removed from a client —
     // an override on a suspended pattern never generates): the fill is its own visit.
-    await db.query(`
+    const ins = await db.query(`
       INSERT INTO schedules (client_id, caregiver_id, schedule_type, date, start_time, end_time, notes, status)
       VALUES ($1, $2, 'one-time', $3, $4, $5, $6, 'scheduled')
+      RETURNING id
     `, [s.client_id, caregiverId, day, s.start_time, s.end_time, s.notes || null]);
-    return;
+    return { kind: 'inserted_schedule', schedule_id: ins.rows[0].id };
   }
-  const sched = await db.query(`SELECT day_of_week FROM schedules WHERE id = $1`, [s.schedule_id]);
+  const sched = await db.query(`SELECT day_of_week, caregiver_id, status FROM schedules WHERE id = $1`, [s.schedule_id]);
   const isRecurring = sched.rows.length > 0 && sched.rows[0].day_of_week !== null;
   const exc = (await db.query(
-    `SELECT id, exception_type, cancel_reason FROM schedule_exceptions WHERE schedule_id = $1 AND exception_date = $2`,
+    `SELECT * FROM schedule_exceptions WHERE schedule_id = $1 AND exception_date = $2`,
     [s.schedule_id, day])).rows[0];
+  const excPrior = exc ? {
+    exception_type: exc.exception_type, override_caregiver_id: exc.override_caregiver_id, cancel_reason: exc.cancel_reason,
+  } : null;
   const isCallout = exc && exc.exception_type === 'cancelled' && exc.cancel_reason === 'caregiver_callout';
   if (exc && exc.exception_type === 'cancelled' && !isCallout) {
     const err = new Error('This visit was cancelled on the schedule — there is no visit to fill.');
@@ -66,20 +76,27 @@ async function assignShift(s, caregiverId, actorId) {
       await db.query(
         `UPDATE schedule_exceptions SET exception_type = 'modified', override_caregiver_id = $1, cancel_reason = NULL WHERE id = $2`,
         [caregiverId, exc.id]);
-    } else {
-      await db.query(`
-        INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_caregiver_id, created_by)
-        VALUES ($1, $2, 'modified', $3, $4)
-        ON CONFLICT (schedule_id, exception_date)
-        DO UPDATE SET override_caregiver_id = EXCLUDED.override_caregiver_id
-        WHERE schedule_exceptions.exception_type <> 'cancelled'
-      `, [s.schedule_id, day, caregiverId, actorId]);
+      return { kind: 'exception', exception_id: exc.id, prior: excPrior };
     }
-  } else {
-    if (isCallout) await db.query(`DELETE FROM schedule_exceptions WHERE id = $1`, [exc.id]);
-    await db.query(`UPDATE schedules SET caregiver_id = $1, status = 'scheduled', updated_at = NOW() WHERE id = $2`,
-      [caregiverId, s.schedule_id]);
+    const up = await db.query(`
+      INSERT INTO schedule_exceptions (schedule_id, exception_date, exception_type, override_caregiver_id, created_by)
+      VALUES ($1, $2, 'modified', $3, $4)
+      ON CONFLICT (schedule_id, exception_date)
+      DO UPDATE SET override_caregiver_id = EXCLUDED.override_caregiver_id
+      WHERE schedule_exceptions.exception_type <> 'cancelled'
+      RETURNING id
+    `, [s.schedule_id, day, caregiverId, actorId]);
+    // prior null = this fill created the exception; Unfill deletes it.
+    return { kind: 'exception', exception_id: up.rows[0]?.id || exc?.id || null, prior: excPrior };
   }
+  if (isCallout) await db.query(`DELETE FROM schedule_exceptions WHERE id = $1`, [exc.id]);
+  await db.query(`UPDATE schedules SET caregiver_id = $1, status = 'scheduled', updated_at = NOW() WHERE id = $2`,
+    [caregiverId, s.schedule_id]);
+  return {
+    kind: 'one_time', schedule_id: s.schedule_id,
+    prior_caregiver_id: sched.rows[0]?.caregiver_id || null, prior_status: sched.rows[0]?.status || null,
+    deleted_exception: isCallout ? exc : null,
+  };
 }
 
 const clientShort = (first, last) => `${first || ''} ${String(last || '').charAt(0)}.`.trim();
@@ -158,13 +175,14 @@ router.post('/:id/smart-fill', auth, requireAdmin, async (req, res) => {
       authWarnings = authCheck.warnings || [];
     } catch (e) { console.error('[openShifts smart-fill] auth recheck failed:', e.message); }
 
-    await assignShift(s, caregiverId, req.user.id);
+    await ensureColumns();
+    const undo = await assignShift(s, caregiverId, req.user.id);
     await db.query(`
       UPDATE open_shifts
         SET status = 'filled', claimed_by = $1, claimed_at = NOW(),
-            approved_by = $2, approved_at = NOW()
+            approved_by = $2, approved_at = NOW(), fill_undo = $4::jsonb
       WHERE id = $3
-    `, [caregiverId, req.user.id, req.params.id]);
+    `, [caregiverId, req.user.id, req.params.id, JSON.stringify(undo)]);
 
     // Notify the assigned caregiver
     try {
@@ -426,9 +444,9 @@ router.post('/:id/claim', auth, async (req, res) => {
     // The office offered it on "first to accept gets it": put it on her schedule now.
     if (os.auto_assign) {
       try {
-        await assignShift(os, caregiverId, os.created_by || caregiverId);
-        await db.query(`UPDATE open_shifts SET status = 'filled', approved_by = $1, approved_at = NOW() WHERE id = $2`,
-          [os.created_by || null, id]);
+        const undo = await assignShift(os, caregiverId, os.created_by || caregiverId);
+        await db.query(`UPDATE open_shifts SET status = 'filled', approved_by = $1, approved_at = NOW(), fill_undo = $3::jsonb WHERE id = $2`,
+          [os.created_by || null, id, JSON.stringify(undo)]);
         await db.query(`UPDATE open_shift_claims SET status = 'approved' WHERE open_shift_id = $1 AND caregiver_id = $2`, [id, caregiverId]);
         await notifyAdmins('open_shift_filled', `Open shift filled: ${name}`, `${name} accepted the open shift ${what}. It is on their schedule now.`);
         return res.json({ success: true, assigned: true, message: `It's yours — ${what} is on your schedule.` });
@@ -481,13 +499,14 @@ router.post('/:id/approve', auth, requireAdmin, async (req, res) => {
 
     // Put the one visit on the claimer (see assignShift: per-occurrence for a recurring
     // pattern, and a called-out day comes back on the new caregiver).
-    await assignShift(s, s.claimed_by, req.user.id);
+    await ensureColumns();
+    const undo = await assignShift(s, s.claimed_by, req.user.id);
 
     // Update open shift
     await db.query(`
-      UPDATE open_shifts SET status = 'filled', approved_by = $1, approved_at = NOW()
+      UPDATE open_shifts SET status = 'filled', approved_by = $1, approved_at = NOW(), fill_undo = $3::jsonb
       WHERE id = $2
-    `, [req.user.id, id]);
+    `, [req.user.id, id, JSON.stringify(undo)]);
 
     // Update claim
     await db.query(`
@@ -497,6 +516,129 @@ router.post('/:id/approve', auth, requireAdmin, async (req, res) => {
     res.json({ success: true, authWarnings: approveAuthWarnings });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// Unfill: take a FILLED shift back off the caregiver and make it available again.
+// Reverses exactly what the fill did to the schedule (fill_undo), so the visit returns
+// to whoever had it before (the original caregiver for an office post / time-off
+// cover, cancelled again for a call-out, gone for a schedule-less incident cover).
+//
+// Refused when the visit is in the past or the caregiver has already clocked in on it
+// — that is real worked time; fix it through the schedule / payroll instead.
+//
+// Fills from before fill_undo existed (2026-11-07) are reversed by matching what the
+// fill is known to write; a case that can't be told apart is refused, never guessed.
+router.post('/:id/unfill', auth, requireAdmin, async (req, res) => {
+  await ensureColumns();
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(`SELECT * FROM open_shifts WHERE id = $1 FOR UPDATE`, [req.params.id]);
+    if (r.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Open shift not found' }); }
+    const s = r.rows[0];
+    const fail = async (status, error) => { await client.query('ROLLBACK'); return res.status(status).json({ error }); };
+    if (s.status !== 'filled') return fail(409, `This shift is ${s.status}, not filled.`);
+    const day = ymd(s.shift_date);
+
+    const today = (await client.query(`SELECT (NOW() AT TIME ZONE 'America/Chicago')::date::text AS d`)).rows[0].d;
+    if (day < today) return fail(409, 'This visit is in the past. Change it on the schedule instead.');
+
+    if (s.claimed_by) {
+      const worked = await client.query(`
+        SELECT id FROM time_entries
+         WHERE caregiver_id = $1 AND client_id = $2
+           AND (start_time AT TIME ZONE 'America/Chicago')::date = $3::date
+         LIMIT 1`, [s.claimed_by, s.client_id, day]);
+      if (worked.rows.length) return fail(409, 'The caregiver already clocked in for this visit, so it can\'t be unfilled. Fix it through the schedule or payroll.');
+    }
+
+    const u = s.fill_undo;
+    if (u) {
+      if (u.kind === 'inserted_schedule') {
+        await client.query(`UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1`, [u.schedule_id]);
+      } else if (u.kind === 'exception') {
+        if (!u.prior) {
+          await client.query(`DELETE FROM schedule_exceptions WHERE id = $1`, [u.exception_id]);
+        } else {
+          await client.query(
+            `UPDATE schedule_exceptions SET exception_type = $2, override_caregiver_id = $3, cancel_reason = $4 WHERE id = $1`,
+            [u.exception_id, u.prior.exception_type, u.prior.override_caregiver_id, u.prior.cancel_reason]);
+        }
+      } else if (u.kind === 'one_time') {
+        if (!u.prior_caregiver_id) return fail(409, 'Can\'t tell who had this visit before. Change it on the schedule instead.');
+        await client.query(`UPDATE schedules SET caregiver_id = $2, status = COALESCE($3, status), updated_at = NOW() WHERE id = $1`,
+          [u.schedule_id, u.prior_caregiver_id, u.prior_status]);
+        const e = u.deleted_exception;
+        if (e) {
+          await client.query(`
+            INSERT INTO schedule_exceptions (id, schedule_id, exception_date, exception_type, override_start_time, override_end_time,
+                                             override_caregiver_id, override_client_id, override_notes, created_by, cancel_reason)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (schedule_id, exception_date) DO NOTHING`,
+            [e.id, e.schedule_id, ymd(e.exception_date), e.exception_type, e.override_start_time, e.override_end_time,
+             e.override_caregiver_id, e.override_client_id, e.override_notes, e.created_by, e.cancel_reason]);
+        }
+      }
+    } else if (!s.schedule_id) {
+      // Legacy schedule-less fill: the one-time visit the fill created.
+      const v = await client.query(`
+        SELECT id FROM schedules
+         WHERE client_id = $1 AND caregiver_id = $2 AND schedule_type = 'one-time' AND date = $3::date
+           AND start_time = $4 AND end_time = $5 AND is_active = true`,
+        [s.client_id, s.claimed_by, day, s.start_time, s.end_time]);
+      if (v.rows.length !== 1) return fail(409, 'Can\'t find the one visit this fill created. Change it on the schedule instead.');
+      await client.query(`UPDATE schedules SET is_active = false, updated_at = NOW() WHERE id = $1`, [v.rows[0].id]);
+    } else {
+      const sched = (await client.query(`SELECT day_of_week FROM schedules WHERE id = $1`, [s.schedule_id])).rows[0];
+      if (!sched || sched.day_of_week === null) {
+        return fail(409, 'Can\'t tell who had this visit before it was filled. Change it on the schedule instead.');
+      }
+      const exc = (await client.query(
+        `SELECT * FROM schedule_exceptions WHERE schedule_id = $1 AND exception_date = $2::date`, [s.schedule_id, day])).rows[0];
+      if (exc && exc.exception_type === 'modified' && exc.override_caregiver_id === s.claimed_by) {
+        const wasCallout = s.source_absence_id && /called out/i.test(s.notes || '');
+        if (wasCallout) {
+          await client.query(`UPDATE schedule_exceptions SET exception_type = 'cancelled', override_caregiver_id = NULL, cancel_reason = 'caregiver_callout' WHERE id = $1`, [exc.id]);
+        } else if (!exc.override_start_time && !exc.override_end_time && !exc.override_client_id && !exc.override_notes) {
+          await client.query(`DELETE FROM schedule_exceptions WHERE id = $1`, [exc.id]);
+        } else {
+          // The day had its own changes (times / notes) before: keep them, drop only the caregiver.
+          await client.query(`UPDATE schedule_exceptions SET override_caregiver_id = NULL WHERE id = $1`, [exc.id]);
+        }
+      }
+      // No matching override = the visit isn't on that caregiver any more; just reopen.
+    }
+
+    // If the schedule behind it has since ended (e.g. its caregiver was deactivated,
+    // which ends their patterns) there is no visit to offer any more — reopening would
+    // let someone "take" a shift that exists nowhere. Remove it instead.
+    let reopened = true;
+    if (s.schedule_id) {
+      const live = (await client.query(`
+        SELECT 1 FROM schedules WHERE id = $1 AND is_active = true
+           AND (end_date IS NULL OR end_date >= $2::date)
+           AND (suspended_from IS NULL OR suspended_from > $2::date)`, [s.schedule_id, day])).rows.length > 0;
+      reopened = live;
+    }
+    await client.query(`
+      UPDATE open_shifts SET status = $2, claimed_by = NULL, claimed_at = NULL,
+                             approved_by = NULL, approved_at = NULL, fill_undo = NULL
+       WHERE id = $1`, [s.id, reopened ? 'open' : 'cancelled']);
+    if (s.claimed_by) {
+      await client.query(`
+        UPDATE open_shift_claims SET status = 'rejected',
+               notes = CONCAT_WS(' · ', NULLIF(notes, ''), 'Unfilled by the office')
+         WHERE open_shift_id = $1 AND caregiver_id = $2 AND status IN ('approved', 'pending')`, [s.id, s.claimed_by]);
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, reopened });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[openShifts unfill]', error);
+    res.status(error.status || 500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 });
 

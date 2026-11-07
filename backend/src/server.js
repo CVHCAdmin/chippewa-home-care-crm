@@ -130,6 +130,9 @@ const portalLoginLimiter = rateLimit({
 app.use('/api/client-portal/login', portalLoginLimiter);
 
 app.use(auditLogger(db.pool));
+// View As can look but never save (after the audit logger, so a refused attempt is
+// still recorded). See middleware/impersonationReadOnly.js.
+app.use(require('./middleware/impersonationReadOnly'));
 
 // ============ HEALTH CHECK ============
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
