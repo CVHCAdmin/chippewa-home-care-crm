@@ -5,6 +5,7 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../../config';
 import { formatDate } from '../../utils/datetime';
 import AddCaregiverModal from './AddCaregiverModal';
+import { deactivationWarning } from './deactivationWarning';
 import CaregiverDetail from './CaregiverDetail';
 
 // Mobile-friendly caregiver card
@@ -155,7 +156,13 @@ const CaregiverManagement = ({ token, onViewProfile, onViewHistory }) => {
   const handleToggleActive = async (caregiver) => {
     const newStatus = !caregiver.is_active;
     const action = newStatus ? 'reactivate' : 'deactivate';
-    if (!await confirm(`${newStatus ? 'Reactivate' : 'Deactivate'} ${caregiver.first_name} ${caregiver.last_name}?${!newStatus ? ' They will no longer appear on schedules.' : ''}`, { danger: !newStatus })) return;
+    const fullName = `${caregiver.first_name} ${caregiver.last_name}`;
+    if (newStatus) {
+      if (!await confirm(`Reactivate ${fullName}?`)) return;
+    } else {
+      const w = await deactivationWarning(caregiver.id, fullName, token);
+      if (!await confirm(w.message, { danger: true, title: w.hasProblems ? 'Other caregivers are affected' : 'Deactivate caregiver', confirmLabel: 'Deactivate' })) return;
+    }
     try {
       const response = await fetch(`${API_BASE_URL}/api/caregivers/${caregiver.id}`, {
         method: 'PUT',

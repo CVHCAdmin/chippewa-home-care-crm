@@ -61,6 +61,80 @@ router.get('/available', verifyToken, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// What deactivating a caregiver would break, beyond their own visits ending.
+// Deactivation (below) turns off their not-yet-started patterns / future one-time
+// shifts and ends running patterns as of today. A day on one of those patterns that
+// was HANDED to someone else (a 'modified' override — e.g. an open shift another
+// caregiver took) lives on that pattern, so it silently disappears from the other
+// caregiver's schedule too. On 2026-11-07 deactivating Christine wiped three days
+// Amanda had taken, and nobody was told. The same rule as the UPDATEs below, so the
+// warning matches exactly what will happen.
+const DEACTIVATION_TARGETS = `
+  s.caregiver_id = $1 AND s.is_active = true
+  AND ( (s.day_of_week IS NULL AND s.date >= $2::date)
+     OR (s.day_of_week IS NOT NULL AND (s.end_date IS NULL OR s.end_date > $2::date)) )`;
+async function deactivationImpact(caregiverId, today) {
+  // Handed-off days that stop existing: on a pattern being turned off (one-time, or not
+  // started yet) every day from today; on a running pattern ended today, days after today.
+  const handedOff = await db.query(`
+    SELECT to_char(se.exception_date, 'YYYY-MM-DD') AS date,
+           COALESCE(se.override_start_time, s.start_time)::text AS start_time,
+           COALESCE(se.override_end_time, s.end_time)::text AS end_time,
+           c.first_name || ' ' || c.last_name AS client,
+           u.first_name || ' ' || u.last_name AS covering_caregiver
+      FROM schedules s
+      JOIN schedule_exceptions se ON se.schedule_id = s.id
+      JOIN users u ON u.id = se.override_caregiver_id
+      JOIN clients c ON c.id = COALESCE(se.override_client_id, s.client_id)
+     WHERE ${DEACTIVATION_TARGETS}
+       AND se.exception_type = 'modified'
+       AND se.override_caregiver_id <> $1
+       AND (s.suspended_from IS NULL OR se.exception_date < s.suspended_from)
+       AND se.exception_date >= $2::date
+       -- a running pattern (not one being turned off) is ended AS OF today: today survives
+       AND NOT (s.day_of_week IS NOT NULL
+                AND NOT (s.effective_date IS NOT NULL AND s.effective_date > $2::date)
+                AND se.exception_date = $2::date)
+     ORDER BY se.exception_date, 2`, [caregiverId, today]);
+  // Open shifts still offered for a visit on those patterns — nobody could really work them.
+  const openShifts = await db.query(`
+    SELECT to_char(os.shift_date, 'YYYY-MM-DD') AS date, os.start_time::text, os.end_time::text,
+           c.first_name || ' ' || c.last_name AS client, os.status
+      FROM open_shifts os
+      JOIN schedules s ON s.id = os.schedule_id
+      JOIN clients c ON c.id = os.client_id
+     WHERE ${DEACTIVATION_TARGETS}
+       AND os.status IN ('open', 'claimed')
+       AND os.shift_date > $2::date
+     ORDER BY os.shift_date, os.start_time`, [caregiverId, today]);
+  // Days THEY cover on someone else's pattern: not ended by deactivation, so the visit
+  // stays on the schedule under a caregiver who no longer works here.
+  const covering = await db.query(`
+    SELECT to_char(se.exception_date, 'YYYY-MM-DD') AS date,
+           COALESCE(se.override_start_time, s.start_time)::text AS start_time,
+           COALESCE(se.override_end_time, s.end_time)::text AS end_time,
+           c.first_name || ' ' || c.last_name AS client
+      FROM schedule_exceptions se
+      JOIN schedules s ON s.id = se.schedule_id AND s.is_active = true
+      JOIN clients c ON c.id = COALESCE(se.override_client_id, s.client_id)
+     WHERE se.override_caregiver_id = $1 AND s.caregiver_id <> $1
+       AND se.exception_type = 'modified'
+       AND se.exception_date >= $2::date
+       AND (s.end_date IS NULL OR se.exception_date <= s.end_date)
+       AND (s.suspended_from IS NULL OR se.exception_date < s.suspended_from)
+     ORDER BY se.exception_date, 2`, [caregiverId, today]);
+  return { handedOff: handedOff.rows, openShifts: openShifts.rows, covering: covering.rows };
+}
+
+// GET /api/caregivers/:id/deactivation-impact — read-only preview for the warning.
+router.get('/:id/deactivation-impact', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const today = (await db.query(
+      `SELECT to_char((NOW() AT TIME ZONE 'America/Chicago')::date,'YYYY-MM-DD') AS d`)).rows[0].d;
+    res.json(await deactivationImpact(req.params.id, today));
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // PUT /api/caregivers/:id - Update caregiver info
 router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
   try {

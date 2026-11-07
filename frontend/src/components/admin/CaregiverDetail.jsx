@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../../config';
 import { toast } from '../Toast';
+import { confirm } from '../ConfirmModal';
+import { deactivationWarning } from './deactivationWarning';
 import EligibilityCard from './EligibilityCard';
 
 const fmt$ = (n) => n != null ? `$${Number(parseFloat(n||0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}` : '—';
@@ -157,7 +159,11 @@ export default function CaregiverDetail({ caregiverId, token, onBack, onHireComp
   };
 
   const deactivate = async () => {
-    if (!window.confirm(`${form.isActive ? 'Deactivate' : 'Reactivate'} this caregiver?`)) return;
+    if (form.isActive) {
+      const name = `${form.firstName || ''} ${form.lastName || ''}`.trim() || 'this caregiver';
+      const w = await deactivationWarning(caregiverId, name, token);
+      if (!await confirm(w.message, { danger: true, title: w.hasProblems ? 'Other caregivers are affected' : 'Deactivate caregiver', confirmLabel: 'Deactivate' })) return;
+    } else if (!await confirm('Reactivate this caregiver?')) return;
     const r = await fetch(`${API_BASE_URL}/api/caregivers/${caregiverId}`, {
       method: 'PUT', headers: hdr, body: JSON.stringify({ isActive: !form.isActive })
     });

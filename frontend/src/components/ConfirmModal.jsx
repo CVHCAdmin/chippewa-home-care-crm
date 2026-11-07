@@ -52,7 +52,8 @@ export const ConfirmModal = () => {
           <span style={{ fontSize: '1.4rem' }}>{danger ? '🗑️' : '❓'}</span>
           <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#111827' }}>{title}</h3>
         </div>
-        <p style={{ margin: '0 0 1.5rem 0', color: '#6B7280', lineHeight: '1.5', fontSize: '0.95rem' }}>
+        <p style={{ margin: '0 0 1.5rem 0', color: '#6B7280', lineHeight: '1.5', fontSize: '0.95rem',
+                    whiteSpace: 'pre-line', maxHeight: '60vh', overflowY: 'auto' }}>
           {message}
         </p>
         <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
