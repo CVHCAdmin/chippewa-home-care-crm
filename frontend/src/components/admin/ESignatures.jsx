@@ -72,6 +72,26 @@ export default function ESignatures({ token }) {
     setBusy(false);
   };
 
+  // "Send again" — a fresh request for someone who already signed (e.g. a corrected BID).
+  const sendAgain = async (p) => {
+    if (!window.confirm(`Send "${current.title}" to ${p.first_name} ${p.last_name} again?
+
+They'll get a new link and sign a new copy. The copy they already signed is kept.`)) return;
+    setBusy(true); setMsg(null); setResults(null);
+    try {
+      const r = await fetch(`${api}/send`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: current.id, userIds: [p.user_id], again: true }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Send failed');
+      const res = (j.results || [])[0] || {};
+      if (res.skipped || res.error) throw new Error(res.skipped || res.error);
+      setMsg(res.emailSent
+        ? { type: 'success', text: `Emailed a new link to ${p.first_name}.` }
+        : { type: 'warn', text: `Email not sent: ${res.emailError || 'unknown'}. Link to send yourself: ${res.url}` });
+      await loadPeople(current); await loadTemplates(current.id);
+    } catch (e) { setMsg({ type: 'error', text: e.message }); }
+    setBusy(false);
+  };
+
   const act = async (requestId, action) => {
     setBusy(true); setMsg(null);
     try {
@@ -179,9 +199,16 @@ export default function ESignatures({ token }) {
                       {p.sent_at && <div>Sent {fmt(p.sent_at)}{p.reminder_count ? ` · ${p.reminder_count} reminder${p.reminder_count > 1 ? 's' : ''}` : ''}</div>}
                       {p.opened_at && <div>Opened {fmt(p.opened_at)}</div>}
                       {p.signed_at && <div>Signed {fmt(p.signed_at)} as "{p.signer_typed_name}"</div>}
+                      {p.status !== 'signed' && p.last_signed_at && <div>Previously signed {fmt(p.last_signed_at)}</div>}
                     </td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      {p.status === 'signed' && <button className="btn btn-secondary" onClick={() => openPdf(`${api}/requests/${p.request_id}/signed.pdf`)}>View signed</button>}
+                      {p.status === 'signed' && <>
+                        <button className="btn btn-secondary" onClick={() => openPdf(`${api}/requests/${p.request_id}/signed.pdf`)}>View signed</button>{' '}
+                        <button className="btn btn-secondary" disabled={busy || !current.is_active} onClick={() => sendAgain(p)}>Send again</button>
+                      </>}
+                      {p.status !== 'signed' && p.last_signed_request_id && <>
+                        <button className="btn btn-secondary" onClick={() => openPdf(`${api}/requests/${p.last_signed_request_id}/signed.pdf`)}>View last signed</button>{' '}
+                      </>}
                       {(p.status === 'sent' || p.status === 'opened') && <>
                         <button className="btn btn-secondary" disabled={busy} onClick={() => act(p.request_id, 'remind')}>Remind</button>{' '}
                         <button className="btn btn-secondary" disabled={busy} onClick={() => act(p.request_id, 'cancel')}>Cancel</button>

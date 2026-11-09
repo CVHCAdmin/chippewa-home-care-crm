@@ -220,8 +220,8 @@ router.get('/templates', async (req, res) => {
   try {
     const r = await db.query(
       `SELECT st.id, st.kind, st.title, st.version, st.description, st.is_active, st.created_at,
-              COUNT(sr.id) FILTER (WHERE sr.status <> 'cancelled')::int AS sent,
-              COUNT(sr.id) FILTER (WHERE sr.status = 'signed')::int AS signed,
+              COUNT(DISTINCT sr.user_id) FILTER (WHERE sr.status <> 'cancelled')::int AS sent,
+              COUNT(DISTINCT sr.user_id) FILTER (WHERE sr.status = 'signed')::int AS signed,
               COUNT(sr.id) FILTER (WHERE sr.status = 'opened')::int AS opened
          FROM sign_templates st LEFT JOIN sign_requests sr ON sr.template_id = st.id
         GROUP BY st.id ORDER BY st.is_active DESC, st.kind = 'bid' DESC, st.created_at DESC`);
@@ -267,29 +267,41 @@ router.get('/templates/:id/document.pdf', async (req, res) => {
   } catch (e) { sendErr(res, e, 'template pdf'); }
 });
 
-// GET /templates/:id/people — every active staff member and where they stand on this document
+// GET /templates/:id/people — every active staff member and where they stand on this document.
+// Shows the NEWEST request (so a "Send again" that is still unsigned shows as Sent, with
+// Remind/Cancel), plus the most recent signed copy in last_signed_* so it stays viewable.
 router.get('/templates/:id/people', async (req, res) => {
   try {
     const r = await db.query(
       `SELECT u.id AS user_id, u.first_name, u.last_name, u.email, u.role,
               sr.id AS request_id, sr.status, sr.sent_at, sr.opened_at, sr.signed_at, sr.reminder_count,
-              sr.last_reminded_at, sr.expires_at, sr.disclosures_yes, sr.signer_typed_name
+              sr.last_reminded_at, sr.expires_at, sr.disclosures_yes, sr.signer_typed_name,
+              ls.id AS last_signed_request_id, ls.signed_at AS last_signed_at
          FROM users u
          LEFT JOIN LATERAL (
            SELECT * FROM sign_requests x
             WHERE x.template_id = $1 AND x.user_id = u.id AND x.status <> 'cancelled'
-            ORDER BY (x.status = 'signed') DESC, x.created_at DESC LIMIT 1
+            ORDER BY x.created_at DESC LIMIT 1
          ) sr ON true
+         LEFT JOIN LATERAL (
+           SELECT y.id, y.signed_at FROM sign_requests y
+            WHERE y.template_id = $1 AND y.user_id = u.id AND y.status = 'signed'
+            ORDER BY y.signed_at DESC LIMIT 1
+         ) ls ON true
         WHERE u.is_active = true AND u.role IN ('caregiver', 'admin')
         ORDER BY (sr.status = 'signed') NULLS FIRST, u.last_name, u.first_name`, [req.params.id]);
     res.json(r.rows);
   } catch (e) { sendErr(res, e, 'people'); }
 });
 
-// POST /send { templateId, userIds[] } — email each person their own signing link
+// POST /send { templateId, userIds[], again? } — email each person their own signing link.
+// again: true = "Send again" — a person who already signed gets a fresh request (the earlier
+// signed copy is kept; the newest signed copy is the one used going forward). Someone with an
+// unsigned request still open is never sent a second one — use Remind.
 router.post('/send', async (req, res) => {
   try {
     const { templateId, userIds } = req.body || {};
+    const again = req.body?.again === true;
     if (!Array.isArray(userIds) || !userIds.length) throw httpError(400, 'Pick at least one person.');
     const t = await db.query(`SELECT * FROM sign_templates WHERE id = $1 AND is_active = true`, [templateId]);
     const template = t.rows[0];
@@ -301,8 +313,8 @@ router.post('/send', async (req, res) => {
       const name = `${u.first_name} ${u.last_name}`.trim();
       const existing = await db.query(
         `SELECT status FROM sign_requests WHERE template_id = $1 AND user_id = $2 AND status IN ('sent','opened','signed')
-          ORDER BY (status = 'signed') DESC LIMIT 1`, [template.id, u.id]);
-      if (existing.rows[0]) { results.push({ userId: u.id, name, skipped: existing.rows[0].status === 'signed' ? 'already signed' : 'already sent — use Remind' }); continue; }
+          ORDER BY (status = 'signed') ASC LIMIT 1`, [template.id, u.id]);
+      if (existing.rows[0] && !(again && existing.rows[0].status === 'signed')) { results.push({ userId: u.id, name, skipped: existing.rows[0].status === 'signed' ? 'already signed' : 'already sent — use Remind' }); continue; }
       if (!u.email || !/^\S+@\S+\.\S+$/.test(u.email)) { results.push({ userId: u.id, name, error: 'no valid email on file' }); continue; }
       const ins = await db.query(
         `INSERT INTO sign_requests (template_id, user_id, token, email_to, expires_at, created_by)
@@ -314,7 +326,7 @@ router.post('/send', async (req, res) => {
       results.push({ userId: u.id, name, requestId: ins.rows[0].id, emailSent, emailError, url: signUrl(ins.rows[0].token) });
     }
     await auditLog(req.user.id, 'SEND', 'sign_templates', template.id, null,
-      { title: template.title, sent: results.filter(r => r.requestId).length, skipped: results.filter(r => !r.requestId).length });
+      { title: template.title, again, sent: results.filter(r => r.requestId).length, skipped: results.filter(r => !r.requestId).length });
     res.json({ results });
   } catch (e) { sendErr(res, e, 'send'); }
 });
