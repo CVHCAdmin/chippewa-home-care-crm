@@ -113,7 +113,11 @@ const ScheduleCalendar = ({ token }) => {
     schedules.forEach(schedule => {
       // One-time schedules
       if (schedule.date) {
-        if (schedule.date.split('T')[0] === dateStr) results.push(schedule);
+        if (schedule.date.split('T')[0] === dateStr) {
+          // One-time rows can be cancelled via exception (portal cancel / client unavailable) — match the server engine.
+          const exc = (schedule.exceptions || []).find(e => (e.exception_date || '').slice(0, 10) === dateStr);
+          if (!(exc && exc.exception_type === 'cancelled')) results.push(schedule);
+        }
         return;
       }
       // Recurring schedules

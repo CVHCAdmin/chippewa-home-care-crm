@@ -304,17 +304,18 @@ app.get('/api/schedules-all', verifyToken, async (req, res) => {
        ORDER BY s.day_of_week, s.date, s.start_time`
     );
 
-    // Also fetch all exceptions for recurring schedules
-    const recurringIds = result.rows
-      .filter(s => s.day_of_week !== null && s.day_of_week !== undefined)
-      .map(s => s.id);
+    // Also fetch the exceptions for every schedule — one-time rows included. A one-time
+    // shift can carry a 'cancelled' exception (portal cancel, client unavailable); when
+    // only recurring rows got theirs, the grid showed a shift that the client portal,
+    // billing and payroll all treated as cancelled.
+    const scheduleIds = result.rows.map(s => s.id);
 
     let exceptions = [];
-    if (recurringIds.length > 0) {
+    if (scheduleIds.length > 0) {
       try {
         const excResult = await db.query(
           `SELECT * FROM schedule_exceptions WHERE schedule_id = ANY($1) ORDER BY exception_date`,
-          [recurringIds]
+          [scheduleIds]
         );
         exceptions = excResult.rows;
       } catch (e) {
@@ -456,9 +457,30 @@ app.put('/api/schedules-all/:scheduleId', verifyToken, async (req, res) => {
 
     // ── One-time shift: a single occurrence, so there is nothing to scope ──
     if (!isRecurring) {
+      // Moving a one-time shift to a new date or time is a RESCHEDULE, so a cancellation
+      // left on the row no longer applies. Without this the office could re-time a shift
+      // the family had cancelled in the portal ("we need 8pm–8am instead") and the old
+      // 'cancelled' exception stayed attached: the shift then existed on the grid but not
+      // in the client portal, billing or payroll.
+      await client.query('BEGIN');
       const row = await editInPlace();
-      db.auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, before, row);
-      return res.json({ ...row, _scope: 'one-time' });
+      const ymd = d => (d instanceof Date ? d.toISOString().slice(0, 10) : (d ? String(d).slice(0, 10) : null));
+      const rescheduled = !!row && (
+        ymd(row.date) !== ymd(before.date) ||
+        String(row.start_time) !== String(before.start_time) ||
+        String(row.end_time) !== String(before.end_time)
+      );
+      let cleared = [];
+      if (rescheduled) {
+        cleared = (await client.query(
+          `DELETE FROM schedule_exceptions WHERE schedule_id = $1 AND exception_type = 'cancelled' RETURNING *`,
+          [scheduleId]
+        )).rows;
+      }
+      await client.query('COMMIT');
+      db.auditLog(req.user.id, 'UPDATE', 'schedules', scheduleId, before,
+        cleared.length ? { ...row, _clearedCancellations: cleared } : row);
+      return res.json({ ...row, _scope: 'one-time', _clearedCancellation: cleared.length > 0 });
     }
 
     // A recurring edit MUST say what it means. No default — see the note above.

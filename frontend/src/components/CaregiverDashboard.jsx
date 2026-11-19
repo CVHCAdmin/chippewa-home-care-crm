@@ -1312,7 +1312,12 @@ const CaregiverDashboard = ({ user, token, onLogout }) => {
       .map(s => applyExceptionForDate(s, localTodayStr))
       .filter(Boolean);
     // Get one-time schedules for today's date
-    const oneTime = schedules.filter(s => s.date && s.date.split('T')[0] === todayStr && !isSuspendedOn(s, localTodayStr));
+    // A one-time shift can be cancelled by exception too (portal cancel / client
+    // unavailable) — apply it, or a cancelled visit still shows as today's shift.
+    const oneTime = schedules
+      .filter(s => s.date && s.date.split('T')[0] === todayStr && !isSuspendedOn(s, localTodayStr))
+      .map(s => applyExceptionForDate(s, s.date.split('T')[0]))
+      .filter(Boolean);
 
     // Drop a moved-in (covering) shift that exactly matches an own shift today
     const ownToday = new Set(recurring.map(s => `${s.client_id}|${s.start_time}|${s.end_time}`));

@@ -40,16 +40,20 @@ const auditLog = async (userId, action, tableName, recordId, oldData, newData) =
 // Attach each recurring pattern's per-date exceptions so the client expanding it can tell
 // that an occurrence was cancelled or rescheduled. Without this the consumer only sees the
 // pattern and has no way to know a given day is different.
+//
+// ONE-TIME rows are included too. They used to be skipped ("recurring only"), but a one-time
+// shift can also carry a 'cancelled' exception (portal cancel, client unavailable). The
+// engine honours it, so the shift was gone from the client portal, billing and payroll while
+// the Schedule Hub and the caregiver's phone — which never received the exception — kept
+// showing it as a live shift.
 async function attachExceptions(rows) {
-  const recurringIds = rows
-    .filter(s => s.day_of_week !== null && s.day_of_week !== undefined)
-    .map(s => s.id);
-  if (recurringIds.length === 0) return rows.map(s => ({ ...s, exceptions: [] }));
+  const ids = rows.map(s => s.id).filter(Boolean);
+  if (ids.length === 0) return rows.map(s => ({ ...s, exceptions: [] }));
   let exceptions = [];
   try {
     const r = await db.query(
       `SELECT * FROM schedule_exceptions WHERE schedule_id = ANY($1) ORDER BY exception_date`,
-      [recurringIds]
+      [ids]
     );
     exceptions = r.rows;
   } catch (e) {
