@@ -95,30 +95,53 @@ function buildVisitPayload(b) {
   const outLoc = normalizeLoc(b.clockOutLoc);
   const isIvr = !!b.originPhone;
 
-  // A visit_time_changes row means the corresponding punch time was set by an
-  // admin, not captured live: send it as Adjusted time + VisitChanges, and do
-  // not fabricate a call for it (spec 3.6 #18/#19, 3.9).
+  // visit_time_changes rows record admin-set punch times. Per side (in/out):
+  //  - the caregiver DID punch (old value present) and the time was later
+  //    corrected -> keep the ORIGINAL call (complete record set) and send the
+  //    corrected time as AdjIn/AdjOut. Sandata UAT checklist: "Visits should
+  //    only be sent with adjusted times when original call times have
+  //    already been sent."
+  //  - there was NO live punch (old value NULL, e.g. force clock-out) ->
+  //    send a CallType "Manual" call at the entered time; VisitChanges below
+  //    records why (checklist: "VisitChanges is required ... CallType Manual").
   const changes = Array.isArray(b.changes) ? b.changes : [];
-  const startAdjusted = changes.some(c => c.new_start);
-  const endAdjusted = changes.some(c => c.new_end);
+  const side = (oldKey, newKey) => {
+    const rows = changes.filter(c => c[newKey]);
+    if (!rows.length) return { kind: 'live' };
+    const original = rows.find(c => c[oldKey]);            // earliest real punch
+    return original
+      ? { kind: 'adjusted', original: original[oldKey], adjusted: rows[rows.length - 1][newKey] }
+      : { kind: 'manual' };
+  };
+  const inSide = side('old_start', 'new_start');
+  const outSide = side('old_end', 'new_end');
 
   // CallExternalID max is 16 chars — a UUID alone would truncate identically
   // for both calls, so build from a shortened visit id + distinct suffix.
   const callIdBase = String(b.visitOtherId).replace(/-/g, '').slice(0, 14);
   const calls = [];
-  if (b.startTime && !startAdjusted) {
-    calls.push(buildCall(callIdBase + '-I', b.startTime, 'Time In', inLoc, isIvr, b));
-  }
-  if (b.endTime && !endAdjusted) {
-    calls.push(buildCall(callIdBase + '-O', b.endTime, 'Time Out', outLoc, isIvr, b));
-  }
+  const addCall = (s, suffix, liveTime, assignment, loc) => {
+    if (s.kind === 'manual') {
+      if (liveTime) calls.push(buildCall(callIdBase + suffix, liveTime, assignment, null, false, b, 'Manual'));
+    } else if (s.kind === 'adjusted') {
+      calls.push(buildCall(callIdBase + suffix, s.original, assignment, loc, isIvr, b));
+    } else if (liveTime) {
+      calls.push(buildCall(callIdBase + suffix, liveTime, assignment, loc, isIvr, b));
+    }
+  };
+  addCall(inSide, '-I', b.startTime, 'Time In', inLoc);
+  addCall(outSide, '-O', b.endTime, 'Time Out', outLoc);
+  const startAdjusted = inSide.kind === 'adjusted';
+  const endAdjusted = outSide.kind === 'adjusted';
 
   const payload = {
     ProviderIdentification: {
       ProviderQualifier: 'MedicaidID',
       ProviderID: String(b.providerId),
     },
-    VisitOtherID: String(b.visitOtherId).slice(0, 50),
+    // Sandata enforces ^\w*$ (UAT: "VisitOtherID format is incorrect"); our
+    // ids are UUIDs, so strip hyphens. Deterministic, so updates still match.
+    VisitOtherID: String(b.visitOtherId).replace(/\W/g, '').slice(0, 50),
     SequenceID: b.sequence,
     EmployeeQualifier: 'EmployeeCustomID',
     EmployeeIdentifier: digitsOnly(b.workerId),
@@ -134,11 +157,12 @@ function buildVisitPayload(b) {
     Modifier3: null,
     Modifier4: null,
     VisitTimeZone: 'US/Central',
-    AdjInDateTime: startAdjusted ? utc(b.startTime) : null,
-    AdjOutDateTime: endAdjusted ? utc(b.endTime) : null,
+    AdjInDateTime: startAdjusted ? utc(inSide.adjusted) : null,
+    AdjOutDateTime: endAdjusted ? utc(outSide.adjusted) : null,
     // Required by the UAT intake (rejects null) even though the WI addendum
     // omits it; base spec v7.6 field 23. Cancelled visits are not billed.
-    BillVisit: !b.cancelled,
+    // billVisit=false is Sandata's only way to omit a visit already sent.
+    BillVisit: b.billVisit != null ? !!b.billVisit : !b.cancelled,
     ClientVerifiedTimes: null,
     ClientVerifiedTasks: null,
     ClientVerifiedService: null,
@@ -149,7 +173,8 @@ function buildVisitPayload(b) {
 
   if (changes.length) {
     payload.VisitChanges = changes.map((c, i) => ({
-      SequenceID: b.sequence - changes.length + i, // change sequence precedes the visit's
+      // Addendum 3.9: String type (visit SequenceID is Integer). Precedes the visit's.
+      SequenceID: String(b.sequence - changes.length + i),
       ChangeMadeBy: String(c.changed_by_label || c.changed_by || 'system').slice(0, 64),
       ChangeDateTime: utc(c.changed_at),
       GroupCode: null,
@@ -176,14 +201,15 @@ function buildVisitPayload(b) {
 // (the member's WI MA ID) and MobileLogin whenever CallType=Mobile (spec v7.6:
 // "log in used if a mobile application is in use", ≤64). We send the worker's
 // ForwardHealth ID as the login identifier rather than their email address.
-function buildCall(id, when, assignment, loc, isIvr, b) {
-  const isMobile = !isIvr && !!loc;
+function buildCall(id, when, assignment, loc, isIvr, b, forceType = null) {
+  const isMobile = !forceType && !isIvr && !!loc;
+  if (forceType) isIvr = false;
   const call = {
     CallExternalID: String(id).slice(0, 16),
     CallDateTime: utc(when),
     CallAssignment: assignment,
     GroupCode: null,
-    CallType: isIvr ? 'Telephony' : (isMobile ? 'Mobile' : 'Other'),
+    CallType: forceType || (isIvr ? 'Telephony' : (isMobile ? 'Mobile' : 'Other')),
     ProcedureCode: b.serviceCode,
     ClientIdentifierOnCall: digitsOnly(b.medicaidId) || null,
     MobileLogin: isMobile ? String(digitsOnly(b.workerId)).slice(0, 64) : null,
@@ -219,7 +245,7 @@ function buildClientPayload(c, { providerId, sequence, includePayerSegment = fal
     ClientTimezone: 'US/Central',
   };
 
-  if (includePayerSegment) {
+  if (includePayerSegment && c.sandata_payer_id && c.sandata_payer_program) {
     payload.ClientPayerInformation = [{
       PayerID: c.sandata_payer_id,
       PayerProgram: c.sandata_payer_program,
@@ -227,6 +253,12 @@ function buildClientPayload(c, { providerId, sequence, includePayerSegment = fal
       ClientStatus: (c.status || 'active') === 'active' ? '02' : '04',
       EffectiveStartDate: (c.created_at ? new Date(c.created_at) : new Date()).toISOString().slice(0, 10),
     }];
+  }
+  // WI addendum 2.8 CLIENT RULES: a client without at least one complete
+  // address (line 1, city, state, zip) or at least one phone is rejected —
+  // so send address/phone whenever we have them, not only with the payer
+  // segment (sections 3.4/3.5 call them PA-only; 2.8 is the stricter rule).
+  if (c.address && c.city && c.zip) {
     payload.ClientAddress = [{
       ClientAddressType: 'Other',
       ClientAddressIsPrimary: false,
@@ -239,9 +271,11 @@ function buildClientPayload(c, { providerId, sequence, includePayerSegment = fal
       ClientAddressLongitude: c.longitude != null ? Number(c.longitude) : null,
       ClientAddressLatitude: c.latitude != null ? Number(c.latitude) : null,
     }];
+  }
+  if (digitsOnly(c.phone).length >= 10) {
     payload.ClientPhone = [{
       ClientPhoneType: 'Other',
-      ClientPhone: digitsOnly(c.phone).slice(-10) || null,
+      ClientPhone: digitsOnly(c.phone).slice(-10),
     }];
   }
 
