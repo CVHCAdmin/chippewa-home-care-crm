@@ -40,9 +40,39 @@ function headers() {
   };
 }
 
+// Collect every ErrorMessage Sandata attached to the echoed records — at the
+// record level, on ProviderIdentification, and on each Call/VisitChange.
+// Observed in UAT 2026-11-23: field validation errors come back synchronously
+// in the POST reply as { status:'FAILED', failedCount:N, data:[record + ErrorMessage] }
+// with HTTP 200, so "HTTP ok + uuid" alone does NOT mean accepted.
+function extractRecordErrors(data) {
+  const out = [];
+  const records = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+  for (const rec of records) {
+    if (!rec || typeof rec !== 'object') continue;
+    const id = rec.VisitOtherID || rec.ClientOtherID || rec.ClientID || null;
+    const push = (m) => { if (m) out.push({ RecordOtherID: id, Reason: String(m) }); };
+    push(rec.ErrorMessage);
+    push(rec.ProviderIdentification?.ErrorMessage);
+    for (const k of ['Calls', 'VisitChanges', 'VisitExceptionAcknowledgement', 'ClientPayerInformation', 'ClientAddress', 'ClientPhone']) {
+      if (Array.isArray(rec[k])) rec[k].forEach(x => push(x?.ErrorMessage));
+    }
+    // Spec 2.11 status rows: {RecordOtherID, Reason}
+    const reason = rec.Reason || rec.reason;
+    if (reason && !/transaction received|success|accepted/i.test(String(reason))) push(reason);
+  }
+  return out;
+}
+
+function isFailedEnvelope(data) {
+  return !!data && (String(data.status || '').toUpperCase() === 'FAILED' || Number(data.failedCount) > 0);
+}
+
 // POST one or more records (spec allows 1-5000 per transaction; we send arrays).
-// Returns { ok, status, data, uuid } — uuid identifies the transaction for the
-// status endpoint.
+// Returns { ok, status, data, uuid, rejected, rejects } — uuid identifies the
+// transaction for the status endpoint; rejected=true means Sandata refused the
+// record(s) at intake (rejects[] holds the reasons) and no status poll will
+// turn that into an accept.
 async function postRecords(entity, records) {
   const cfg = getConfig();
   if (!cfg.isConfigured) throw new Error('Sandata not configured (SANDATA_USERNAME/PASSWORD/ACCOUNT_ID/PROVIDER_ID)');
@@ -55,7 +85,12 @@ async function postRecords(entity, records) {
   let data = null;
   try { data = await response.json(); } catch { /* non-JSON error body */ }
   const uuid = data?.uuid || data?.UUID || data?.id || null;
-  return { ok: response.ok, status: response.status, data, uuid };
+  const rejects = extractRecordErrors(data);
+  const rejected = response.ok && (isFailedEnvelope(data) || rejects.length > 0);
+  if (rejected && !rejects.length) {
+    rejects.push({ RecordOtherID: null, Reason: data?.messageSummary || data?.errorMessage || 'Rejected at intake' });
+  }
+  return { ok: response.ok, status: response.status, data, uuid, rejected, rejects };
 }
 
 // GET the processing status for a prior POST's UUID.
@@ -77,21 +112,25 @@ async function getStatus(entity, uuid) {
   const notReady = /not ready/i.test(text);
   if (notReady) return { ok: true, status: response.status, ready: false, accepted: null, records: [], data };
 
-  // Response shape per spec 2.11: array (or {records: []}) of
-  // {AgencyIdentifier, ProviderID, RecordType, RecordOtherID, Reason}.
+  // Observed UAT envelope: { status:'SUCCESS'|'FAILED', failedCount, data:{ data:[...] } }.
+  // A transaction rejected at POST time comes back here as status FAILED,
+  // "Status was not found" — never treat that as accepted.
+  const inner = data?.data && !Array.isArray(data.data) ? data.data : data;
   const records = Array.isArray(data) ? data
     : Array.isArray(data?.records) ? data.records
+    : Array.isArray(inner?.data) ? inner.data
     : Array.isArray(data?.data) ? data.data
     : [];
-  const rejects = records.filter(r => {
-    const reason = String(r.Reason || r.reason || '');
-    return reason && !/transaction received|success|accepted/i.test(reason);
-  });
+  const rejects = extractRecordErrors({ data: records });
+  const failed = isFailedEnvelope(data);
+  if (failed && !rejects.length) {
+    rejects.push({ RecordOtherID: null, Reason: data?.messageDetail || data?.errorMessage || data?.messageSummary || 'FAILED' });
+  }
   return {
     ok: response.ok,
     status: response.status,
     ready: true,
-    accepted: response.ok && rejects.length === 0,
+    accepted: response.ok && !failed && rejects.length === 0,
     rejects,
     records,
     data,

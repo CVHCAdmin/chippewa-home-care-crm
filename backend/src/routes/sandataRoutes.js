@@ -478,12 +478,12 @@ router.post('/sync-client/:clientId', auth, requireAdmin, async (req, res) => {
     });
 
     const post = await sandataClient.postRecords('clients', payload);
-    if (post.ok && post.uuid) {
+    if (post.ok && post.uuid && !post.rejected) {
       await db.query(
         `UPDATE clients SET sandata_sequence = $2, sandata_synced_at = NOW(), updated_at = NOW() WHERE id = $1`,
         [req.params.clientId, seq]);
     }
-    res.json({ ok: post.ok, uuid: post.uuid, data: post.data });
+    res.json({ ok: post.ok && !post.rejected, uuid: post.uuid, rejects: post.rejects, data: post.data });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -120,6 +120,10 @@ async function ensureClientSynced(row, cfg) {
   if (!post.ok || !post.uuid) {
     return { ok: false, error: `Client POST failed (HTTP ${post.status}): ${JSON.stringify(post.data).slice(0, 300)}` };
   }
+  if (post.rejected) {
+    const reason = post.rejects.map(r => r.Reason).join(' | ');
+    return { ok: false, error: `Client record rejected by Sandata: ${reason}` };
+  }
 
   const status = await pollStatus('clients', post.uuid);
   if (status && status.ready && !status.accepted) {
@@ -324,6 +328,14 @@ async function submitViaAPI(evvVisitId) {
     return { success: false, error: `Visit POST failed (HTTP ${post.status}): ${JSON.stringify(post.data).slice(0, 300)}` };
   }
 
+  // Rejected at intake (field validation) — record the exception now; the
+  // status endpoint will only say "not found" for this UUID.
+  if (post.rejected) {
+    await applyStatusResult(evvVisitId, { accepted: false, rejects: post.rejects, data: post.data });
+    const reason = post.rejects.map(r => r.Reason).join(' | ');
+    return { success: false, error: `Sandata rejected: ${reason}`, permanent: true };
+  }
+
   await db.query(`
     UPDATE evv_visits SET sandata_status = 'submitted', needs_resubmit = false, updated_at = NOW()
      WHERE id = $1
@@ -350,8 +362,7 @@ async function applyStatusResult(evvVisitId, status) {
        WHERE id = $1
     `, [evvVisitId]);
   } else {
-    const reject = status.rejects && status.rejects[0];
-    const reason = (reject && (reject.Reason || reject.reason)) || 'Record rejected';
+    const reason = (status.rejects || []).map(r => r.Reason || r.reason).filter(Boolean).join(' | ') || 'Record rejected';
     await db.query(`
       UPDATE evv_visits SET sandata_status = 'exception', sandata_exception_code = 'REJECT',
              sandata_exception_desc = $2, sandata_response = $3, updated_at = NOW()

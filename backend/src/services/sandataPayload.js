@@ -136,6 +136,9 @@ function buildVisitPayload(b) {
     VisitTimeZone: 'US/Central',
     AdjInDateTime: startAdjusted ? utc(b.startTime) : null,
     AdjOutDateTime: endAdjusted ? utc(b.endTime) : null,
+    // Required by the UAT intake (rejects null) even though the WI addendum
+    // omits it; base spec v7.6 field 23. Cancelled visits are not billed.
+    BillVisit: !b.cancelled,
     ClientVerifiedTimes: null,
     ClientVerifiedTasks: null,
     ClientVerifiedService: null,
@@ -168,17 +171,24 @@ function buildVisitPayload(b) {
 
 // CallType per spec 3.7: Mobile when GPS was collected, Telephony for IVR
 // (with the originating phone), Other for an electronic tap with no GPS fix.
+//
+// UAT intake (2026-11-23) also requires ClientIdentifierOnCall on every call
+// (the member's WI MA ID) and MobileLogin whenever CallType=Mobile (spec v7.6:
+// "log in used if a mobile application is in use", ≤64). We send the worker's
+// ForwardHealth ID as the login identifier rather than their email address.
 function buildCall(id, when, assignment, loc, isIvr, b) {
+  const isMobile = !isIvr && !!loc;
   const call = {
     CallExternalID: String(id).slice(0, 16),
     CallDateTime: utc(when),
     CallAssignment: assignment,
     GroupCode: null,
-    CallType: isIvr ? 'Telephony' : (loc ? 'Mobile' : 'Other'),
+    CallType: isIvr ? 'Telephony' : (isMobile ? 'Mobile' : 'Other'),
     ProcedureCode: b.serviceCode,
-    ClientIdentifierOnCall: null,
-    CallLatitude: !isIvr && loc ? Number(loc.lat) : null,
-    CallLongitude: !isIvr && loc ? Number(loc.lng) : null,
+    ClientIdentifierOnCall: digitsOnly(b.medicaidId) || null,
+    MobileLogin: isMobile ? String(digitsOnly(b.workerId)).slice(0, 64) : null,
+    CallLatitude: isMobile ? Number(loc.lat) : null,
+    CallLongitude: isMobile ? Number(loc.lng) : null,
     OriginatingPhoneNumber: isIvr ? digitsOnly(b.originPhone).slice(-10) : null,
     VisitLocationType: null,
   };
